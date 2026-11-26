@@ -734,13 +734,15 @@ void TabBar::rename (int index)
             editor->setText (proc.rack.boards[(size_t) index]->name, false);
             editor->selectAll();
             editor->grabKeyboardFocus();
-            auto done = [this, index] (bool keep)
+            // (the pointer is made out here: Visual Studio mis-reads 'this' inside a lambda inside a lambda)
+            juce::Component::SafePointer<TabBar> safe (this);
+            auto done = [this, safe, index] (bool keep)
             {
                 if (editor == nullptr) return;
                 const auto text = editor->getText().trim();
                 if (keep && text.isNotEmpty() && index < (int) proc.rack.boards.size())
                     proc.rack.boards[(size_t) index]->name = text.toStdString();
-                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<TabBar> (this)]
+                juce::MessageManager::callAsync ([safe]
                 {
                     if (safe != nullptr) { safe->editor.reset(); safe->repaint(); if (safe->onChanged) safe->onChanged(); }
                 });

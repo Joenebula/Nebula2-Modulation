@@ -76,6 +76,10 @@ This is the stage that can only be checked on Joe's PC in Cubase with his own pl
 - [ ] Drag MIDI / audio out to Cubase
 - [ ] Sound presets: save and load a whole tab; a preset browser
 
+## Screen polish (Joe: "we can work the UI later")
+
+- [ ] Add units menu: show a picture of each unit, so you can see what you're adding
+
 ## Later units
 
 Everything in the SPEC table that isn't bold.

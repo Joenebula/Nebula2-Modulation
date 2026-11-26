@@ -920,6 +920,15 @@ juce::Rectangle<int> ModuleComp::linkArea() const
     return { 23 + nameW + 10, 5, w, 16 };
 }
 
+juce::Rectangle<int> ModuleComp::midiArea() const
+{
+    if (! canExportMidi (module)) return {};
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (font (11.5f, Weight::SemiBold), module.info->name);
+    const auto la = linkArea();
+    const int x = la.isEmpty() ? 23 + nameW + 10 : la.getRight() + 6;
+    return { x, 5, 66, 16 };
+}
+
 // A sequencer's Link label: put its pattern in a group. Sequencers in the same group, on any tab, share
 // their rhythm, their notes, or both.
 void ModuleComp::linkMenu()
@@ -989,6 +998,14 @@ void ModuleComp::paint (juce::Graphics& g)
         g.setColour (on ? n0 : n7);
         g.drawText (linkText (module), la, juce::Justification::centred, false);
     }
+    if (const auto ma = midiArea(); ! ma.isEmpty())
+    {
+        g.setColour (n4);
+        g.fillRoundedRectangle (ma.toFloat(), 4.0f);
+        g.setFont (font (9.0f, Weight::SemiBold, 0.4f));
+        g.setColour (n7);
+        g.drawText ("DRAG MIDI", ma, juce::Justification::centred, false);
+    }
 
     const int jy = getHeight() - lay::pad - lay::jackH;
     dividerH (g, lay::pad, getWidth() - lay::pad, jy - 2);
@@ -1043,6 +1060,8 @@ void ModuleComp::mouseDown (const juce::MouseEvent& e)
         return;
     }
     if (linkArea().contains (e.getPosition())) { linkMenu(); return; }
+    midiDrag = midiArea().contains (e.getPosition());
+    if (midiDrag) return;
     if (jackAt (e.getPosition(), isOut, port))
     {
         cabling = true;
@@ -1056,6 +1075,15 @@ void ModuleComp::mouseDown (const juce::MouseEvent& e)
 void ModuleComp::mouseDrag (const juce::MouseEvent& e)
 {
     if (cabling) { owner.dragCable (e.getEventRelativeTo (&owner).getPosition()); return; }
+    if (midiDrag)
+    {
+        // Pulled off the label: hand the host a MIDI file of this pattern
+        if (e.getDistanceFromDragStart() < 6) return;
+        midiDrag = false;
+        const auto file = proc.writeMidi (module, juce::String (board.name) + " " + module.info->name);
+        if (file != juce::File()) juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);
+        return;
+    }
     if (! moving) return;
     if (! movedYet) { movedYet = true; owner.willChange(); }
     const auto p = e.getEventRelativeTo (&owner).getPosition() - dragOffset;
@@ -1069,7 +1097,7 @@ void ModuleComp::mouseUp (const juce::MouseEvent& e)
 {
     if (cabling) owner.endCable (e.getEventRelativeTo (&owner).getPosition());
     else if (moving) owner.fitToContent();
-    moving = cabling = false;
+    moving = cabling = midiDrag = false;
 }
 
 //==============================================================================
@@ -1422,10 +1450,31 @@ void TabBar::addMenu()
     m.addSectionHeader ("Add a sound");
     int i = 1;
     for (auto& t : boardTypes()) m.addItem (i++, t.name);
+    // Sounds saved before, from any project
+    const auto saved = Nebula2ModulationProcessor::savedSounds();
+    m.addSeparator();
+    if (! saved.empty())
+    {
+        juce::PopupMenu mine;
+        int k = 1000;
+        for (auto& f : saved) mine.addItem (k++, f.getFileNameWithoutExtension());
+        m.addSubMenu ("Your saved sounds (" + juce::String ((int) saved.size()) + ")", mine);
+    }
+    m.addItem (900, "Load a sound from a file...");
     juce::Component::SafePointer<TabBar> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (plusArea())), [safe] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (plusArea())), [safe, saved] (int r)
     {
         if (safe == nullptr || r <= 0) return;
+        if (r >= 1000) { if (r - 1000 < (int) saved.size()) safe->added (safe->proc.loadSound (saved[(size_t) (r - 1000)])); return; }
+        if (r == 900)
+        {
+            safe->chooser = std::make_unique<juce::FileChooser> ("Load a sound", Nebula2ModulationProcessor::soundsFolder(), "*.n2msound");
+            safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
+            {
+                if (safe != nullptr && fc.getResult() != juce::File()) safe->added (safe->proc.loadSound (fc.getResult()));
+            });
+            return;
+        }
         auto& rack = safe->proc.rack;
         auto b = makeBoard (boardTypes()[(size_t) (r - 1)].id, rack.sr);
         // A second Kick is "Kick 2", so tabs and mixer channels can be told apart
@@ -1440,12 +1489,21 @@ void TabBar::addMenu()
     });
 }
 
+void TabBar::added (int index)
+{
+    if (index < 0) return;
+    if (onChanged) onChanged();
+    if (onSelect) onSelect (index);
+    showSelected();
+}
+
 void TabBar::tabMenu (int index)
 {
     juce::PopupMenu m;
     const int n = (int) proc.rack.boards.size();
     m.addItem (1, "Rename");
     m.addItem (2, "Duplicate");
+    m.addItem (6, "Save this sound...");
     m.addSeparator();
     m.addItem (3, "Move left", index > 0);
     m.addItem (4, "Move right", index < n - 1);
@@ -1459,6 +1517,17 @@ void TabBar::tabMenu (int index)
         if (index >= (int) rack.boards.size()) return;
         int select = index;
         if (r == 1) { safe->rename (index); return; }
+        if (r == 6)
+        {
+            const auto start = Nebula2ModulationProcessor::soundsFolder().getChildFile (juce::File::createLegalFileName (rack.boards[(size_t) index]->name) + ".n2msound");
+            start.getParentDirectory().createDirectory();
+            safe->chooser = std::make_unique<juce::FileChooser> ("Save this sound", start, "*.n2msound");
+            safe->chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting, [safe, index] (const juce::FileChooser& fc)
+            {
+                if (safe != nullptr && fc.getResult() != juce::File()) safe->proc.saveSound (index, fc.getResult().withFileExtension ("n2msound"));
+            });
+            return;
+        }
         if (r == 2)
         {
             auto copy = rack.copyBoard (*rack.boards[(size_t) index]);

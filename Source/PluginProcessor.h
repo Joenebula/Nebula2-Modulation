@@ -48,9 +48,18 @@ public:
 
     bool isPlaying() const { return hostPlaying.load() || preview.load(); }
 
+    // Sounds: one tab saved as a file, to use again in another project
+    static juce::File soundsFolder();                               // Documents / Nebula2 Modulation / Sounds
+    static std::vector<juce::File> savedSounds();                   // the files in that folder, A to Z
+    bool saveSound (int tab, const juce::File&);
+    int loadSound (const juce::File&);                              // adds it as a new tab; returns the tab, or -1
+    // A sequencer's pattern, or the chords, as a MIDI file to drag into the host. Returns the file written.
+    juce::File writeMidi (const n2m::Module&, const juce::String& name);
+
 private:
     static BusesProperties makeBuses();
     double ownPpq = 0;
+    n2m::KeyEvent keyEvents[512];
     uint32_t seed = 0x9E3779B9u;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Nebula2ModulationProcessor)
 };

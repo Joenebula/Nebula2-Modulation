@@ -148,6 +148,31 @@ struct Timeline
     }
 };
 
+// Notes from a MIDI keyboard, or from a MIDI track in the host. The MIDI keyboard unit reads them.
+struct KeyEvent { int sample = 0; unsigned char note = 60, vel = 100, channel = 1; bool on = true; };   // channel 1 to 16
+struct MidiIn { const KeyEvent* events = nullptr; int count = 0; };      // in time order
+struct Keys
+{
+    struct Held { unsigned char note, vel, channel; uint32_t order; };
+    static constexpr int kMax = 32;
+    Held held[kMax] {};
+    int count = 0;
+    uint32_t serial = 0;                  // goes up with every key pressed
+    void off (int note, int channel)
+    {
+        int w = 0;
+        for (int i = 0; i < count; ++i) if (! (held[i].note == note && held[i].channel == channel)) held[w++] = held[i];
+        count = w;
+    }
+    void on (int note, int vel, int channel)
+    {
+        off (note, channel);
+        if (count == kMax) { for (int i = 1; i < count; ++i) held[i - 1] = held[i]; --count; }      // the oldest gives way
+        held[count++] = { (unsigned char) note, (unsigned char) std::max (1, vel), (unsigned char) channel, ++serial };
+    }
+    void apply (const KeyEvent& e) { if (e.on && e.vel > 0) on (e.note, e.vel, e.channel); else if (e.note == 255) count = 0; else off (e.note, e.channel); }
+};
+
 // Two shared buses, A and B: Send units on any tab add to them, Return units play them
 struct Buses { std::array<float, kBlock> l[2] {}, r[2] {}; };
 
@@ -162,6 +187,7 @@ struct Ctx
     const int* scale = nullptr;  // 7 intervals
     const Timeline* chords = nullptr;
     Buses* buses = nullptr;
+    const Keys* keys = nullptr;  // the keys held down right now
     // Per link group: the note sequencer the others follow (nullptr if the group has none)
     const struct Module* leaders[kLinkGroups + 1] {};
 };
@@ -479,6 +505,7 @@ struct Rack
     Song song;
     Timeline timeline;            // swapped in whole, under the lock
     Buses buses;                  // audio thread only
+    Keys keys;                    // audio thread only
 
     Rack() { generateChords (harmony.seed); }
 
@@ -664,7 +691,7 @@ struct Rack
     // Fills l and r (n samples). ppq is the song position at the first sample.
     // Sounds sent to a separate output go there instead of the main mix. If that output isn't switched on
     // in the host, the sound stays in the main mix, so nothing ever goes missing.
-    void process (float* l, float* r, int n, double bpm, double ppq, bool playing, const Outs* outs = nullptr)
+    void process (float* l, float* r, int n, double bpm, double ppq, bool playing, const Outs* outs = nullptr, const MidiIn* midi = nullptr)
     {
         std::fill (l, l + n, 0.0f); std::fill (r, r + n, 0.0f);
         int on = 1;
@@ -676,7 +703,11 @@ struct Rack
                     on |= 1 << k;
                 }
         outsOn.store (on);
-        if (! lock.tryLock()) return;
+        if (! lock.tryLock())
+        {
+            if (midi != nullptr) for (int k = 0; k < midi->count; ++k) keys.apply (midi->events[k]);     // never lose a key coming up
+            return;
+        }
         Ctx c;
         c.sr = sr; c.bpm = bpm; c.playing = playing;
         c.ppqPerSample = bpm / 60.0 / sr;
@@ -684,6 +715,8 @@ struct Rack
         c.scale = scales()[(size_t) std::min ((int) scales().size() - 1, std::max (0, scale.load()))].iv;
         c.chords = &timeline;
         c.buses = &buses;
+        c.keys = &keys;
+        int ev = 0;
         // A group's leader is its first note sequencer that isn't itself following
         for (auto& b : boards)
             for (auto& m : b->modules)
@@ -706,6 +739,12 @@ struct Rack
         for (int pos = 0, len = 0; pos < n; pos += len)
         {
             len = std::min (kBlock, n - pos);
+            // Keys land on the exact sample: a chunk ends where the next key starts
+            if (midi != nullptr)
+            {
+                while (ev < midi->count && midi->events[ev].sample <= pos) keys.apply (midi->events[ev++]);
+                if (ev < midi->count) len = std::min (len, std::max (1, midi->events[ev].sample - pos));
+            }
             c.ppq = ppq + pos * c.ppqPerSample;
             resting.ppq = c.ppq;
             if (songOn)
@@ -727,6 +766,7 @@ struct Rack
                     b->process (len, sitsOut ? resting : c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
                 }
         }
+        if (midi != nullptr) while (ev < midi->count) keys.apply (midi->events[ev++]);
         lock.unlock();
         song.now.store (sec);
         // Separate outputs skip the master fader (the host's own channel fader does that job) but keep the safety limiter

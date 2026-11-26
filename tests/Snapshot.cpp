@@ -59,7 +59,7 @@ int main (int argc, char** argv)
     e->selectTab (6); shoot (*ed, dir + "/ui_arp.png");
     {   // a few of the newer units on one board, to see how they draw
         auto eb = n2m::makeBoard ("empty", 48000);
-        for (const char* t : { "gate", "stepmod", "scope", "parameq", "send", "ratchet" }) eb->add (t, 0, 0, 48000);
+        for (const char* t : { "gate", "stepmod", "scope", "parameq", "send", "ratchet", "keys" }) eb->add (t, 0, 0, 48000);
         if (auto* sc = dynamic_cast<n2m::Scope*> (eb->modules[3].get()))      // give the scope a wave and a note to show
         {
             for (int i = 0; i < n2m::Scope::size; ++i) sc->ring[(size_t) i] = 0.7f * std::sin (0.0575f * (float) i) + 0.2f * std::sin (0.23f * (float) i);

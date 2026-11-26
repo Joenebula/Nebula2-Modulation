@@ -65,8 +65,14 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
     list. If the label is orange, the output isn't switched on yet and the sound is still in the main mix.
 14. **Song:** the **Song** button opens a grid of your sounds against the sections of the song. Switch it on, then
     click squares to choose which sounds play where. **Build up** brings one more sound in each section.
-15. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-16. **Tidy** lines the modules up in signal order.
+15. **Play it yourself:** add a **MIDI keyboard** unit (under Notes and rhythm) and cable its Pitch and Gate where a
+    sequencer's were. It plays from your keyboard or a Cubase MIDI track, and keeps notes in key unless you switch
+    that off.
+16. **MIDI into Cubase:** drag the **DRAG MIDI** label on a sequencer or the chord unit into the Cubase project.
+17. **Keep a sound:** right-click a tab and choose **Save this sound**. It then appears under **+**, in **Your saved
+    sounds**, in every project.
+18. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
+19. **Tidy** lines the modules up in signal order.
 
 **Undo** and **Redo** are at the top (also Ctrl+Z and Ctrl+Y). **-** and **+** zoom the board (also Ctrl + mouse wheel). Hover a row in Add units to see a picture of that unit. To use your own sound, add a **Sample player** and load or drop an audio file on it. Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.

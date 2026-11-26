@@ -1348,6 +1348,138 @@ int main()
         CHECK (twin != nullptr && twin->plays.load() == 1u, "a duplicated tab keeps its sections");
     }
 
+    // 50. MIDI keyboard: keys in, pitch and gate out, on the exact sample, in key
+    {
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("empty", 48000));
+        auto& b = *rack.boards[0];
+        auto* keys = rack.addModule (b, "keys", 0, 0);
+        CHECK (keys != nullptr, "there is a MIDI keyboard unit");
+        rack.connect (b, keys->uid, 0, b.modules[0]->uid, 0);       // so it runs
+        std::vector<float> l (512), r (512), gate, pitch, n1, n2;
+        auto play = [&] (std::vector<KeyEvent> ev, int n = 512, int block = 512)
+        {
+            gate.clear(); pitch.clear(); n1.clear(); n2.clear();
+            for (int pos = 0; pos < n; pos += block)
+            {
+                const int len = std::min (block, n - pos);
+                std::vector<KeyEvent> here;
+                for (auto e : ev) if (e.sample >= pos && e.sample < pos + len) { e.sample -= pos; here.push_back (e); }
+                MidiIn in { here.data(), (int) here.size() };
+                // run in the engine's own chunks so every sample of the unit's outputs can be read back
+                int done = 0;
+                while (done < len)
+                {
+                    int next = len;
+                    for (auto& e : here) if (e.sample > done) next = std::min (next, e.sample);
+                    const int step = std::min (64, next - done);
+                    std::vector<KeyEvent> now;
+                    for (auto e : here) if (e.sample == done) { e.sample = 0; now.push_back (e); }
+                    MidiIn part { now.data(), (int) now.size() };
+                    rack.process (l.data(), r.data(), step, 124, 0, false, nullptr, &part);
+                    for (int i = 0; i < step; ++i) { pitch.push_back (keys->out[0][(size_t) i]); gate.push_back (keys->out[1][(size_t) i]); n1.push_back (keys->out[3][(size_t) i]); n2.push_back (keys->out[4][(size_t) i]); }
+                    done += step;
+                }
+                (void) in;
+            }
+        };
+        play ({});
+        CHECK (peakOf (gate) == 0.0f, "no keys, no gate");
+        // D minor: A4 (69) is in the key
+        play ({ { 100, 69, 100, 1, true } });
+        CHECK (gate[99] == 0.0f && gate[100] == 1.0f && std::abs (pitch[100] - 9.0f / 12.0f) < 1.0e-6f, "a key starts its note on the exact sample, at the right pitch");
+        play ({ { 37, 69, 0, 1, false } });
+        CHECK (gate[36] == 1.0f && gate[37] == 0.0f && std::abs (pitch[400] - 9.0f / 12.0f) < 1.0e-6f, "letting go ends it on the exact sample, and the pitch stays for the tail");
+        // one whole-block call gives the same as many small ones
+        std::vector<KeyEvent> two { { 70, 62, 90, 1, true }, { 300, 62, 0, 1, false } };
+        MidiIn both { two.data(), 2 };
+        rack.process (l.data(), r.data(), 512, 124, 0, false, nullptr, &both);
+        CHECK (rack.keys.count == 0 && rack.keys.serial >= 2, "keys inside one big block are all taken in order");
+        // heard through the rack in one big block: the gate, cabled straight to the Output, starts and stops on its sample
+        rack.connect (b, keys->uid, 1, b.modules[0]->uid, 1);       // into the Output's right side, which has nothing else in it
+        std::vector<KeyEvent> span { { 100, 62, 90, 1, true }, { 333, 62, 0, 1, false } };
+        MidiIn spanIn { span.data(), 2 };
+        rack.process (l.data(), r.data(), 512, 124, 0, false, nullptr, &spanIn);
+        CHECK (r[99] == 0.0f && r[100] > 0.1f && r[332] > 0.1f && r[333] == 0.0f, "inside one host block a key still starts and stops on its exact sample");
+        rack.disconnect (b, keys->uid, 1, b.modules[0]->uid, 1);
+        // F sharp (66) is not in D minor: it becomes F (65). As played leaves it alone
+        play ({ { 0, 66, 100, 1, true } });
+        CHECK (std::abs (pitch[10] - 5.0f / 12.0f) < 1.0e-6f, "a key outside the key plays the nearest note in it");
+        keys->set ("snap", 0); play ({});
+        CHECK (std::abs (pitch[10] - 6.0f / 12.0f) < 1.0e-6f, "set to As played, it plays what was pressed");
+        keys->set ("snap", 1);
+        // a second key while the first is held: pitch moves to it, the gate dips once, and Note 1 / Note 2 are low then high
+        play ({ { 200, 74, 100, 1, true } });
+        CHECK (std::abs (pitch[300] - 14.0f / 12.0f) < 1.0e-6f && gate[199] == 1.0f && gate[200] == 0.0f && gate[201] == 1.0f, "a new key takes over the pitch and restarts the envelope");
+        CHECK (std::abs (n1[300] - 5.0f / 12.0f) < 1.0e-6f && std::abs (n2[300] - 14.0f / 12.0f) < 1.0e-6f, "Note 1 and Note 2 are the held keys, lowest first");
+        play ({ { 50, 74, 0, 1, false } });
+        CHECK (gate[100] == 1.0f && std::abs (pitch[100] - 5.0f / 12.0f) < 1.0e-6f, "lifting the newer key goes back to the one still held");
+        play ({ { 0, 66, 0, 1, false } });
+        CHECK (gate[10] == 0.0f, "all keys up, gate down");
+        // channels and octave
+        keys->set ("channel", 3);
+        play ({ { 0, 69, 100, 1, true } });
+        CHECK (gate[10] == 0.0f, "set to channel 3 it ignores channel 1");
+        play ({ { 0, 69, 100, 3, true } });
+        CHECK (gate[10] == 1.0f, "and plays channel 3");
+        keys->set ("octave", -1); play ({});
+        CHECK (std::abs (pitch[10] - (9.0f / 12.0f - 1.0f)) < 1.0e-6f, "Octave moves it");
+        play ({ { 0, 255, 0, 1, false } });
+        CHECK (gate[10] == 0.0f && rack.keys.count == 0, "all notes off clears every key");
+        for (int i = 0; i < 40; ++i) rack.keys.on (40 + i, 100, 1);
+        CHECK (rack.keys.count == Keys::kMax, "more keys than it can hold never overflow");
+    }
+
+    // 51. A pattern as MIDI notes is exactly what the unit plays
+    {
+        Rack rack; rack.prepare (48000);
+        rack.harmony.lenBars = 16; rack.harmony.chordBars = 2; rack.harmony.lift = 2;
+        rack.generateChords (21);
+        CHECK (rack.timeline.slots.back().tr == 2, "the test song has a key change in it");
+        rack.addBoard (makeBoard ("bass", 48000));
+        auto* seq = firstOf (*rack.boards[0], "noteseq");
+        CHECK (seq != nullptr && canExportMidi (*seq) && seq->P (seq->paramIndex ("follow")) > 0.5f, "the bass has a sequencer that follows the chords");
+        const auto list = notesOf (rack, *seq);
+        CHECK (list.steps == rack.timeline.total && ! list.notes.empty(), "a line that follows the chords is written out for the whole song");
+        // play the song and note down each note as its gate comes up
+        std::vector<std::pair<int, int>> heard;
+        std::vector<float> l (64), r (64);
+        const double pps = 124.0 / 60.0 / 48000.0;
+        float lastGate = 0; long at = 0;
+        const long total = (long) ((double) list.steps / 4.0 / pps);
+        while (at < total)
+        {
+            rack.process (l.data(), r.data(), 64, 124, (double) at * pps, true);
+            for (int i = 0; i < 64; ++i)
+            {
+                const float g = seq->out[1][(size_t) i];
+                if (g > 0.5f && lastGate <= 0.5f) heard.push_back ({ (int) std::floor (((double) (at + i) * pps) * 4.0 + 1.0e-6), 60 + (int) std::lround (seq->out[0][(size_t) i] * 12.0f) });
+                lastGate = g;
+            }
+            at += 64;
+        }
+        bool same = heard.size() == list.notes.size();
+        for (size_t i = 0; same && i < heard.size(); ++i) same = heard[i].first == (int) list.notes[i].start && heard[i].second == list.notes[i].midi;
+        CHECK (same, "the MIDI notes are the notes it plays, step for step, key change included");
+        // a pattern that doesn't follow the chords is just its own bars
+        seq->set ("follow", 0);
+        CHECK (notesOf (rack, *seq).steps == 16, "a one-bar pattern that ignores the chords is one bar of MIDI");
+        // drums: one note per hit, accents louder
+        rack.addBoard (makeBoard ("kick", 48000));
+        auto* drum = firstOf (*rack.boards[1], "drumseq");
+        const auto hits = notesOf (rack, *drum);
+        int want = 0; for (int k = 0; k < 16; ++k) if (drum->data[(size_t) k].load() > 0.5f) ++want;
+        CHECK ((int) hits.notes.size() == want && want > 0 && hits.steps == 16 && hits.notes[0].midi == 36, "a drum pattern is one note per hit");
+        // chords: a bass note and up to four notes per chord, for the chord's own length
+        rack.addBoard (makeBoard ("pad", 48000));
+        auto* ch = firstOf (*rack.boards[2], "chords");
+        const auto chords = notesOf (rack, *ch);
+        bool lengths = true; size_t slotsSeen = 0; double lastStart = -1;
+        for (auto& nt : chords.notes) { if (nt.start != lastStart) { ++slotsSeen; lastStart = nt.start; } lengths = lengths && nt.len >= 16; }
+        CHECK (chords.steps == rack.timeline.total && slotsSeen == rack.timeline.slots.size() && lengths, "the chords come out as held chords for the whole song");
+        CHECK (! canExportMidi (*rack.boards[0]->modules[0]), "units with no pattern offer no MIDI");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

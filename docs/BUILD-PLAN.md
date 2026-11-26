@@ -37,7 +37,8 @@ Cubase. Tick things off here as they land.
 - [ ] Stereo cables (today a board is mono until its Output; pan is on the mixer)
 - [x] Undo and redo (v0.1.8): buttons and Ctrl+Z / Ctrl+Y. Covers knobs, patterns, cables, adding, moving and deleting units, tabs, the mixer, links, chords and key. Keeps the last 100 steps. A board is put back in place, so undoing a knob never reloads a plugin in a slot
 - [ ] Not undoable yet: loading or emptying a plugin slot, changes made inside a hosted plugin's own window, the master fader
-- [ ] Play boards from a MIDI keyboard / Cubase MIDI track
+- [x] MIDI keyboard unit (v0.1.12): notes from a keyboard or a Cubase MIDI track. Pitch, Gate and Vel for a bass or lead; Note 1 to 4 for chords. Channel (All or 1 to 16), Octave, and Stay in key (on by default) or As played. Keys land on their exact sample. Works with Cubase stopped
+- [ ] MIDI keyboard: no pitch bend, mod wheel or sustain pedal yet; the starting sounds still come with a sequencer, so the keyboard unit is cabled in by hand
 
 ## Stage 3: rhythm and notes (part done, v0.1.1)
 
@@ -126,8 +127,10 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 
 - [x] Song page (v0.1.11): the Song button opens a grid, sounds down the side and sections along the top. A filled square means the sound plays there. 2 to 16 sections of 1 to 16 bars; All on and Build up; the playing section is lit. A sound that sits out stops its patterns and lets its tail ring. Off by default; saved and undoable
 - [ ] Song page: sections all the same length; no names for sections; no copy of a section
-- [ ] Drag MIDI / audio out to Cubase
-- [ ] Sound presets: save and load a whole tab; a preset browser
+- [x] Drag MIDI out (v0.1.12): a DRAG MIDI label on note sequencers, drum sequencers and the chord unit. Drag it into Cubase for a MIDI part of exactly what the unit plays (in key, following the chords and any key change). **Joe to test the drag itself in Cubase**
+- [ ] Drag audio out
+- [x] Save and load a sound (v0.1.12): right-click a tab, Save this sound. Saved sounds are listed under + (Your saved sounds), from any project. They live in Documents / Nebula2 Modulation / Sounds. A plugin in a slot is saved with its settings
+- [ ] A sound's sample file isn't copied with it; no pictures or tags in the list
 
 ## Screen polish (Joe: "we can work the UI later")
 

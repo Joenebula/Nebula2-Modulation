@@ -456,6 +456,69 @@ struct NoteSeq : Module
     float pitch = 0;
 };
 
+// MIDI keyboard: notes from a keyboard, or from a MIDI track in the host. Pitch is the key pressed last (for a
+// bass or lead); Note 1 to 4 are the keys held, lowest first (for chords). The gate dips for a moment on each new
+// key so envelopes start again.
+struct KeysIn : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "keys", "MIDI keyboard", "Notes and rhythm", "Notes from your keyboard or a MIDI track",
+            {}, { { "pitch", "Pitch" }, { "gate", "Gate" }, { "vel", "Vel" }, { "n1", "Note 1" }, { "n2", "Note 2" }, { "n3", "Note 3" }, { "n4", "Note 4" } },
+            { { "channel", "Channel", 0, 16, 0, Fmt::Int, 1, { "All", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16" } },
+              { "octave", "Octave", -3, 3, 0, Fmt::Int },
+              { "snap", "Notes", 0, 1, 1, Fmt::Int, 1, { "As played", "Stay in key" } } } };
+        return i;
+    }
+    // The nearest note of the key (the lower one when it falls between two)
+    static int inKey (int midi, int root, const int* scale)
+    {
+        if (scale == nullptr) return midi;
+        for (int d = 0; d < 7; ++d)
+            for (int sign : { -1, 1 })
+            {
+                const int pc = (((midi + sign * d - root) % 12) + 12) % 12;
+                for (int k = 0; k < 7; ++k) if (scale[k] == pc) return midi + sign * d;
+            }
+        return midi;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const int channel = (int) std::lround (P (0));
+        const float oct = std::round (P (1));
+        const bool snap = P (2) > 0.5f;
+        int notes[Keys::kMax], count = 0, newest = -1, newestVel = 100; uint32_t newestOrder = 0;
+        if (c.keys != nullptr)
+            for (int i = 0; i < c.keys->count; ++i)
+            {
+                const auto& h = c.keys->held[i];
+                if (channel != 0 && h.channel != channel) continue;
+                const int note = snap ? inKey (h.note, c.root, c.scale) : h.note;
+                notes[count++] = note;
+                if (h.order >= newestOrder) { newestOrder = h.order; newest = note; newestVel = h.vel; }
+            }
+        std::sort (notes, notes + count);
+        const bool retrigger = count > 0 && wasHeld && newestOrder != lastOrder;
+        if (count > 0)
+        {
+            pitch = (float) (newest - 60) / 12.0f + oct;
+            vel = (float) newestVel / 127.0f;
+            for (int k = 0; k < 4; ++k) voice[k] = (float) (notes[std::min (k, count - 1)] - 60) / 12.0f + oct;
+            lastOrder = newestOrder;
+        }
+        wasHeld = count > 0;
+        for (int i = 0; i < n; ++i)
+        {
+            out[0][(size_t) i] = pitch;
+            out[1][(size_t) i] = count > 0 && ! (retrigger && i == 0) ? 1.0f : 0.0f;
+            out[2][(size_t) i] = vel;
+            for (int k = 0; k < 4; ++k) out[(size_t) (3 + k)][(size_t) i] = voice[k];
+        }
+    }
+    float pitch = 0, vel = 0.8f, voice[4] { 0, 0, 0, 0 };
+    uint32_t lastOrder = 0; bool wasHeld = false;
+};
+
 // Chord generator: plays the song's chord progression (shared by every tab, like the key).
 // Sends the chord out as a bass note and four voices, with a gate in the chosen rhythm.
 struct ChordGen : Module
@@ -1985,7 +2048,7 @@ inline const std::vector<TypeEntry>& registry()
         entry<Compressor>(), entry<Ducker>(), entry<TransientShaper>(),
         entry<Tripler>(), entry<Harmoniser>(), entry<StereoWidth>(), entry<Pan>(),
         entry<Lfo>(), entry<TranceGate>(), entry<StepMod>(), entry<RandomMod>(), entry<Macro>(), entry<EnvFollower>(),
-        entry<DrumSeq>(), entry<NoteSeq>(), entry<ChordGen>(), entry<Arpeggiator>(), entry<Euclid>(), entry<Ratchet>(), entry<Swing>(),
+        entry<DrumSeq>(), entry<NoteSeq>(), entry<KeysIn>(), entry<ChordGen>(), entry<Arpeggiator>(), entry<Euclid>(), entry<Ratchet>(), entry<Swing>(),
         entry<Vca>(), entry<Mixer4>(), entry<Atten>(), entry<Crossfader>(), entry<Switch>(), entry<Slew>(),
         entry<Clock>(), entry<Divider>(), entry<Logic>(), entry<Chance>(), entry<Send>(), entry<Scope>(), entry<OutputModule>() };
     return r;

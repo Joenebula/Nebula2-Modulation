@@ -598,6 +598,107 @@ int main (int argc, char** argv)
         CHECK (r.rack.harmony.lift == 0 && r.rack.timeline.slots.back().tr == 0, "and Undo takes it away again");
     }
 
+    {
+        // A MIDI keyboard plays a sound: keys -> oscillator -> envelope -> output
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        while (r.rack.boards.size() > 0) r.rack.removeBoard (0);
+        r.rack.addBoard (n2m::makeBoard ("lead", 48000));
+        auto& b = *r.rack.boards[0];
+        n2m::Module* seq = nullptr;
+        for (auto& m : b.modules) if (std::string (m->info->type) == "noteseq") seq = m.get();
+        CHECK (seq != nullptr, "the lead has a note sequencer");
+        // put a keyboard where the sequencer was
+        auto* keys = r.rack.addModule (b, "keys", 0, 0);
+        const auto cables = b.cables;
+        for (auto& c : cables)
+            if (c.src == seq->uid) r.rack.connect (b, keys->uid, c.srcPort, c.dst, c.dstPort);     // pitch and gate are ports 0 and 1 on both
+        r.rack.removeModule (b, seq->uid);
+        auto block = [&] (juce::MidiBuffer& m) { juce::AudioBuffer<float> buf (2, 256); r.processBlock (buf, m); return buf.getMagnitude (0, 256); };
+        juce::MidiBuffer none;
+        float quiet = 0; for (int i = 0; i < 40; ++i) quiet = juce::jmax (quiet, block (none));
+        CHECK (quiet < 0.001f, "with no key down the keyboard sound is silent, even though the song isn't playing");
+        juce::MidiBuffer down; down.addEvent (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 100), 10);
+        float loud = block (down);
+        for (int i = 0; i < 40; ++i) loud = juce::jmax (loud, block (none));
+        CHECK (loud > 0.05f, "pressing a key plays the sound with Cubase stopped");
+        CHECK (r.rack.keys.count == 1, "the key is held");
+        juce::MidiBuffer up; up.addEvent (juce::MidiMessage::noteOff (1, 62), 0);
+        block (up);
+        for (int i = 0; i < 1500; ++i) block (none);
+        CHECK (r.rack.keys.count == 0 && block (none) < 0.002f, "letting go ends it");
+        juce::MidiBuffer panic; panic.addEvent (juce::MidiMessage::noteOn (1, 65, (juce::uint8) 100), 0); panic.addEvent (juce::MidiMessage::allNotesOff (1), 100);
+        block (panic);
+        CHECK (r.rack.keys.count == 0, "all notes off from the host clears held keys");
+
+        // Save this sound, then load it into another project
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test-sound.n2msound");
+        file.deleteFile();
+        b.name = "My lead"; b.solo.store (true); b.plays.store (5u);
+        keys->patternLink = 0;
+        CHECK (r.saveSound (0, file) && file.existsAsFile(), "a sound saves to a file");
+        Nebula2ModulationProcessor q;
+        q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        const int before = (int) q.rack.boards.size();
+        const int at = q.loadSound (file);
+        CHECK (at == before && (int) q.rack.boards.size() == before + 1, "loading it adds a new tab");
+        if (at >= 0)
+        {
+            auto& nb = *q.rack.boards[(size_t) at];
+            CHECK (nb.name == "My lead" && nb.modules.size() == b.modules.size() && nb.cables.size() == b.cables.size(), "with its name, units and cables");
+            CHECK (! nb.solo.load() && nb.plays.load() == 0xffffffffu, "it arrives un-soloed and playing in every section");
+            bool same = true;
+            for (size_t i = 0; i < nb.modules.size(); ++i)
+                for (size_t k = 0; k < nb.modules[i]->params.size(); ++k) same = same && std::abs (nb.modules[i]->params[k].load() - b.modules[i]->params[k].load()) < 1.0e-4f;
+            CHECK (same, "and every knob where it was");
+            CHECK (q.history.canUndo(), "loading a sound can be undone");
+            q.history.undo();
+            CHECK ((int) q.rack.boards.size() == before, "undo takes the loaded sound away");
+        }
+        const auto junk = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test-junk.n2msound");
+        junk.replaceWithText ("not a sound");
+        CHECK (q.loadSound (junk) == -1 && q.loadSound (juce::File()) == -1 && ! r.saveSound (99, file), "a file that isn't a sound is refused");
+        file.deleteFile(); junk.deleteFile();
+
+        // A pattern as a MIDI file
+        Nebula2ModulationProcessor w;
+        w.setRateAndBufferSizeDetails (48000, 256); w.prepareToPlay (48000, 256);
+        n2m::Module* bassSeq = nullptr; n2m::Module* plain = nullptr; std::string tabName;
+        for (auto& bd : w.rack.boards)
+            for (auto& m : bd->modules)
+            {
+                if (bassSeq == nullptr && std::string (m->info->type) == "noteseq") { bassSeq = m.get(); tabName = bd->name; }
+                if (std::string (m->info->type) == "output") plain = m.get();
+            }
+        CHECK (bassSeq != nullptr, "the starting project has a note sequencer");
+        if (bassSeq != nullptr)
+        {
+            const auto want = n2m::notesOf (w.rack, *bassSeq);
+            const auto mid = w.writeMidi (*bassSeq, tabName + " notes");
+            CHECK (mid.existsAsFile() && mid.getFileExtension() == ".mid", "a pattern writes a MIDI file");
+            juce::FileInputStream in (mid);
+            juce::MidiFile mf;
+            CHECK (in.openedOk() && mf.readFrom (in) && mf.getNumTracks() == 1 && mf.getTimeFormat() == 480, "the host can read it");
+            int ons = 0; double end = 0; bool pitches = true;
+            if (mf.getNumTracks() == 1)
+            {
+                const auto& tr = *mf.getTrack (0);
+                for (int i = 0; i < tr.getNumEvents(); ++i)
+                {
+                    const auto& msg = tr.getEventPointer (i)->message;
+                    if (msg.isNoteOn()) { pitches = pitches && ons < (int) want.notes.size() && msg.getNoteNumber() == want.notes[(size_t) ons].midi && std::abs (msg.getTimeStamp() - want.notes[(size_t) ons].start * 120.0) < 0.5; ++ons; }
+                    end = juce::jmax (end, msg.getTimeStamp());
+                }
+            }
+            CHECK (ons == (int) want.notes.size() && ons > 0 && pitches, "with the pattern's notes, in the right places");
+            CHECK (std::abs (end - want.steps * 120.0) < 0.5, "and it is whole bars long");
+            mid.deleteFile();
+        }
+        CHECK (plain != nullptr && w.writeMidi (*plain, "x") == juce::File(), "a unit with no pattern writes nothing");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

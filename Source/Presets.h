@@ -26,6 +26,77 @@ inline int width (const Info& i)
 inline int height (const Info& i) { return header + seqHeight (i) + rows (i) * cellH + jackH + pad; }
 }
 
+// ---- A pattern as a list of notes, for a MIDI file to drag into the host ----
+// Times are in 16th steps from the start. Works out the same notes the unit plays: in key, following the chords,
+// following its leader if it is linked as a follower.
+struct NoteOut { double start = 0, len = 1; int midi = 60, vel = 100; };
+struct NoteList { std::vector<NoteOut> notes; int steps = 0; };   // steps: how long the whole thing is
+
+inline bool canExportMidi (const Module& m) { return m.info->seq == Seq::Note || m.info->seq == Seq::Chord || std::string (m.info->type) == "drumseq"; }
+
+inline NoteList notesOf (const Rack& rack, const Module& m)
+{
+    NoteList out;
+    const auto& tl = rack.timeline;
+    const int* scale = scales()[(size_t) std::min ((int) scales().size() - 1, std::max (0, rack.scale.load()))].iv;
+    const int root = rack.root.load();
+    if (m.info->seq == Seq::Chord)
+    {
+        // One held chord per chord of the song: the bass note and the four notes the unit sends
+        const int oct = (int) std::lround (m.P (m.paramIndex ("octave")));
+        for (auto& s : tl.slots)
+        {
+            out.notes.push_back ({ (double) s.start, (double) s.len, 60 + (int) std::lround (s.bass * 12.0f), 96 });
+            int last = -1;
+            for (int k = 0; k < 4; ++k)
+            {
+                const int note = 60 + (int) std::lround (s.voice[k] * 12.0f) + 12 * oct;
+                if (note != last) out.notes.push_back ({ (double) s.start, (double) s.len, note, 88 });
+                last = note;
+            }
+        }
+        out.steps = tl.total;
+        return out;
+    }
+    if (std::string (m.info->type) == "drumseq")
+    {
+        const int len = loopSteps (m.P (m.paramIndex ("length")), m.P (m.paramIndex ("bars")));
+        for (int k = 0; k < len; ++k)
+        {
+            const float d = m.data[(size_t) k].load();
+            if (d > 0.5f) out.notes.push_back ({ (double) k, 0.5, 36, d > 1.5f ? 127 : 92 });
+        }
+        out.steps = ((len + kSteps - 1) / kSteps) * kSteps;
+        return out;
+    }
+    if (m.info->seq != Seq::Note) return out;
+    const int len = loopSteps (m.P (m.paramIndex ("length")), m.P (m.paramIndex ("bars")));
+    const bool follow = m.P (m.paramIndex ("follow")) > 0.5f;
+    const float gl = m.P (m.paramIndex ("gatelen"));
+    const int octave = (int) std::lround (m.P (m.paramIndex ("octave")));
+    // The sequencer this one follows, if it is linked that way: the first in its group that isn't itself following
+    const Module* leader = nullptr;
+    if (m.patternShare == 4 && m.patternLink > 0)
+        for (auto& b : rack.boards)
+            for (auto& o : b->modules)
+                if (leader == nullptr && o->patternLink == m.patternLink && o->patternShare != 4 && o->info->seq == Seq::Note) leader = o.get();
+    if (leader == &m) leader = nullptr;
+    // A line that follows the chords (or a leader that might) is written out for the whole song, so it lines up
+    const bool whole = (follow || leader != nullptr) && tl.total > 0;
+    const int total = whole ? std::max (tl.total, len) : ((len + kSteps - 1) / kSteps) * kSteps;
+    for (int s = 0; s < total; ++s)
+    {
+        const int k = wrapStep (s, len);
+        if (m.data[(size_t) k].load() <= 0.5f) continue;
+        int deg = (int) std::lround (m.data[(size_t) (kMaxSteps + k)].load()), lift = 0;
+        if (follow) { const int ci = tl.indexAt (s); if (ci >= 0) { deg += tl.slots[(size_t) ci].deg; lift = tl.slots[(size_t) ci].tr; } }
+        if (leader != nullptr) deg += leaderShift (*leader, s);
+        out.notes.push_back ({ (double) s, gl >= 0.995f ? 1.0 : (double) std::min (0.96f, gl), 60 + root + degreeToSemis (deg, scale) + lift + 12 * octave, 100 });
+    }
+    out.steps = total;
+    return out;
+}
+
 // Lines the modules up in signal order: rhythm and movers along the top, the sound path below,
 // left to right. Cables are not changed.
 inline void tidy (Board& b)

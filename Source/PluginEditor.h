@@ -156,6 +156,8 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
     juce::Point<int> jackCentre (bool isOut, int port) const;   // in this component
+    juce::Rectangle<int> midiArea() const;                       // on a sequencer or the chords: drag from here to put the MIDI in the host
+    bool midiDrag = false;
     juce::Rectangle<int> linkArea() const;                       // on a sequencer: the Link label in the header
     void linkMenu();
     bool jackAt (juce::Point<int> p, bool& isOut, int& port) const;
@@ -236,8 +238,10 @@ private:
     void addMenu();
     void tabMenu (int index);
     void rename (int index);
+    void added (int index);      // after a tab has been added: show it
     Nebula2ModulationProcessor& proc;
     int scroll = 0;
+    std::unique_ptr<juce::FileChooser> chooser;
     std::unique_ptr<juce::TextEditor> editor;
 };
 

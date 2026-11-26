@@ -180,9 +180,10 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void selectTab (int index);
     n2m::AddPanel addPanel;      // public so the snapshot test can open it
+    n2m::BoardView& board() { return boardView; }   // for the tests
+    void addUnits (const std::vector<std::string>& types);
 private:
     void timerCallback() override;
-    void addUnits (const std::vector<std::string>& types);
     n2m::Board* current() const;
 
     Nebula2ModulationProcessor& proc;

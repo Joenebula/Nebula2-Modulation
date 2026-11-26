@@ -79,7 +79,7 @@ Push to main, then start the release through the API (pushing tags doesn't work 
 gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.0'
 ```
 
-Bump by one each time. No release has been made yet.
+The latest release is **v0.1.0**. Bump by one each time.
 
 ## What can't be checked here
 

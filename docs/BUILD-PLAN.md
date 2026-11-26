@@ -107,6 +107,7 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 - [x] A sound sent to an output that isn't switched on stays in the main mix, and its label turns orange
 - [x] Separate outputs skip the master fader and keep the safety limiter
 - [ ] **Joe to test in Cubase**: Activate Outputs, and the channels appearing in the MixConsole
+- Looked at (26 Nov 2026) and not done: naming Cubase's channels after the tabs. JUCE 8.0.4 fixes an output's name when the plugin is created, has no way to change it, and never sends the host the "output names changed" notice. Doing it would mean patching JUCE in the build, and Cubase may not rename a channel that already exists anyway. Joe: not a deal breaker; rename in Cubase.
 
 ## Stage 7: the song
 

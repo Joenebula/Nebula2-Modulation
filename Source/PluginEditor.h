@@ -55,6 +55,7 @@ private:
     juce::Rectangle<int> pill (int bar) const;
     int bars() const;
     void edited();           // after any change to the pattern: linked sequencers follow
+    std::string ideaKind() const;
     juce::TextButton ideas { "Ideas" }, random { "Random" };
     int shownStep = -1, dragStep = -1, page = 0;
 };

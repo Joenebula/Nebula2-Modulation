@@ -30,7 +30,8 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 1. Add Nebula2 Modulation as an **instrument track** in Cubase and press play. It follows Cubase's tempo.
    **Play** in the plugin runs it on its own when Cubase is stopped.
 2. Each **tab** is one sound. Click a tab to see only that sound's modules.
-3. **+** adds a sound: kick, snare, hi-hat, percussion, bass, lead, stab, pad, or an empty board. It arrives cabled and playing.
+3. **+** adds a sound: kick, snare, clap, hi-hat, percussion, bass, lead, arp, stab, pad, strings, or an empty board.
+   It arrives cabled and playing.
 4. **Add units** opens the menu of modules: sound sources, envelopes, filters, EQ, distortion, reverb, delay, chorus,
    phaser, flanger and more. Tick one or several and they land on the board, unconnected.
 5. **Cables:** drag from an output jack (coloured ring) to an input jack. Pull a plug out of an input to move it,

@@ -70,7 +70,7 @@ struct Param
     float skew = 1.0f;                       // above 1 gives the low end of the knob more room
     std::vector<const char*> choices {};     // not empty: a switch, not a knob
 };
-enum class Seq { None, Drum, Note, Chord, Host };   // Host: a slot holding another plugin
+enum class Seq { None, Drum, Note, Chord, Host, Value };   // Host: a slot holding another plugin. Value: a row of amounts, not notes
 
 struct Info
 {
@@ -728,7 +728,7 @@ struct Rack
             if (m->patternLink > 0) o << "k " << m->uid << ' ' << m->patternLink << ' ' << m->patternShare << '\n';
             const auto extra = m->saveExtra();
             if (! extra.empty()) o << "x " << m->uid << ' ' << clean (extra) << '\n';
-            if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note)
+            if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note || m->info->seq == Seq::Value)
                 for (int row = 0; row < 2; ++row)
                 {
                     // Each row is written up to its last used bar, so short patterns make short saves

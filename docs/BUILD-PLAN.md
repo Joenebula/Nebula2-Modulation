@@ -32,20 +32,21 @@ Cubase. Tick things off here as they land.
 - [x] Starting boards: Kick, Snare, Hi-hat, Percussion, Bass, Lead, Stab, Pad, Empty
 - [x] Multi-oscillator (four notes at once)
 - [ ] Sample player (drop an audio file on it)
-- [ ] Clap board (needs the multi-hit envelope)
+- [x] Clap board, with its own clap envelope (v0.1.7)
 - [ ] Stereo cables (today a board is mono until its Output; pan is on the mixer)
 - [ ] Undo and redo
 - [ ] Play boards from a MIDI keyboard / Cubase MIDI track
 
 ## Stage 3: rhythm and notes (part done, v0.1.1)
 
-- [ ] Arpeggiator, with rate, gate, range and pattern as inputs
+- [x] Arpeggiator (v0.1.7): Up, Down, Up and down, Random, Outside in; 1 to 4 octaves; Rate, Range and Length each have an input for movers
+- [x] Arp, Clap and Strings sounds
 - [x] Chord generator: the Nebula2 Chord engine (`Source/ChordEngine.h`, copied unchanged). One progression shared by every tab: mood, Generate, song length, bars per chord
 - [x] Note sequencer can follow the chords (bass and lead do by default)
 - [x] Stab and Pad boards
-- [ ] Strings board
 - [ ] Edit single chords (colour, bass note, length, lock), and the Strange / Variation / Key change knobs from Nebula2 Chord
-- [ ] Euclidean rhythm, clock divider, probability, ratchet, swing
+- [x] Euclidean rhythm (Hits and Turn have inputs), Clock, Divider, Chance (v0.1.7)
+- [ ] Ratchet, swing
 - [x] Longer patterns: 1, 2, 4 or 8 bars, with a button per bar. Ideas fill every bar; Random varies the bars and adds fills
 - [ ] Pattern chaining
 - [ ] Bigger Ideas libraries per sound
@@ -59,17 +60,20 @@ Cubase. Tick things off here as they land.
 - [x] EQ: 3-band, parametric (4 bands), low cut / high cut
 - [x] Pad now runs through chorus and hall reverb in stereo; stab through plate reverb
 - [x] Add units menu widened to three columns to hold them
-- [ ] Dynamics: compressor with sidechain, transient shaper, ducker
-- [ ] Tripler, Harmoniser, stereo width, pan
+- [x] Dynamics (v0.1.7): compressor with sidechain, transient shaper, ducker. With nothing in its Trig the ducker dips on every beat, so a bass or pad can pump against the kick without a cable between tabs
+- [x] Tripler, Harmoniser, stereo width, pan (v0.1.7). The Harmoniser stays in key when the note's Pitch is plugged in
+- [ ] The pitch shifter behind the Harmoniser is the simple kind: it warbles a little on long held notes. A cleaner one is a later job
 - [ ] Send effects on the mixing desk
 
 Every effect is held to two rules by tests: at 0% it passes the sound through exactly, and silence in gives
 silence out.
 
-## Stage 5: movers and utilities
+## Stage 5: movers and utilities (most done, v0.1.7)
 
-- [ ] Gate / trance gate, step modulator, random, macro knob
-- [ ] Splitter, crossfader, switch, slew, logic, scope and meter, tuner
+- [x] Trance gate, step modulator, random, macro knob, envelope follower (v0.1.7)
+- [x] Crossfader, switch, slew, logic (v0.1.7)
+- [ ] Scope and meter, tuner (these need their own screens)
+- Not doing: a Splitter. Any output already feeds as many inputs as you cable from it.
 
 ## Stage 6: other plugins inside
 

@@ -53,6 +53,20 @@ int main (int argc, char** argv)
 
     p.rack.addBoard (n2m::makeBoard ("stab", 48000));
     e->selectTab (5); shoot (*ed, dir + "/ui_stab.png");
+    p.rack.addBoard (n2m::makeBoard ("arp", 48000));
+    e->selectTab (6); shoot (*ed, dir + "/ui_arp.png");
+    {   // a few of the newer units on one board, to see how they draw
+        auto eb = n2m::makeBoard ("empty", 48000);
+        for (const char* t : { "gate", "stepmod", "comp", "parameq", "tripler", "euclid" }) eb->add (t, 0, 0, 48000);
+        n2m::setValues (*eb->modules[2], n2m::valueIdeas()[2].v);
+        n2m::setDrum (*eb->modules[1], n2m::drumIdeas ("gate")[0].pat);
+        int x = 24, y = 170;
+        for (size_t k = 1; k < eb->modules.size(); ++k) { auto& m = *eb->modules[k]; m.x = (float) x; m.y = (float) y; x += n2m::lay::width (*m.info) + 16; if (k == 3) { x = 24; y = 430; } }
+        p.rack.addBoard (std::move (eb));
+        e->selectTab (7); shoot (*ed, dir + "/ui_units.png");
+        p.rack.removeBoard (7); p.rack.removeBoard (6);
+        e->selectTab (0);
+    }
     p.rack.addBoard (n2m::makeBoard ("lead", 48000));
     e->selectTab (6); shoot (*ed, dir + "/ui_lead.png");
 

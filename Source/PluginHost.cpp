@@ -70,7 +70,7 @@ static void tellClosing (HostedModule* m)
 //==============================================================================
 const Info& HostedModule::desc()
 {
-    static const Info i { "plugin", "Plugin slot", "Your plugins", "Holds one of your VST3 plugins: an instrument or an effect",
+    static const Info i { "plugin", "Plugin slot", "Your plugins", "Holds one of your VST3 plugins",
         { { "p1", "Note 1" }, { "p2", "Note 2" }, { "p3", "Note 3" }, { "p4", "Note 4" }, { "gate", "Gate" }, { "vel", "Vel" }, { "inl", "In L" }, { "inr", "In R" } },
         { { "outl", "Out L" }, { "outr", "Out R" } },
         { { "level", "Level", 0, 1.5f, 1.0f, Fmt::Percent } }, Seq::Host };

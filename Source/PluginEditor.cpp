@@ -184,7 +184,8 @@ SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p)
     ideas.onClick = [this] { showIdeas(); };
     random.onClick = [this]
     {
-        if (module.info->seq == Seq::Drum) randomDrum (board.type, proc.nextSeed(), module);
+        if (module.info->seq == Seq::Drum) randomDrum (ideaKind(), proc.nextSeed(), module);
+        else if (module.info->seq == Seq::Value) randomValues (proc.nextSeed(), module);
         else randomNotes (board.type, proc.nextSeed(), module);
         edited();
     };
@@ -192,6 +193,9 @@ SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p)
 }
 
 void SeqView::resized() { ideas.setBounds (0, 0, 58, 20); random.setBounds (62, 0, 66, 20); }
+
+// Which set of pattern ideas suits this unit: a trance gate has its own, otherwise the tab's kind of sound decides
+std::string SeqView::ideaKind() const { return std::string (module.info->type) == "gate" ? "gate" : board.type; }
 
 void SeqView::edited()
 {
@@ -212,14 +216,17 @@ void SeqView::showIdeas()
 {
     juce::PopupMenu m;
     m.addSectionHeader ("Pattern ideas");
-    const bool drum = module.info->seq == Seq::Drum;
-    if (drum) { int i = 1; for (auto& d : drumIdeas (board.type)) m.addItem (i++, d.name); }
-    else { int i = 1; for (auto& d : noteIdeas (board.type)) m.addItem (i++, d.name); }
+    const bool drum = module.info->seq == Seq::Drum, value = module.info->seq == Seq::Value;
+    int i = 1;
+    if (drum) for (auto& d : drumIdeas (ideaKind())) m.addItem (i++, d.name);
+    else if (value) for (auto& d : valueIdeas()) m.addItem (i++, d.name);
+    else for (auto& d : noteIdeas (board.type)) m.addItem (i++, d.name);
     juce::Component::SafePointer<SeqView> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&ideas), [safe, drum] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&ideas), [safe, drum, value] (int r)
     {
         if (safe == nullptr || r <= 0) return;
-        if (drum) setDrum (safe->module, drumIdeas (safe->board.type)[(size_t) (r - 1)].pat);
+        if (drum) setDrum (safe->module, drumIdeas (safe->ideaKind())[(size_t) (r - 1)].pat);
+        else if (value) setValues (safe->module, valueIdeas()[(size_t) (r - 1)].v);
         else { auto& d = noteIdeas (safe->board.type)[(size_t) (r - 1)]; setNotes (safe->module, d.gates, d.deg); }
         safe->edited();
     });
@@ -286,7 +293,9 @@ void SeqView::paint (juce::Graphics& g)
             g.fillRoundedRectangle (cell, 3.0f);
             g.setFont (font (8.5f, Weight::Medium));
             g.setColour (on ? n8.withAlpha (alpha) : n6.withAlpha (alpha));
-            g.drawText (kNoteNames[(((root + degreeToSemis (deg, sc)) % 12) + 12) % 12], cell.toNearestInt(), juce::Justification::centred, false);
+            // A note sequencer names the note; a step modulator shows how far up the step is
+            if (module.info->seq == Seq::Value) g.drawText (juce::String ((int) std::lround ((float) (deg - kDegLo) / (float) (kDegHi - kDegLo) * 100.0f)), cell.toNearestInt(), juce::Justification::centred, false);
+            else g.drawText (kNoteNames[(((root + degreeToSemis (deg, sc)) % 12) + 12) % 12], cell.toNearestInt(), juce::Justification::centred, false);
             if (now) { g.setColour (noteAccent); g.fillRoundedRectangle (cell.withTop (cell.getBottom() - 2.5f), 1.0f); }
         }
     }
@@ -1370,7 +1379,7 @@ AddPanel::AddPanel()
 
 void AddPanel::open() { ticked.clear(); add.setEnabled (false); setVisible (true); toFront (true); repaint(); }
 
-static constexpr int kRowH = 38, kHeadH = 28, kCardW = 1140, kAddCols = 3;
+static constexpr int kRowH = 35, kHeadH = 27, kCardW = 1216, kAddCols = 4;
 
 juce::Rectangle<int> AddPanel::card() const
 {
@@ -1449,10 +1458,10 @@ void AddPanel::paint (juce::Graphics& g)
         }
         g.setFont (controlFont());
         g.setColour (n8);
-        g.drawText (r.info->name, r.r.getX() + 32, r.r.getY() + 5, r.r.getWidth() - 36, 15, juce::Justification::centredLeft, true);
-        g.setFont (font (10.5f));
+        g.drawText (r.info->name, r.r.getX() + 32, r.r.getY() + 3, r.r.getWidth() - 36, 15, juce::Justification::centredLeft, true);
+        g.setFont (font (10.0f));
         g.setColour (n7);
-        g.drawText (r.info->hint, r.r.getX() + 32, r.r.getY() + 20, r.r.getWidth() - 36, 14, juce::Justification::centredLeft, true);
+        g.drawText (r.info->hint, r.r.getX() + 32, r.r.getY() + 18, r.r.getWidth() - 34, 13, juce::Justification::centredLeft, true);
     }
 }
 

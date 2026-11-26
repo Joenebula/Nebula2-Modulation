@@ -57,6 +57,7 @@ Rules that tests hold in place:
 - Patterns are up to 8 bars (`kMaxSteps`). A sequencer's data is two rows: hits or note on/off, then which note.
 - Projects saved by v0.1.0 (the `d` line, one bar) must keep loading.
 - Outputs: `Board::out` (0 = main mix, 1.. = Out 2 ...). A sound whose output the host hasn't switched on must stay in the main mix, never vanish.
+- Anything "random" (Random, Chance, the arpeggiator's Random pattern) is worked out from the song position by `hashUnit()`, so the same bar always sounds the same.
 - Links: `Module::patternLink` / `patternShare` and `paramLink`, pushed by `Rack::pushPattern` / `pushParam` when the screen edits something. Knobs link by position, not value. `patternShare` 4 is a follower: it keeps its own pattern and is shifted at play time by `leaderShift()`.
 
 ## Build and test (Linux)
@@ -86,10 +87,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.7'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.8'
 ```
 
-The latest release is **v0.1.6**. Bump by one each time.
+The latest release is **v0.1.7**. Bump by one each time.
 
 ## What can't be checked here
 

@@ -12,7 +12,7 @@ constexpr int cell = 54, cellH = 62, header = 26, jackW = 40, jackH = 44, pad = 
 constexpr int drumSeqH = 62, noteSeqH = 118, seqW = 16 * 20;
 constexpr int chordW = 8 * 60, chordTileH = 28, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
 constexpr int hostW = 360, hostSeqH = 58;
-inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : 0; }
+inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note || i.seq == Seq::Value ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : 0; }
 inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq != Seq::None ? seqW : 0; }
 constexpr int perRow = 5;
 inline int rowLen (const Info& i) { return i.perRow > 0 ? i.perRow : perRow; }
@@ -106,12 +106,18 @@ inline const std::vector<DrumIdea>& drumIdeas (const std::string& boardType)
     static const std::vector<DrumIdea> perc {
         { "Three against four", "x..x..x..x..x..x" }, { "Clave", "x..x..x...x.x..." }, { "Answer", "......x.......xx" },
         { "Tumble", "x.x..x..x.x..x.." }, { "Five in a bar", "x..x..x..x.x...." }, { "Sparse", "...x......x....." } };
+    // For the trance gate: lit steps let the sound through
+    static const std::vector<DrumIdea> gate {
+        { "Classic trance", "x.xxx.xxx.xxx.xx" }, { "Off-beat", "..xx..xx..xx..xx" }, { "Gallop", "x.xxx.xxx.xxx.xx" }, { "Dotted", "xxx.xxx.xxx.xx.x" },
+        { "Stutter", "x.x.x.x.xxxxxxxx" }, { "Half bar hold", "xxxxxxxxx.x.x.x." }, { "Sparse", "x...x..x..x...x." }, { "Sixteenths", "x.x.x.x.x.x.x.x." } };
     static const std::vector<DrumIdea> any {
         { "Every beat", "x...x...x...x..." }, { "Off-beat", "..x...x...x...x." }, { "8ths", "x.x.x.x.x.x.x.x." }, { "Clave", "x..x..x...x.x..." } };
     if (boardType == "kick") return kick;
     if (boardType == "snare") return snare;
     if (boardType == "hat") return hat;
     if (boardType == "perc") return perc;
+    if (boardType == "gate") return gate;
+    if (boardType == "clap") return snare;
     return any;
 }
 
@@ -132,6 +138,30 @@ inline const std::vector<NoteIdea>& noteIdeas (const std::string& boardType)
         { "Trance gate", "x.xxx.xxx.xxx.xx", { 0, 0, 0, 0, 2, 0, 2, 2, 4, 0, 4, 4, 2, 0, 2, 2 } },
         { "Falling", "x.x.x.x.x.x.x.x.", { 9, 0, 7, 0, 4, 0, 2, 0, 7, 0, 4, 0, 2, 0, 0, 0 } } };
     return boardType == "bass" ? bass : lead;
+}
+
+// Shapes for the step modulator: 16 values, 0 (bottom) to 21 (top), every step on
+struct ValueIdea { const char* name; int v[16]; };
+inline const std::vector<ValueIdea>& valueIdeas()
+{
+    static const std::vector<ValueIdea> v {
+        { "Ramp up", { 0, 1, 3, 4, 6, 7, 8, 10, 11, 13, 14, 15, 17, 18, 20, 21 } },
+        { "Ramp down", { 21, 20, 18, 17, 15, 14, 13, 11, 10, 8, 7, 6, 4, 3, 1, 0 } },
+        { "Up and down", { 0, 3, 6, 9, 12, 15, 18, 21, 21, 18, 15, 12, 9, 6, 3, 0 } },
+        { "Two ramps", { 0, 3, 6, 9, 12, 15, 18, 21, 0, 3, 6, 9, 12, 15, 18, 21 } },
+        { "High and low", { 21, 0, 21, 0, 21, 0, 21, 0, 21, 0, 21, 0, 21, 0, 21, 0 } },
+        { "Steps", { 4, 4, 4, 4, 10, 10, 10, 10, 16, 16, 16, 16, 21, 21, 21, 21 } },
+        { "Accent the beat", { 21, 6, 10, 6, 21, 6, 10, 6, 21, 6, 10, 6, 21, 6, 10, 6 } } };
+    return v;
+}
+inline void setValues (Module& m, const int* v)
+{
+    for (int b = 0; b < kMaxBars; ++b)
+        for (int i = 0; i < kSteps; ++i)
+        {
+            m.data[(size_t) (b * kSteps + i)].store (1.0f);
+            m.data[(size_t) (kMaxSteps + b * kSteps + i)].store ((float) (v[i] - 7));     // rows run -7 to 14
+        }
 }
 
 // ---- Random, but in the style of the sound ----
@@ -267,13 +297,25 @@ inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
     }
 }
 
+// Random values for the step modulator: each bar its own, some steps held
+inline void randomValues (uint32_t seed, Module& m)
+{
+    Rand r (seed);
+    for (int k = 0; k < kMaxSteps; ++k)
+    {
+        m.data[(size_t) k].store (k % kSteps == 0 || r.chance (0.75f) ? 1.0f : 0.0f);
+        m.data[(size_t) (kMaxSteps + k)].store ((float) (r.upTo (22) - 7));
+    }
+}
+
 // ---- The kinds of sound a new tab can be ----
 struct BoardType { const char* id; const char* name; int colour; };
 inline const std::vector<BoardType>& boardTypes()
 {
     static const std::vector<BoardType> t {
-        { "kick", "Kick", 0 }, { "snare", "Snare", 3 }, { "hat", "Hi-hat", 5 }, { "perc", "Percussion", 4 },
-        { "bass", "Bass", 2 }, { "lead", "Lead", 1 }, { "stab", "Stab", 7 }, { "pad", "Pad", 6 }, { "empty", "Empty board", 0 } };
+        { "kick", "Kick", 0 }, { "snare", "Snare", 3 }, { "clap", "Clap", 7 }, { "hat", "Hi-hat", 5 }, { "perc", "Percussion", 4 },
+        { "bass", "Bass", 2 }, { "lead", "Lead", 1 }, { "arp", "Arp", 5 }, { "stab", "Stab", 7 }, { "pad", "Pad", 6 }, { "strings", "Strings", 4 },
+        { "empty", "Empty board", 0 } };
     return t;
 }
 
@@ -385,6 +427,50 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
         cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv"); cable (vca, "out", chorus, "in");
         cable (chorus, "outl", hall, "inl"); cable (chorus, "outr", hall, "inr");
         cable (hall, "outl", out, "left"); cable (hall, "outr", out, "right");
+    }
+    else if (b->type == "clap")
+    {
+        auto* seq = add ("drumseq"); setDrum (*seq, drumIdeas ("snare")[0].pat);
+        auto* env = add ("clapenv");
+        auto* noise = add ("noise");
+        auto* filt = add ("filter"); filt->set ("type", 2); filt->set ("cutoff", 0.62f); filt->set ("res", 0.35f);
+        auto* vca = add ("vca"); vca->set ("level", 1.4f);
+        auto* room = add ("room"); room->set ("mix", 0.2f);
+        cable (seq, "trig", env, "trig"); cable (seq, "vel", env, "vel");
+        cable (noise, "out", filt, "in"); cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv");
+        cable (vca, "out", room, "inl"); cable (room, "outl", out, "left"); cable (room, "outr", out, "right");
+    }
+    else if (b->type == "strings")
+    {
+        auto* ch = add ("chords");
+        auto* osc = add ("multiosc"); osc->set ("detune", 20); osc->set ("level", 0.6f);
+        auto* cut = add ("cuts"); cut->set ("lowcut", 0.36f);
+        auto* filt = add ("filter"); filt->set ("cutoff", 0.66f); filt->set ("res", 0.05f);
+        auto* env = add ("adsr"); env->set ("attack", 0.6f); env->set ("decay", 0.8f); env->set ("sustain", 0.9f); env->set ("release", 1.6f);
+        auto* vca = add ("vca"); vca->set ("level", 0.8f);
+        auto* chorus = add ("chorus"); chorus->set ("rate", 3); chorus->set ("depth", 0.7f); chorus->set ("mix", 0.5f);
+        auto* hall = add ("hall"); hall->set ("mix", 0.4f); hall->set ("decay", 0.7f);
+        cable (ch, "v1", osc, "p1"); cable (ch, "v2", osc, "p2"); cable (ch, "v3", osc, "p3"); cable (ch, "v4", osc, "p4");
+        cable (ch, "gate", env, "gate"); cable (osc, "out", cut, "in"); cable (cut, "out", filt, "in");
+        cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv"); cable (vca, "out", chorus, "in");
+        cable (chorus, "outl", hall, "inl"); cable (chorus, "outr", hall, "inr");
+        cable (hall, "outl", out, "left"); cable (hall, "outr", out, "right");
+    }
+    else if (b->type == "arp")
+    {
+        // The song's chords, played one note at a time, with an LFO slowly opening the filter and a bouncing echo
+        auto* ch = add ("chords");
+        auto* lfo = add ("lfo"); lfo->set ("rate", 1);
+        auto* arp = add ("arp"); arp->set ("octave", 0);
+        auto* osc = add ("osc"); osc->set ("wave", 2); osc->set ("level", 0.6f);
+        auto* pluck = add ("hitenv"); pluck->set ("decay", 0.16f);
+        auto* filt = add ("filter"); filt->set ("cutoff", 0.5f); filt->set ("res", 0.3f); filt->set ("modamt", 1.2f);
+        auto* vca = add ("vca"); vca->set ("level", 0.8f);
+        auto* echo = add ("pingpong"); echo->set ("time", 5); echo->set ("mix", 0.3f); echo->set ("feedback", 0.4f);
+        cable (ch, "v1", arp, "p1"); cable (ch, "v2", arp, "p2"); cable (ch, "v3", arp, "p3"); cable (ch, "v4", arp, "p4");
+        cable (arp, "pitch", osc, "pitch"); cable (arp, "gate", pluck, "trig"); cable (lfo, "out", filt, "cutoff");
+        cable (osc, "out", filt, "in"); cable (filt, "out", vca, "in"); cable (pluck, "out", vca, "cv");
+        cable (vca, "out", echo, "in"); cable (echo, "outl", out, "left"); cable (echo, "outr", out, "right");
     }
     else if (b->type == "stab")
     {

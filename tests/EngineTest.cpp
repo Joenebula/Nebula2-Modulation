@@ -564,7 +564,10 @@ int main()
     // Runs one unit on its own: feeds it a signal on its first input and returns what comes out of an output
     struct Fx
     {
-        explicit Fx (const char* type) { const auto* e = findType (type); m = e->make(); m->init (*e->info, 1); m->prepare (48000); m->inOn[0] = 1; }
+        explicit Fx (const char* type) { const auto* e = findType (type); m = e->make(); m->init (*e->info, 1); m->prepare (48000); if (! m->in.empty()) m->inOn[0] = 1; }
+        // Feed another input as well as the first: also (port, signal)
+        Fx& also (int port, const std::vector<float>& sig) { extra.push_back ({ port, &sig }); m->inOn[(size_t) port] = 1; return *this; }
+        std::vector<std::pair<int, const std::vector<float>*>> extra;
         std::vector<float> run (const std::vector<float>& x, size_t outPort = 0, int block = 64, double bpm = 120.0, bool playing = true)
         {
             std::vector<float> y (x.size());
@@ -573,7 +576,8 @@ int main()
             {
                 const int n = (int) std::min ((size_t) block, x.size() - pos);
                 for (auto& b : m->in) std::fill (b.begin(), b.begin() + n, 0.0f);
-                std::copy (x.begin() + (long) pos, x.begin() + (long) pos + n, m->in[0].begin());
+                if (! m->in.empty()) std::copy (x.begin() + (long) pos, x.begin() + (long) pos + n, m->in[0].begin());
+                for (auto& e : extra) std::copy (e.second->begin() + (long) pos, e.second->begin() + (long) pos + n, m->in[(size_t) e.first].begin());
                 c.ppq = ppq;
                 m->process (n, c);
                 std::copy (m->out[outPort].begin(), m->out[outPort].begin() + n, y.begin() + (long) pos);
@@ -760,6 +764,277 @@ int main()
         CHECK (peakOf (a.l) > 0.02f && peakOf (a.l) <= 1.0f && allFinite (a.l) && allFinite (a.r), type);
         CHECK (a.l != a.r, "with reverb the two sides differ: it is in stereo");
         for (auto& m : rack->boards[0]->modules) CHECK (m->live, "every preset module is heard");
+    }
+
+    // ================= Dynamics, pitch and width, movers, rhythm, utilities =================
+    // How strongly one frequency is present in a stretch of sound
+    auto tone = [] (const std::vector<float>& v, double hz, size_t from, size_t to)
+    {
+        double re = 0, im = 0;
+        for (size_t i = from; i < to; ++i) { const double w = 2.0 * kPi * hz * (double) i / 48000.0; re += v[i] * std::cos (w); im += v[i] * std::sin (w); }
+        return (float) (2.0 * std::sqrt (re * re + im * im) / (double) (to - from));
+    };
+    // The same, but the strongest it gets in any short stretch. The pitch shifter works in overlapping grains whose
+    // phases don't line up over a long stretch, so a long average under-reads a note that is plainly there.
+    auto toneNow = [&tone] (const std::vector<float>& v, double hz, size_t from, size_t to)
+    {
+        float best = 0;
+        for (size_t at = from; at + 960 <= to; at += 480) best = std::max (best, tone (v, hz, at, at + 960));
+        return best;
+    };
+    const std::vector<float> ones (48000 * 2, 0.5f);
+
+    // 32. Each of these at its neutral setting passes the sound exactly, and none makes noise of its own
+    {
+        struct N { const char* type; const char* knob; float v; const char* knob2; float v2; size_t outs; };
+        const N ns[] = { { "comp", "ratio", 1, "makeup", 0, 1 }, { "ducker", "depth", 0, nullptr, 0, 1 }, { "transient", "attack", 0, "sustain", 0, 1 },
+                         { "tripler", "mix", 0, nullptr, 0, 2 }, { "harmoniser", "mix", 0, nullptr, 0, 1 }, { "width", "width", 1, nullptr, 0, 2 },
+                         { "pan", "pan", 0, nullptr, 0, 2 }, { "gate", "depth", 0, nullptr, 0, 1 }, { "slew", "rise", 0, "fall", 0, 1 }, { "xfade", "mix", 0, nullptr, 0, 1 } };
+        for (auto& k : ns)
+            for (size_t port = 0; port < k.outs; ++port)
+            {
+                Fx f (k.type); f.m->set (k.knob, k.v); if (k.knob2) f.m->set (k.knob2, k.v2);
+                CHECK (f.run (mixSig, port) == mixSig, k.type);
+                Fx q (k.type);
+                CHECK (peakOf (q.run (silenceSig, port)) == 0.0f, "silence in, silence out");
+                Fx a (k.type), b (k.type);
+                const auto ya = a.run (mixSig, port, 64), yb = b.run (mixSig, port, 41);
+                float diff = 0; for (size_t i = 0; i < ya.size(); ++i) diff = std::max (diff, std::abs (ya[i] - yb[i]));
+                CHECK (diff < 1.0e-4f && allFinite (ya), "block size does not change the sound");
+            }
+        Fx h ("harmoniser"); h.m->set ("v1", 0); h.m->set ("v2", 0);
+        CHECK (h.run (mixSig) == mixSig, "a harmoniser with both voices off passes the sound exactly");
+    }
+
+    // 33. Compressor: the right amount of squeeze, and a sound in Side does the squeezing instead
+    {
+        const auto loud = sine (200, 48000, 0.5f);
+        Fx c ("comp"); c.m->set ("threshold", -20); c.m->set ("ratio", 4); c.m->set ("attack", 0.001f);
+        const float got = rms (c.run (loud), 24000, 48000) / rms (loud, 24000, 48000);
+        // -6 dB peak is 14 dB over a -20 dB threshold; at 4:1 that's 10.5 dB turned down, a factor of 0.30
+        CHECK (std::abs (got - 0.30f) < 0.05f, "4:1 over the threshold turns the sound down by the right amount");
+        Fx quiet ("comp"); quiet.m->set ("threshold", -20);
+        const auto soft = sine (200, 48000, 0.05f);
+        CHECK (quiet.run (soft) == soft, "below the threshold nothing is touched");
+        Fx mk ("comp"); mk.m->set ("ratio", 1); mk.m->set ("makeup", 6);
+        CHECK (std::abs (rms (mk.run (soft), 0, 48000) / rms (soft, 0, 48000) - 1.995f) < 0.02f, "6 dB of make-up doubles the level");
+        // sidechain: a quiet pad is squeezed when a loud kick is in Side
+        std::vector<float> kickSig (48000, 0.0f); for (size_t i = 24000; i < 36000; ++i) kickSig[i] = 0.9f * (float) std::sin (2.0 * kPi * 60.0 * (double) i / 48000.0);
+        Fx sc ("comp"); sc.m->set ("threshold", -20); sc.m->set ("ratio", 8); sc.also (1, kickSig);
+        const auto pumped = sc.run (soft);
+        CHECK (rms (pumped, 10000, 20000) > rms (soft, 10000, 20000) * 0.98f && rms (pumped, 28000, 34000) < rms (soft, 28000, 34000) * 0.4f, "a sound in Side squeezes the main sound while it plays");
+    }
+
+    // 34. Ducker: with nothing in Trig it dips on every beat, in time with the tempo; a trigger dips it too
+    {
+        Fx d ("ducker"); d.m->set ("depth", 0.8f); d.m->set ("every", 2);          // every 1/4: 24000 samples at 120 BPM
+        const auto y = d.run (ones);
+        CHECK (y[24010] < 0.5f * 0.3f && y[48010] < 0.5f * 0.3f, "it dips right on each beat");
+        CHECK (y[23900] > 0.5f * 0.9f && y[47900] > 0.5f * 0.9f, "and has swelled back before the next");
+        Fx fast ("ducker"); fast.m->set ("depth", 0.8f); fast.m->set ("every", 2);
+        const auto y2 = fast.run (ones, 0, 64, 150.0);
+        CHECK (y2[19210] < 0.5f * 0.3f && y2[19100] > 0.5f * 0.8f, "at 150 BPM the dips are closer together: it follows the tempo");
+        std::vector<float> trig (48000 * 2, 0.0f); for (size_t i = 30000; i < 31000; ++i) trig[i] = 1.0f;
+        Fx t ("ducker"); t.m->set ("depth", 1.0f); t.also (1, trig);
+        const auto y3 = t.run (ones);
+        CHECK (y3[29990] == 0.5f && y3[30005] < 0.02f && y3[24010] == 0.5f, "with a trigger plugged in, it dips on the trigger and not on the beat");
+        Fx stopped ("ducker"); stopped.m->set ("depth", 0.8f);
+        CHECK (stopped.run (ones, 0, 64, 120.0, false) == ones, "it leaves the sound alone when the song is stopped");
+    }
+
+    // 35. Transient shaper: Punch up makes hits hit harder, Punch down softens them
+    {
+        std::vector<float> hits (48000, 0.0f);
+        for (size_t k = 0; k < 4; ++k) for (size_t i = 0; i < 6000; ++i) hits[k * 12000 + i] = 0.4f * std::exp (-(float) i / 1500.0f) * (float) std::sin (2.0 * kPi * 180.0 * (double) i / 48000.0);
+        auto peak = [&] (float punch) { Fx f ("transient"); f.m->set ("attack", punch); return peakOf (f.run (hits), 12000, 13000); };
+        CHECK (peak (1.0f) > peak (0.0f) * 1.3f && peak (-1.0f) < peak (0.0f) * 0.8f, "Punch raises or lowers the start of each hit");
+    }
+
+    // 36. Harmoniser: the right notes, and with Pitch plugged in they stay in the key
+    {
+        const auto a220 = sine (220, 48000, 0.4f);
+        Fx up ("harmoniser"); up.m->set ("v1", 5); up.m->set ("mix", 1.0f);
+        const auto y = up.run (a220);
+        CHECK (toneNow (y, 440, 24000, 48000) > 0.15f && tone (y, 220, 24000, 48000) > 0.3f, "Octave up adds the octave and keeps the original");
+        Fx down ("harmoniser"); down.m->set ("v1", 6); down.m->set ("mix", 1.0f);
+        CHECK (toneNow (down.run (a220), 110, 24000, 48000) > 0.15f, "Octave down adds the octave below");
+        // D minor (the test's key): a third above D is F (3 semitones); above F it is A (4 semitones)
+        // (F and F sharp are too close to tell apart by ear-style measurement in a short stretch, so read the shift it chose)
+        auto third = [&] (int midi)
+        {
+            const std::vector<float> pitchSig (4800, (float) (midi - 60) / 12.0f);
+            Fx f ("harmoniser"); f.m->set ("v1", 1); f.m->set ("mix", 1.0f); f.also (1, pitchSig);
+            f.run (sine (300, 4800, 0.4f));
+            return (int) std::lround (12.0 * std::log2 ((double) dynamic_cast<Harmoniser*> (f.m.get())->ratio[0]));
+        };
+        CHECK (third (62) == 3, "a third above D in D minor is F: three semitones");
+        CHECK (third (65) == 4, "a third above F in D minor is A: four semitones");
+        CHECK (third (64) == 3 && third (69) == 3 && third (72) == 4, "and so on up the key: E to G, A to C, C to E");
+        CHECK (third (63) == 3 || third (63) == 4, "a note outside the key is treated as its nearest neighbour in the key");
+        CHECK (Harmoniser::semisFor (3, 0, scales()[0].iv) == 7 && Harmoniser::semisFor (5, 3, scales()[0].iv) == 12 && Harmoniser::semisFor (6, 0, scales()[0].iv) == -12 && Harmoniser::semisFor (0, 2, scales()[0].iv) == 0, "interval sizes");
+        Fx tr ("tripler");
+        Fx tr2 ("tripler");
+        const auto tl = tr.run (a220, 0), trr = tr2.run (a220, 1);
+        CHECK (tl != trr && tl != a220 && peakOf (tl) < 2.0f, "the Tripler makes left and right different, and bigger than the original");
+    }
+
+    // 37. Width and pan
+    {
+        const auto l = sine (300, 4800, 0.5f), r = sine (700, 4800, 0.3f);
+        Fx mono ("width"); mono.m->set ("width", 0); mono.also (1, r);
+        Fx mono2 ("width"); mono2.m->set ("width", 0); mono2.also (1, r);
+        CHECK (mono.run (l, 0) == mono2.run (l, 1), "width at 0% is mono: both sides the same");
+        Fx wide ("width"); wide.m->set ("width", 2); wide.also (1, r);
+        Fx same ("width"); same.also (1, r);
+        Fx sameR ("width"); sameR.also (1, r);
+        CHECK (same.run (l, 0) == l && sameR.run (l, 1) == r, "width at 100% leaves both sides alone");
+        CHECK (wide.run (l, 0) != l, "wider changes it");
+        Fx pr ("pan"); pr.m->set ("pan", 1.0f); Fx pr2 ("pan"); pr2.m->set ("pan", 1.0f);
+        CHECK (peakOf (pr.run (l, 0)) == 0.0f && pr2.run (l, 1) == l, "panned hard right: nothing on the left, all on the right");
+        const std::vector<float> move (4800, -1.0f);
+        Fx pm ("pan"); pm.also (1, move);
+        CHECK (peakOf (pm.run (l, 1)) == 0.0f, "a mover plugged into Move pans it");
+    }
+
+    // 38. Trance gate, step modulator, random, macro, envelope follower
+    {
+        Fx g ("gate"); g.m->set ("smooth", 0); for (int i = 0; i < kMaxSteps; ++i) g.m->data[(size_t) i].store (i % 2 == 0 ? 1.0f : 0.0f);
+        const auto y = g.run (ones);                                    // a 1/16 step is 6000 samples at 120 BPM
+        CHECK (y[3000] == 0.5f && std::abs (y[9000]) < 0.001f && y[15000] == 0.5f, "the gate lets lit steps through and shuts on the others");
+        CHECK (g.m->playStep.load() >= 0, "and shows which step is playing");
+        Fx gs ("gate"); CHECK (gs.run (ones, 0, 64, 120.0, false) == ones, "stopped, the gate is open");
+
+        Fx sm ("stepmod");
+        for (int i = 0; i < kMaxSteps; ++i) { sm.m->data[(size_t) i].store (i % 16 == 2 ? 0.0f : 1.0f); sm.m->data[(size_t) (kMaxSteps + i)].store ((float) ((i % 16) - 7)); }
+        const auto v = sm.run (silenceSig);
+        CHECK (std::abs (v[3000] - 0.0f) < 1.0e-4f && std::abs (v[9000] - 1.0f / 21.0f) < 1.0e-4f, "each step sends its value");
+        CHECK (std::abs (v[15000] - 1.0f / 21.0f) < 1.0e-4f && std::abs (v[21000] - 3.0f / 21.0f) < 1.0e-4f, "a step that's off holds the one before");
+        sm.m->set ("depth", -1.0f); sm.ppq = 0;
+        CHECK (sm.run (silenceSig)[21000] < -0.1f, "Depth below zero turns it upside down");
+
+        Fx r1 ("random"), r2 ("random");
+        r1.m->inOn[0] = 0; r2.m->inOn[0] = 0;          // nothing in Trig: it steps in time by itself
+        const auto a = r1.run (silenceSig), b = r2.run (silenceSig);
+        CHECK (a == b, "Random repeats exactly: the same bar gives the same values");
+        CHECK (a[3000] != a[15000] && a[15000] != a[27000] && peakOf (a) <= 1.0f && a[3000] == a[9000], "a new value each 1/8 step, held through the step");
+
+        Fx mac ("macro"); mac.m->set ("value", 0.7f);
+        CHECK (std::abs (mac.run (silenceSig).back() - 0.7f) < 1.0e-4f, "the macro knob sends its position down the cable");
+
+        Fx ef ("follow");
+        const auto e = ef.run (sine (300, 48000, 0.5f));
+        CHECK (e[40000] > 0.4f && e[40000] <= 0.5f, "the follower rises to the level of the sound");
+        Fx ef2 ("follow"); CHECK (peakOf (ef2.run (silenceSig)) == 0.0f, "and sits at zero in silence");
+    }
+
+    // 39. Arpeggiator: plays the plugged-in notes one at a time, in order, in time
+    {
+        const std::vector<float> cN (48000, 0.0f), eN (48000, 4.0f / 12.0f), gN (48000, 7.0f / 12.0f);
+        auto arp = [&] (int pattern, int range, int rate) { auto f = std::make_unique<Fx> ("arp"); f->m->set ("pattern", (float) pattern); f->m->set ("range", (float) range); f->m->set ("rate", (float) rate); f->also (1, eN).also (2, gN); return f; };
+        auto at = [] (const std::vector<float>& v, int step, int stepLen = 6000) { return (int) std::lround (v[(size_t) (step * stepLen + 100)] * 12.0f); };
+        auto up = arp (0, 1, 3)->run (cN);
+        CHECK (at (up, 0) == 0 && at (up, 1) == 4 && at (up, 2) == 7 && at (up, 3) == 0, "Up: low to high, then round again");
+        auto dn = arp (1, 1, 3)->run (cN);
+        CHECK (at (dn, 0) == 7 && at (dn, 1) == 4 && at (dn, 2) == 0, "Down: high to low");
+        auto ud = arp (2, 1, 3)->run (cN);
+        CHECK (at (ud, 0) == 0 && at (ud, 2) == 7 && at (ud, 3) == 4 && at (ud, 4) == 0, "Up and down turns round at the top without repeating it");
+        auto two = arp (0, 2, 3)->run (cN);
+        CHECK (at (two, 3) == 12 && at (two, 5) == 19 && at (two, 6) == 0, "Octaves 2 carries on up through the next octave");
+        auto eighth = arp (0, 1, 1)->run (cN);
+        CHECK (at (eighth, 0, 12000) == 0 && at (eighth, 1, 12000) == 4 && at (eighth, 0) == at (eighth, 1), "a slower Rate holds each note longer");
+        {   // a gate for every note; a mover into Rate changes the speed as it plays
+            Fx f ("arp"); f.also (1, eN).also (2, gN);
+            const auto gate = f.run (cN, 1);
+            int rises = 0; for (size_t i = 1; i < gate.size(); ++i) rises += gate[i] > 0.5f && gate[i - 1] <= 0.5f ? 1 : 0;
+            CHECK (rises == 7 || rises == 8, "one note per 1/16 step");
+            const std::vector<float> slower (48000, -1.0f);
+            Fx m2 ("arp"); m2.also (1, eN).also (2, gN).also (4, slower);
+            const auto g2 = m2.run (cN, 1);
+            int rises2 = 0; for (size_t i = 1; i < g2.size(); ++i) rises2 += g2[i] > 0.5f && g2[i - 1] <= 0.5f ? 1 : 0;
+            CHECK (rises2 < rises - 2, "a mover plugged into Rate changes the arpeggiator's speed");
+        }
+        auto ra = arp (3, 2, 3)->run (cN), rb = arp (3, 2, 3)->run (cN);
+        CHECK (ra == rb, "Random is the same each time the song plays");
+        Fx stopped ("arp"); stopped.also (1, eN);
+        CHECK (peakOf (stopped.run (cN, 1, 64, 120.0, false)) == 0.0f, "no notes while the song is stopped");
+    }
+
+    // 40. Euclidean rhythm: the right number of hits, spread evenly
+    {
+        for (int steps = 1; steps <= 16; ++steps)
+            for (int hits = 0; hits <= steps; ++hits)
+            {
+                int n = 0, longest = 0, run2 = 0;
+                for (int k = 0; k < steps * 2; ++k) { if (Euclid::hitAt (k % steps, steps, hits, 0)) { if (k < steps) ++n; run2 = 0; } else longest = std::max (longest, ++run2); }
+                CHECK (n == hits, "exactly as many hits as asked for");
+                if (hits > 0) CHECK (longest <= (steps + hits - 1) / hits, "no gap longer than an even spread allows");
+            }
+        CHECK (Euclid::hitAt (0, 16, 4, 0) && ! Euclid::hitAt (0, 16, 4, 1) && Euclid::hitAt (1, 16, 4, 1), "Turn moves the whole pattern round");
+        Fx e ("euclid"); e.m->set ("hits", 4);
+        const auto t = e.run (silenceSig);
+        int rises = 0; for (size_t i = 1; i < t.size(); ++i) rises += t[i] > 0.5f && t[i - 1] <= 0.5f ? 1 : 0;
+        CHECK (t[10] > 0.5f && rises == 1, "4 hits in 16 steps is one per beat (half a second at 120 BPM holds two)");
+        const std::vector<float> more (48000, 0.5f);
+        Fx e2 ("euclid"); e2.m->set ("hits", 4); e2.also (0, more);
+        const auto t2 = e2.run (silenceSig);
+        int rises2 = 0; for (size_t i = 1; i < t2.size(); ++i) rises2 += t2[i] > 0.5f && t2[i - 1] <= 0.5f ? 1 : 0;
+        CHECK (rises2 > rises, "a mover plugged into Hits adds hits");
+    }
+
+    // 41. Clap envelope, clock, divider, logic, chance, slew, crossfader, switch
+    {
+        std::vector<float> trig (48000, 0.0f); for (size_t i = 1000; i < 1500; ++i) trig[i] = 1.0f;
+        Fx ce ("clapenv"); const auto env = ce.run (trig);
+        int jumps = 0; for (size_t i = 1; i < env.size(); ++i) jumps += env[i] > env[i - 1] + 0.3f ? 1 : 0;
+        CHECK (jumps == 4 && peakOf (env) <= 1.0f && env[47000] == 0.0f, "a clap is four quick bursts and then it dies away");
+
+        Fx ck ("clock"); const auto q = ck.run (silenceSig, 1);
+        CHECK (q[10] > 0.5f && q[13000] < 0.5f && q[24010] > 0.5f, "the clock's 1/4 output ticks on every beat");
+        Fx ck2 ("clock"); CHECK (peakOf (ck2.run (silenceSig, 1, 64, 120.0, false)) == 0.0f, "and is still while the song is stopped");
+
+        std::vector<float> pulses (48000, 0.0f); for (size_t k = 0; k < 8; ++k) for (size_t i = 0; i < 1000; ++i) pulses[k * 6000 + i] = 1.0f;
+        Fx dv ("divider"); const auto half = dv.run (pulses, 0);
+        CHECK (half[100] > 0.5f && half[6100] < 0.5f && half[12100] > 0.5f, "/2 lets through every other trigger");
+        Fx dv3 ("divider"); const auto third = dv3.run (pulses, 1);
+        CHECK (third[100] > 0.5f && third[6100] < 0.5f && third[12100] < 0.5f && third[18100] > 0.5f, "/3 lets through every third");
+
+        std::vector<float> aS (4000, 0.0f), bS (4000, 0.0f);
+        for (size_t i = 1000; i < 3000; ++i) aS[i] = 1.0f;
+        for (size_t i = 2000; i < 4000; ++i) bS[i] = 1.0f;
+        auto logic = [&] (size_t port) { Fx f ("logic"); f.also (1, bS); return f.run (aS, port); };
+        CHECK (logic (0)[1500] == 0 && logic (0)[2500] == 1 && logic (1)[1500] == 1 && logic (1)[500] == 0 && logic (2)[1500] == 1 && logic (2)[2500] == 0 && logic (2)[3500] == 1, "Both, Either and Only one");
+
+        auto passed = [&] (float chance) { Fx f ("chance"); f.m->set ("chance", chance); const auto y = f.run (pulses); int n = y[0] > 0.5f ? 1 : 0; for (size_t i = 1; i < y.size(); ++i) n += y[i] > 0.5f && y[i - 1] <= 0.5f ? 1 : 0; return n; };
+        CHECK (passed (0.0f) == 0 && passed (1.0f) == 8 && passed (0.5f) > 0 && passed (0.5f) < 8 && passed (0.5f) == passed (0.5f), "Chance drops some triggers, the same ones each time");
+
+        std::vector<float> step (48000, 0.0f); for (size_t i = 100; i < 48000; ++i) step[i] = 1.0f;
+        Fx sl ("slew"); sl.m->set ("rise", 0.5f);
+        const auto ramp = sl.run (step);
+        CHECK (std::abs (ramp[12100] - 0.5f) < 0.01f && ramp[24200] == 1.0f, "Slew turns a jump into a steady half-second slide");
+
+        const auto aT = sine (300, 4800, 0.5f), bT = sine (900, 4800, 0.3f);
+        Fx xf ("xfade"); xf.m->set ("mix", 1.0f); xf.also (1, bT);
+        CHECK (xf.run (aT) == bT, "the crossfader fully across is input B exactly");
+        Fx xh ("xfade"); xh.also (1, bT);
+        const auto half2 = xh.run (aT);
+        CHECK (std::abs (half2[777] - (aT[777] * 0.5f + bT[777] * 0.5f)) < 1.0e-6f, "half way is half of each");
+
+        std::vector<float> adv (4800, 0.0f); for (size_t i = 2000; i < 2100; ++i) adv[i] = 1.0f;
+        Fx sw ("switch"); sw.also (1, bT).also (4, adv);
+        const auto picked = sw.run (aT);
+        CHECK (picked[1000] == aT[1000] && picked[3000] == bT[3000], "a trigger into Step moves the switch to the next plugged-in input");
+        Fx sw2 ("switch"); sw2.m->set ("pick", 2); sw2.also (1, bT);
+        CHECK (sw2.run (aT) == bT, "the Input knob picks by hand");
+    }
+
+    // 42. The step modulator's shapes and the gate's ideas
+    {
+        CHECK (valueIdeas().size() >= 5 && drumIdeas ("gate").size() >= 5 && drumIdeas ("clap").size() >= 4, "ideas for the gate, the step modulator and the clap");
+        Fx sm ("stepmod"); setValues (*sm.m, valueIdeas()[0].v);
+        const auto v = sm.run (silenceSig);
+        CHECK (v[3000] < 0.01f && v[45000] > v[21000] && v[21000] > v[9000], "Ramp up climbs through the bar");
+        Fx a ("stepmod"), b ("stepmod"); randomValues (99, *a.m); randomValues (99, *b.m);
+        CHECK (a.run (silenceSig) == b.run (silenceSig), "a random shape is repeatable by seed");
     }
 
     if (failures == 0) std::printf ("All passed\n");

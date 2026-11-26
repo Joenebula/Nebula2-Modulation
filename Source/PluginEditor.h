@@ -18,7 +18,7 @@ struct N2MLook : look::SoftLookAndFeel
 class ParamCell : public juce::Component
 {
 public:
-    ParamCell (Module& m, int index);
+    ParamCell (Nebula2ModulationProcessor&, Module& m, int index);
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
@@ -29,6 +29,9 @@ public:
     void mouseExit (const juce::MouseEvent&) override { repaint(); }
 private:
     void setNorm (float n);
+    void changed();          // after any change: linked knobs and patterns follow
+    void linkMenu();
+    Nebula2ModulationProcessor& proc;
     Module& module; int idx; const Param& param;
     float dragStart = 0; bool dragging = false;
 };
@@ -51,6 +54,7 @@ private:
     Nebula2ModulationProcessor& proc; Board& board; Module& module;
     juce::Rectangle<int> pill (int bar) const;
     int bars() const;
+    void edited();           // after any change to the pattern: linked sequencers follow
     juce::TextButton ideas { "Ideas" }, random { "Random" };
     int shownStep = -1, dragStep = -1, page = 0;
 };
@@ -117,6 +121,8 @@ public:
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
     juce::Point<int> jackCentre (bool isOut, int port) const;   // in this component
+    juce::Rectangle<int> linkArea() const;                       // on a sequencer: the Link label in the header
+    void linkMenu();
     bool jackAt (juce::Point<int> p, bool& isOut, int& port) const;
     Module& module;
     std::unique_ptr<SeqView> seq;
@@ -136,6 +142,7 @@ public:
     void setBoard (Board*);
     void rebuild();              // after modules are added or removed
     void refreshLive();          // after cables change: dim what can't be heard
+    void repaintAll();           // after a linked knob or pattern changed others on this board
     void fitToContent();
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;

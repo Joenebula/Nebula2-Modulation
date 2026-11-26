@@ -75,7 +75,8 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [x] Notes from cables (four note inputs, gate, velocity) play the plugin; audio in and out on jacks
 - [x] The plugin inside follows the song's tempo and position
 - [x] Saved with the project, including the plugin's own preset and settings
-- [ ] **Joe to test in Cubase on Windows**: loading his plugins and Nexus / HALion, their windows inside ours, drag and drop
+- [x] Joe tested v0.1.2 in Cubase on Windows (26 Nov 2026): loads, plugin loads into a slot, its window opens and Back returns, sound through cables, saves and reopens. All worked.
+- [ ] Still to try: Nexus / HALion in a slot, and dropping a .vst3 on the board inside Cubase
 - [ ] List every installed VST3 in the Add units menu (needs a scan; today the list is the plugins loaded before)
 - [ ] Knobs on the slot for the plugin's own parameters, so cables can move them
 - [ ] Notes out of a hosted plugin (so Nebula2 Chord inside a slot could drive other units)
@@ -84,6 +85,17 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [ ] Freeze / bounce a tab to audio
 
 This is the stage that can only be checked on Joe's PC in Cubase with his own plugins.
+
+## Links (done, v0.1.3)
+
+Joe: "lock a bass to a string and change one, the other changes also", for anything he wants to connect.
+
+- [x] Pattern links: a sequencer's Link label puts it in a group (A to D). Sequencers in a group, on any tab, share rhythm, notes or both. Each keeps its own octave.
+- [x] A drum sequencer and a note sequencer can share rhythm
+- [x] Knob links: right-click any knob to put it in a group (A to H). Knobs in a group move together, by knob position
+- [x] Joining a group takes the group's pattern or position; links save with the project
+- [ ] A linked knob moved by a cable (not by hand) doesn't move the others
+- [ ] Offsets between linked things (the same line a third up, a knob that moves half as far)
 
 ## Stage 7: the song
 

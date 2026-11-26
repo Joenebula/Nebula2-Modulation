@@ -46,8 +46,12 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
     a .vst3, or drop a .vst3 file on the board. Plugins you've loaded before are listed under Load. **Open** shows
     the plugin's own window; **Back** returns to the board. Cable a sequencer's Pitch and Gate into the slot to
     play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
-11. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-12. **Tidy** lines the modules up in signal order.
+11. **Links:** to make two sounds change together, link them. On a sequencer, click **LINK** next to its name, pick
+    a group, and choose what it shares: rhythm, notes or both. Do the same on another sequencer, on any tab, and
+    an edit to one changes the other. Each keeps its own octave. To link knobs, right-click a knob and pick a
+    group; every knob in that group turns together.
+12. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
+13. **Tidy** lines the modules up in signal order.
 
 Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.

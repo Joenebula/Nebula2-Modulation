@@ -13,6 +13,8 @@ juce::Colour boardColour (int index)
 }
 
 static juce::Font smallCaps() { return font (9.0f, Weight::Medium, 0.4f); }
+static juce::String groupLetter (int group) { return juce::String::charToString ((juce::juce_wchar) ('A' + juce::jlimit (1, kLinkGroups, group) - 1)); }
+static juce::Colour groupColour (int group) { return boardColour (group + 2); }
 
 //==============================================================================
 void N2MLook::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down)
@@ -30,7 +32,7 @@ void N2MLook::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool
 }
 
 //==============================================================================
-ParamCell::ParamCell (Module& m, int index) : module (m), idx (index), param (m.info->params[(size_t) index])
+ParamCell::ParamCell (Nebula2ModulationProcessor& p, Module& m, int index) : proc (p), module (m), idx (index), param (m.info->params[(size_t) index])
 {
     setSize (lay::cell, lay::cellH);
 }
@@ -38,7 +40,40 @@ ParamCell::ParamCell (Module& m, int index) : module (m), idx (index), param (m.
 void ParamCell::setNorm (float n)
 {
     module.params[(size_t) idx].store (paramFromNorm (param, n));
+    changed();
+}
+
+void ParamCell::changed()
+{
     repaint();
+    const bool knobLinked = module.paramLink[(size_t) idx] > 0;
+    // A linked sequencer's length knobs are part of its rhythm
+    const bool patternLinked = module.patternLink > 0 && (std::string (param.id) == "bars" || std::string (param.id) == "length");
+    if (knobLinked) proc.rack.pushParam (module, idx);
+    if (patternLinked) proc.rack.pushPattern (module);
+    if (knobLinked || patternLinked)
+        if (auto* view = findParentComponentOfClass<BoardView>()) view->repaintAll();
+}
+
+// Right-click a knob: put it in a link group. Knobs in the same group, on any tab, turn together.
+void ParamCell::linkMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Link this knob");
+    const int cur = module.paramLink[(size_t) idx];
+    m.addItem (1, "Not linked", true, cur == 0);
+    for (int g = 1; g <= kLinkGroups; ++g)
+    {
+        const int n = proc.rack.membersOf (g, false);
+        m.addItem (g + 1, "Group " + groupLetter (g) + (n > 0 ? "   (" + juce::String (n) + (n == 1 ? " knob)" : " knobs)") : ""), true, cur == g);
+    }
+    juce::Component::SafePointer<ParamCell> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        safe->proc.rack.linkParam (safe->module, safe->idx, r - 1);
+        safe->repaint();
+    });
 }
 
 void ParamCell::paint (juce::Graphics& g)
@@ -47,6 +82,17 @@ void ParamCell::paint (juce::Graphics& g)
     g.setFont (smallCaps());
     g.setColour (n7);
     g.drawText (juce::String (param.name).toUpperCase(), 0, 1, getWidth(), 11, juce::Justification::centred, false);
+
+    // A linked knob wears its group's letter
+    if (const int group = module.paramLink[(size_t) idx]; group > 0)
+    {
+        const auto badge = juce::Rectangle<float> ((float) getWidth() - 14.0f, 12.0f, 12.0f, 12.0f);
+        g.setColour (groupColour (group));
+        g.fillEllipse (badge);
+        g.setFont (font (8.5f, Weight::SemiBold));
+        g.setColour (n0);
+        g.drawText (groupLetter (group), badge.toNearestInt(), juce::Justification::centred, false);
+    }
 
     if (! param.choices.empty())
     {
@@ -90,6 +136,7 @@ void ParamCell::paint (juce::Graphics& g)
 
 void ParamCell::mouseDown (const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu()) { linkMenu(); return; }
     if (! param.choices.empty())
     {
         juce::PopupMenu m;
@@ -98,7 +145,7 @@ void ParamCell::mouseDown (const juce::MouseEvent& e)
         juce::Component::SafePointer<ParamCell> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
         {
-            if (safe != nullptr && r > 0) { safe->module.params[(size_t) safe->idx].store ((float) (r - 1)); safe->repaint(); }
+            if (safe != nullptr && r > 0) { safe->module.params[(size_t) safe->idx].store ((float) (r - 1)); safe->changed(); }
         });
         return;
     }
@@ -118,7 +165,7 @@ void ParamCell::mouseUp (const juce::MouseEvent&) { dragging = false; repaint();
 
 void ParamCell::mouseDoubleClick (const juce::MouseEvent&)
 {
-    if (param.choices.empty()) { module.params[(size_t) idx].store (param.def); repaint(); }
+    if (param.choices.empty()) { module.params[(size_t) idx].store (param.def); changed(); }
 }
 
 void ParamCell::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
@@ -139,12 +186,20 @@ SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p)
     {
         if (module.info->seq == Seq::Drum) randomDrum (board.type, proc.nextSeed(), module);
         else randomNotes (board.type, proc.nextSeed(), module);
-        repaint();
+        edited();
     };
     setSize (lay::seqW, lay::seqHeight (*m.info));
 }
 
 void SeqView::resized() { ideas.setBounds (0, 0, 58, 20); random.setBounds (62, 0, 66, 20); }
+
+void SeqView::edited()
+{
+    repaint();
+    if (module.patternLink <= 0) return;
+    proc.rack.pushPattern (module);
+    if (auto* view = findParentComponentOfClass<BoardView>()) view->repaintAll();
+}
 
 juce::Rectangle<int> SeqView::grid() const { return { 0, 24, lay::seqW, getHeight() - 24 - 4 }; }
 // The step under the mouse, on the bar being shown
@@ -166,7 +221,7 @@ void SeqView::showIdeas()
         if (safe == nullptr || r <= 0) return;
         if (drum) setDrum (safe->module, drumIdeas (safe->board.type)[(size_t) (r - 1)].pat);
         else { auto& d = noteIdeas (safe->board.type)[(size_t) (r - 1)]; setNotes (safe->module, d.gates, d.deg); }
-        safe->repaint();
+        safe->edited();
     });
 }
 
@@ -263,7 +318,7 @@ void SeqView::mouseDown (const juce::MouseEvent& e)
     else if (e.y >= gr.getBottom() - 16)
         module.data[(size_t) s].store (module.data[(size_t) s].load() > 0.5f ? 0.0f : 1.0f);
     else { dragStep = s; setDegreeFromY (s, e.y); }
-    repaint();
+    edited();
 }
 
 void SeqView::mouseDrag (const juce::MouseEvent& e)
@@ -271,7 +326,7 @@ void SeqView::mouseDrag (const juce::MouseEvent& e)
     if (dragStep < 0) return;
     dragStep = stepAtX (e.x);
     setDegreeFromY (dragStep, e.y);
-    repaint();
+    edited();
 }
 
 void SeqView::tick()
@@ -529,7 +584,7 @@ ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, M
     const int x0 = (getWidth() - cols * lay::cell) / 2, y0 = lay::header + lay::seqHeight (info);
     for (int i = 0; i < (int) info.params.size(); ++i)
     {
-        auto* c = cells.add (new ParamCell (m, i));
+        auto* c = cells.add (new ParamCell (p, m, i));
         addAndMakeVisible (c);
         c->setTopLeftPosition (x0 + (i % lay::perRow) * lay::cell, y0 + (i / lay::perRow) * lay::cellH);
     }
@@ -542,6 +597,48 @@ juce::Point<int> ModuleComp::jackCentre (bool isOut, int port) const
     if (! isOut) return { lay::pad + port * lay::jackW + lay::jackW / 2, y };
     const int nOut = (int) module.info->outs.size();
     return { getWidth() - lay::pad - (nOut - port) * lay::jackW + lay::jackW / 2, y };
+}
+
+static juce::String linkText (const Module& m)
+{
+    if (m.patternLink <= 0) return "LINK";
+    return "LINK " + groupLetter (m.patternLink) + (m.patternShare == 1 ? ": RHYTHM" : m.patternShare == 2 ? ": NOTES" : ": RHYTHM + NOTES");
+}
+
+juce::Rectangle<int> ModuleComp::linkArea() const
+{
+    if (module.info->seq != Seq::Drum && module.info->seq != Seq::Note) return {};
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (font (11.5f, Weight::SemiBold), module.info->name);
+    const int w = juce::GlyphArrangement::getStringWidthInt (font (9.0f, Weight::SemiBold, 0.4f), linkText (module)) + 14;
+    return { 23 + nameW + 10, 5, w, 16 };
+}
+
+// A sequencer's Link label: put its pattern in a group. Sequencers in the same group, on any tab, share
+// their rhythm, their notes, or both.
+void ModuleComp::linkMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Link this pattern");
+    m.addItem (1, "Not linked", true, module.patternLink == 0);
+    for (int g = 1; g <= 4; ++g)
+    {
+        const int n = proc.rack.membersOf (g, true);
+        m.addItem (g + 1, "Group " + groupLetter (g) + (n > 0 ? "   (" + juce::String (n) + (n == 1 ? " pattern)" : " patterns)") : ""), true, module.patternLink == g);
+    }
+    m.addSeparator();
+    m.addSectionHeader ("What it shares");
+    m.addItem (103, "Rhythm and notes", true, module.patternShare == 3);
+    m.addItem (101, "Rhythm only", true, module.patternShare == 1);
+    m.addItem (102, "Notes only", true, module.patternShare == 2);
+    juce::Component::SafePointer<ModuleComp> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (linkArea())), [safe] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        auto& mod = safe->module;
+        if (r > 100) safe->proc.rack.linkPattern (mod, mod.patternLink, r - 100);
+        else safe->proc.rack.linkPattern (mod, r - 1, mod.patternShare);
+        safe->owner.repaintAll();
+    });
 }
 
 bool ModuleComp::jackAt (juce::Point<int> p, bool& isOut, int& port) const
@@ -565,6 +662,16 @@ void ModuleComp::paint (juce::Graphics& g)
     g.setFont (font (11.5f, Weight::SemiBold));
     g.setColour (n8);
     g.drawText (module.info->name, 23, 0, getWidth() - 30, lay::header, juce::Justification::centredLeft, true);
+    if (const auto la = linkArea(); ! la.isEmpty())
+    {
+        const bool on = module.patternLink > 0;
+        const auto lc = groupColour (module.patternLink);
+        g.setColour (on ? lc.withAlpha (0.9f) : n4);
+        g.fillRoundedRectangle (la.toFloat(), 4.0f);
+        g.setFont (font (9.0f, Weight::SemiBold, 0.4f));
+        g.setColour (on ? n0 : n7);
+        g.drawText (linkText (module), la, juce::Justification::centred, false);
+    }
 
     const int jy = getHeight() - lay::pad - lay::jackH;
     dividerH (g, lay::pad, getWidth() - lay::pad, jy - 2);
@@ -618,6 +725,7 @@ void ModuleComp::mouseDown (const juce::MouseEvent& e)
         });
         return;
     }
+    if (linkArea().contains (e.getPosition())) { linkMenu(); return; }
     if (jackAt (e.getPosition(), isOut, port))
     {
         cabling = true;
@@ -668,6 +776,12 @@ void BoardView::refreshLive()
     for (auto* c : comps) { c->setAlpha (c->module.live ? 1.0f : 0.45f); c->repaint(); }
     repaint();
     if (onChanged) onChanged();
+}
+
+void BoardView::repaintAll()
+{
+    for (auto* c : comps) c->repaint();
+    repaint();
 }
 
 void BoardView::fitToContent()

@@ -30,6 +30,7 @@ constexpr int kSteps = 16;    // steps in a bar
 constexpr int kMaxBars = 8;   // the longest pattern
 constexpr int kMaxSteps = kSteps * kMaxBars;
 constexpr int kData = 2 * kMaxSteps;   // a sequencer carries two rows: hits (or note on/off), then which note
+constexpr int kLinkGroups = 8;         // link groups A to H
 constexpr double kPi = 3.14159265358979323846;
 
 // ---- Keys: the same scales as Nebula2 Chord, so the two stay in step ----
@@ -173,6 +174,7 @@ struct Module
         info = &i; uid = id;
         params = std::vector<std::atomic<float>> (i.params.size());
         for (size_t k = 0; k < i.params.size(); ++k) params[k].store (i.params[k].def);
+        paramLink.assign (i.params.size(), 0);
         in.assign (i.ins.size(), Buf {});
         out.assign (i.outs.size(), Buf {});
         inOn.assign (i.ins.size(), 0);
@@ -204,6 +206,10 @@ struct Module
     std::vector<Buf> in, out;
     std::vector<char> inOn;                            // is anything plugged into this input
     std::atomic<int> playStep { -1 };                  // the step sounding now, for the screen
+    // Links (set from the screen): things in the same group, on any tab, change together
+    std::vector<int> paramLink;                        // per knob: 0 = not linked, 1.. = group A, B, C ...
+    int patternLink = 0;                               // a sequencer's group, 0 = not linked
+    int patternShare = 3;                              // what it shares: 1 rhythm, 2 notes, 3 both
     bool live = true;                                  // can its signal reach the board's output
 };
 
@@ -505,6 +511,95 @@ struct Rack
         generateChords (harmony.seed);
     }
 
+    // ---- Links ----
+    // After a linked knob moves: every other knob in its group, on any tab, goes to the same position.
+    // Position, not value, so a 0-100% knob and a 20 Hz-20 kHz knob can share a group.
+    void pushParam (const Module& src, int index)
+    {
+        const int group = src.paramLink[(size_t) index];
+        if (group <= 0) return;
+        const float n = paramToNorm (src.info->params[(size_t) index], src.P (index));
+        for (auto& b : boards)
+            for (auto& m : b->modules)
+                for (size_t k = 0; k < m->info->params.size(); ++k)
+                    if (m->paramLink[k] == group && ! (m.get() == &src && (int) k == index))
+                        m->params[k].store (paramFromNorm (m->info->params[k], n));
+    }
+
+    // Copies what two linked sequencers share from one to the other
+    static void copyPattern (const Module& from, Module& to)
+    {
+        const int share = from.patternShare & to.patternShare;
+        const bool fromDrum = from.info->seq == Seq::Drum, toDrum = to.info->seq == Seq::Drum;
+        if (share & 1)
+        {
+            for (int k = 0; k < kMaxSteps; ++k)
+            {
+                const float v = from.data[(size_t) k].load();
+                // Between a drum and a note sequencer only "plays here or not" carries across; accents stay with drums
+                to.data[(size_t) k].store (fromDrum == toDrum ? v : v > 0.5f ? 1.0f : 0.0f);
+            }
+            for (const char* id : { "length", "bars" })
+            {
+                const int a = from.paramIndex (id), c = to.paramIndex (id);
+                if (a >= 0 && c >= 0) to.params[(size_t) c].store (from.P (a));
+            }
+        }
+        if ((share & 2) && ! fromDrum && ! toDrum)
+            for (int k = 0; k < kMaxSteps; ++k) to.data[(size_t) (kMaxSteps + k)].store (from.data[(size_t) (kMaxSteps + k)].load());
+    }
+
+    // After a linked pattern is edited: the others in its group follow
+    void pushPattern (const Module& src)
+    {
+        if (src.patternLink <= 0) return;
+        for (auto& b : boards)
+            for (auto& m : b->modules)
+                if (m.get() != &src && m->patternLink == src.patternLink && (m->info->seq == Seq::Drum || m->info->seq == Seq::Note))
+                    copyPattern (src, *m);
+    }
+
+    // Putting a knob into a group: it takes the group's position if the group already has members
+    void linkParam (Module& mod, int index, int group)
+    {
+        mod.paramLink[(size_t) index] = 0;
+        if (group > 0)
+            for (auto& b : boards)
+                for (auto& m : b->modules)
+                    for (size_t k = 0; k < m->info->params.size(); ++k)
+                        if (m->paramLink[k] == group)
+                        {
+                            mod.params[(size_t) index].store (paramFromNorm (mod.info->params[(size_t) index], paramToNorm (m->info->params[k], m->P ((int) k))));
+                            mod.paramLink[(size_t) index] = group;
+                            return;
+                        }
+        mod.paramLink[(size_t) index] = std::max (0, group);
+    }
+
+    // Putting a sequencer into a group: it takes the group's pattern if the group already has members
+    void linkPattern (Module& mod, int group, int share)
+    {
+        mod.patternShare = share >= 1 && share <= 3 ? share : 3;
+        mod.patternLink = 0;
+        if (group > 0)
+            for (auto& b : boards)
+                for (auto& m : b->modules)
+                    if (m->patternLink == group && m.get() != &mod) { mod.patternLink = group; copyPattern (*m, mod); return; }
+        mod.patternLink = std::max (0, group);
+    }
+
+    int membersOf (int group, bool patterns) const
+    {
+        int n = 0;
+        for (auto& b : boards)
+            for (auto& m : b->modules)
+            {
+                if (patterns) n += m->patternLink == group ? 1 : 0;
+                else for (int g : m->paramLink) n += g == group ? 1 : 0;
+            }
+        return n;
+    }
+
     void setKey (int newRoot, int newScale)
     {
         root.store (((newRoot % 12) + 12) % 12);
@@ -594,6 +689,9 @@ struct Rack
             o << "mod " << m->uid << ' ' << m->info->type << ' ' << m->x << ' ' << m->y << '\n';
             for (size_t k = 0; k < m->info->params.size(); ++k)
                 o << "p " << m->uid << ' ' << m->info->params[k].id << ' ' << m->params[k].load() << '\n';
+            for (size_t k = 0; k < m->info->params.size(); ++k)
+                if (m->paramLink[k] > 0) o << "l " << m->uid << ' ' << m->info->params[k].id << ' ' << m->paramLink[k] << '\n';
+            if (m->patternLink > 0) o << "k " << m->uid << ' ' << m->patternLink << ' ' << m->patternShare << '\n';
             const auto extra = m->saveExtra();
             if (! extra.empty()) o << "x " << m->uid << ' ' << clean (extra) << '\n';
             if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note)
@@ -693,6 +791,16 @@ struct Rack
                     const int k = m->paramIndex (id);
                     if (k >= 0) { const auto& p = m->info->params[(size_t) k]; m->params[(size_t) k].store (std::min (p.hi, std::max (p.lo, v))); }
                 }
+            }
+            else if (tag == "l")
+            {
+                int uid = 0, group = 0; std::string id; ls >> uid >> id >> group;
+                if (auto* m = b->find (uid)) { const int k = m->paramIndex (id); if (k >= 0) m->paramLink[(size_t) k] = std::min (kLinkGroups, std::max (0, group)); }
+            }
+            else if (tag == "k")
+            {
+                int uid = 0, group = 0, share = 3; ls >> uid >> group >> share;
+                if (auto* m = b->find (uid)) { m->patternLink = std::min (kLinkGroups, std::max (0, group)); m->patternShare = share >= 1 && share <= 3 ? share : 3; }
             }
             else if (tag == "x")
             {

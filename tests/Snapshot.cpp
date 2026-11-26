@@ -38,6 +38,13 @@ int main (int argc, char** argv)
     shoot (*ed, dir + "/ui_pad.png");                   // the chord unit, with the playing chord lit
     p.preview.store (false); run (p, 0.1);
 
+    // links: the bass pattern in group A, sharing rhythm and notes; two knobs in group B
+    for (auto& m : p.rack.boards[3]->modules)
+    {
+        if (m->info->seq == n2m::Seq::Note) p.rack.linkPattern (*m, 1, 3);
+        if (std::string (m->info->type) == "filter") p.rack.linkParam (*m, m->paramIndex ("cutoff"), 2);
+        if (std::string (m->info->type) == "drive") p.rack.linkParam (*m, m->paramIndex ("drive"), 2);
+    }
     // a four-bar bass pattern, showing bar 2
     for (auto& m : p.rack.boards[3]->modules) if (m->info->seq == n2m::Seq::Note) { m->set ("bars", 2); n2m::randomNotes ("bass", 4242, *m); }
     e->selectTab (3); shoot (*ed, dir + "/ui_bass4.png");

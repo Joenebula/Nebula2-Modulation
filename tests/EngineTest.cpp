@@ -408,6 +408,82 @@ int main()
         CHECK (NoteTracker::noteOf (-20.0f) == 0 && NoteTracker::noteOf (20.0f) == 127, "notes stay in the playable range");
     }
 
+    // 22. Links: sequencers in the same group, on different tabs, change together
+    {
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("bass", 48000)); rack.addBoard (makeBoard ("lead", 48000)); rack.addBoard (makeBoard ("kick", 48000));
+        auto* bass = firstOf (*rack.boards[0], "noteseq"); auto* lead = firstOf (*rack.boards[1], "noteseq"); auto* kick = firstOf (*rack.boards[2], "drumseq");
+        const float bassOct = bass->P (bass->paramIndex ("octave")), leadOct = lead->P (lead->paramIndex ("octave"));
+        CHECK (bassOct != leadOct, "bass and lead sit in different octaves");
+        rack.linkPattern (*lead, 1, 3);
+        const float leadNote5 = lead->data[(size_t) (kMaxSteps + 5)].load();
+        rack.linkPattern (*bass, 1, 3);                      // joining takes the group's pattern
+        CHECK (bass->data[(size_t) (kMaxSteps + 5)].load() == leadNote5, "a sequencer joining a group takes the group's pattern");
+        // edit the bass: the lead follows, notes and rhythm
+        bass->data[3].store (1.0f); bass->data[(size_t) (kMaxSteps + 3)].store (9.0f); bass->data[0].store (0.0f);
+        rack.pushPattern (*bass);
+        CHECK (lead->data[3].load() == 1.0f && lead->data[(size_t) (kMaxSteps + 3)].load() == 9.0f && lead->data[0].load() == 0.0f, "an edit on one shows up on the other");
+        CHECK (bass->P (bass->paramIndex ("octave")) == bassOct && lead->P (lead->paramIndex ("octave")) == leadOct, "each keeps its own octave");
+        // and the other way round
+        lead->data[(size_t) (kMaxSteps + 3)].store (4.0f);
+        rack.pushPattern (*lead);
+        CHECK (bass->data[(size_t) (kMaxSteps + 3)].load() == 4.0f, "it works in both directions");
+        // longer pattern lengths travel with the rhythm
+        bass->set ("bars", 2); rack.pushPattern (*bass);
+        CHECK (lead->P (lead->paramIndex ("bars")) == 2.0f, "pattern length travels with the rhythm");
+
+        // rhythm only: notes stay separate
+        rack.linkPattern (*lead, 1, 1);
+        bass->data[7].store (1.0f); bass->data[(size_t) (kMaxSteps + 7)].store (11.0f); lead->data[(size_t) (kMaxSteps + 7)].store (2.0f);
+        rack.pushPattern (*bass);
+        CHECK (lead->data[7].load() == 1.0f && lead->data[(size_t) (kMaxSteps + 7)].load() == 2.0f, "rhythm only: the hits follow, the notes don't");
+
+        // a drum and a note sequencer can share rhythm; accents don't become notes
+        rack.linkPattern (*kick, 1, 3);
+        kick->data[2].store (2.0f); kick->data[7].store (0.0f);
+        const float noteBefore = bass->data[(size_t) (kMaxSteps + 2)].load();
+        rack.pushPattern (*kick);
+        CHECK (bass->data[2].load() == 1.0f && bass->data[7].load() == 0.0f, "a drum pattern drives when the bass plays");
+        CHECK (noteBefore == bass->data[(size_t) (kMaxSteps + 2)].load(), "and leaves its notes alone");
+        CHECK (rack.membersOf (1, true) == 3 && rack.membersOf (2, true) == 0, "group membership is counted");
+
+        // unlinked: no longer follows
+        rack.linkPattern (*lead, 0, 3);
+        bass->data[9].store (1.0f); lead->data[9].store (0.0f);
+        rack.pushPattern (*bass);
+        CHECK (lead->data[9].load() == 0.0f, "an unlinked sequencer stops following");
+
+        // links are saved with the project
+        Rack other; other.prepare (48000);
+        CHECK (other.load (rack.save()) && other.save() == rack.save(), "links save and load");
+        CHECK (firstOf (*other.boards[0], "noteseq")->patternLink == 1 && firstOf (*other.boards[2], "drumseq")->patternLink == 1 && firstOf (*other.boards[1], "noteseq")->patternLink == 0, "each sequencer comes back in its group");
+    }
+
+    // 23. Links: knobs in the same group move together, by knob position
+    {
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("bass", 48000)); rack.addBoard (makeBoard ("pad", 48000));
+        auto* f1 = firstOf (*rack.boards[0], "filter"); auto* f2 = firstOf (*rack.boards[1], "filter"); auto* drive = firstOf (*rack.boards[0], "drive");
+        const int cut = f1->paramIndex ("cutoff"), drv = drive->paramIndex ("drive"), res = f1->paramIndex ("res");
+        rack.linkParam (*f1, cut, 2);
+        const float was = f1->P (cut);
+        rack.linkParam (*f2, cut, 2);
+        CHECK (f2->P (cut) == was, "a knob joining a group takes the group's position");
+        f2->params[(size_t) cut].store (0.25f); rack.pushParam (*f2, cut);
+        CHECK (f1->P (cut) == 0.25f, "turn one, the other turns");
+        CHECK (f1->P (res) != 0.25f || f1->paramLink[(size_t) res] == 0, "knobs not in the group stay put");
+        // different kinds of knob share a group by position: half way on one is half way on the other
+        rack.linkParam (*drive, drv, 2);
+        f1->params[(size_t) cut].store (0.5f); rack.pushParam (*f1, cut);
+        CHECK (std::abs (drive->P (drv) - 0.5f) < 1.0e-5f && f2->P (cut) == 0.5f, "every knob in the group goes to the same position");
+        rack.linkParam (*f2, cut, 0);
+        f1->params[(size_t) cut].store (0.9f); rack.pushParam (*f1, cut);
+        CHECK (f2->P (cut) == 0.5f && std::abs (drive->P (drv) - 0.9f) < 1.0e-5f, "an unlinked knob stays where it is");
+        Rack other; other.prepare (48000);
+        CHECK (other.load (rack.save()) && other.save() == rack.save(), "knob links save and load");
+        CHECK (firstOf (*other.boards[0], "filter")->paramLink[(size_t) cut] == 2 && firstOf (*other.boards[1], "filter")->paramLink[(size_t) cut] == 0, "each knob comes back in its group");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

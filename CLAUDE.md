@@ -1,0 +1,87 @@
+# Nebula2 Modulation: handover for Claude Code
+
+Read this first. It's everything a new session needs to carry on.
+
+## What it is
+
+A modular synth plugin for Joe (Nebula II): a VST3 instrument for Cubase (Windows and Mac), built in JUCE 8.
+Tabs along the top, one per sound. Each tab is its own Eurorack-style board of modules joined by cables. A menu
+adds units. A mixing desk along the bottom. Later stages load other VST3 plugins inside it as sound sources.
+
+- The design: `docs/SPEC.md`
+- The order of work and what's done: `docs/BUILD-PLAN.md`. Tick things off there as they land.
+
+Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build and release route. Its
+`ChordEngine.h` is the planned chord generator here.
+
+## How Joe wants work done
+
+- Short, plain replies. No jargon.
+- Do only what he asked. Don't restyle or reorganise anything he didn't mention.
+- Discuss before big builds. One short multiple-choice question when there's a real choice.
+- Check it works before saying it's done (tests, snapshots). Then say plainly what you checked.
+- Everything stays in key.
+- Keep it tidy: one tab per sound, nothing from another sound on screen.
+
+## Files
+
+- `Source/Engine.h`: the rack. Rack > Board > Module + Cable. Running order, "can it be heard", save and load. No JUCE.
+- `Source/Modules.h`: every module type, and `registry()`, the list the Add menu is drawn from. No JUCE.
+- `Source/Presets.h`: the starting board for each kind of sound, pattern Ideas, in-style Random, Tidy, module sizes. No JUCE.
+- `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
+- `Source/PluginEditor.*`: the screen. TabBar, BoardView, ModuleComp, ParamCell, SeqView, MixerStrip, AddPanel.
+- `Source/Look.h`: design tokens and materials (ParaEQ design system, shared with Nebula2 Chord).
+- `tests/EngineTest.cpp`: the engine on its own (plain C++).
+- `tests/OfflineTest.cpp`: the plugin in a fake Cubase.
+- `tests/Snapshot.cpp`: renders the screen to PNGs.
+
+## Adding a module
+
+1. In `Modules.h`, write a struct with `desc()` (name, menu heading, hint, jacks, knobs) and `process()`.
+2. Add `entry<YourModule>()` to `registry()`. If it needs a new menu heading, add it to `shelves()`.
+3. Add a check to `tests/EngineTest.cpp`.
+
+The screen draws it from `desc()`. No screen code is needed per module.
+
+Signals on cables: audio is -1..1; pitch is octaves from middle C; a gate is "above 0.5"; envelopes are 0..1; LFOs are -1..1.
+
+Rules that tests hold in place:
+- A knob at 0% does nothing at all (Drive at 0% is identical to no Drive).
+- Anything rhythmic is stored as a note length and worked out from the tempo, never milliseconds.
+- Saves are text, named by id. Unknown modules and knobs are skipped on load, so never rename an id.
+- The sound must not depend on the host's block size.
+- A module with no path to the Output is `live = false` and drawn dimmed.
+
+## Build and test (Linux)
+
+```
+git clone https://github.com/juce-framework/JUCE.git --branch 8.0.4 --depth 1 ../JUCE   # once
+ln -s ../JUCE JUCE                                                                     # once
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target EngineTest OfflineTest Snapshot -j3
+./build/EngineTest                                             # "All passed"
+./build/OfflineTest_artefacts/Release/OfflineTest               # "All passed"
+./build/Snapshot_artefacts/Release/Snapshot /tmp/snap           # ui.png, ui_playing.png, ui_add.png ...
+cp /tmp/snap/ui_playing.png docs/screenshot.png
+```
+
+The engine test alone compiles in seconds without JUCE:
+`g++ -std=c++17 -O2 -ISource tests/EngineTest.cpp -o /tmp/EngineTest -lpthread && /tmp/EngineTest`
+
+Linux packages JUCE needs: `libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev
+libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
+
+## Release
+
+Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
+
+```
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.0'
+```
+
+Bump by one each time. No release has been made yet.
+
+## What can't be checked here
+
+Loading Nexus, HALion or any other commercial plugin inside this one (Stage 6) can only be tested on Joe's PC in
+Cubase. Everything else is tested here before each release.

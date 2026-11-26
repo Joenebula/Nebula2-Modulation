@@ -1,0 +1,77 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+Nebula2ModulationProcessor::Nebula2ModulationProcessor()
+    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+{
+    n2m::loadStarter (rack);
+}
+
+void Nebula2ModulationProcessor::prepareToPlay (double sampleRate, int)
+{
+    rack.prepare (sampleRate);
+}
+
+bool Nebula2ModulationProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+}
+
+void Nebula2ModulationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ScopedNoDenormals noDenormals;
+    midi.clear();
+    const int n = buffer.getNumSamples();
+
+    // Cubase's tempo and position, when it gives them
+    double tempo = bpm.load(), ppq = 0.0;
+    bool playing = false;
+    if (auto* ph = getPlayHead())
+        if (auto pos = ph->getPosition())
+        {
+            if (auto b = pos->getBpm()) tempo = *b;
+            if (auto p = pos->getPpqPosition()) ppq = *p;
+            playing = pos->getIsPlaying();
+        }
+    if (tempo < 20.0 || tempo > 400.0) tempo = 124.0;
+    bpm.store (tempo);
+    hostPlaying.store (playing);
+
+    // When Cubase plays, follow it. Otherwise the plugin's own Play runs from bar 1.
+    if (playing) ownPpq = 0.0;
+    const bool own = ! playing && preview.load();
+    if (! own) ownPpq = 0.0;
+
+    if (buffer.getNumChannels() < 2) { buffer.clear(); return; }
+    rack.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, tempo, playing ? ppq : ownPpq, playing || own);
+    for (int ch = 2; ch < buffer.getNumChannels(); ++ch) buffer.clear (ch, 0, n);
+    if (own) ownPpq += n * tempo / 60.0 / getSampleRate();
+}
+
+uint32_t Nebula2ModulationProcessor::nextSeed()
+{
+    seed = seed * 1664525u + 1013904223u;
+    return seed ^ (uint32_t) juce::Time::getMillisecondCounter();
+}
+
+void Nebula2ModulationProcessor::getStateInformation (juce::MemoryBlock& dest)
+{
+    juce::MemoryOutputStream out (dest, false);
+    out.writeString (juce::String (rack.save()));
+    out.writeInt (selectedTab.load());
+}
+
+void Nebula2ModulationProcessor::setStateInformation (const void* data, int size)
+{
+    juce::MemoryInputStream in (data, (size_t) size, false);
+    const auto text = in.readString();
+    if (rack.load (text.toStdString()))
+    {
+        selectedTab.store (in.isExhausted() ? 0 : juce::jlimit (0, juce::jmax (0, (int) rack.boards.size() - 1), in.readInt()));
+        stateVersion.fetch_add (1);
+    }
+}
+
+juce::AudioProcessorEditor* Nebula2ModulationProcessor::createEditor() { return new Nebula2ModulationEditor (*this); }
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new Nebula2ModulationProcessor(); }

@@ -1,0 +1,8 @@
+build/
+JUCE/
+JUCE
+.vs/
+.vscode/
+.idea/
+*.DS_Store
+build-scratch/

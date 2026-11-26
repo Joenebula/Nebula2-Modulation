@@ -560,6 +560,208 @@ int main()
         CHECK (firstOf (*other.boards[0], "filter")->paramLink[(size_t) cut] == 2 && firstOf (*other.boards[1], "filter")->paramLink[(size_t) cut] == 0, "each knob comes back in its group");
     }
 
+    // ================= Effects =================
+    // Runs one unit on its own: feeds it a signal on its first input and returns what comes out of an output
+    struct Fx
+    {
+        explicit Fx (const char* type) { const auto* e = findType (type); m = e->make(); m->init (*e->info, 1); m->prepare (48000); m->inOn[0] = 1; }
+        std::vector<float> run (const std::vector<float>& x, size_t outPort = 0, int block = 64, double bpm = 120.0, bool playing = true)
+        {
+            std::vector<float> y (x.size());
+            Ctx c; c.sr = 48000; c.bpm = bpm; c.playing = playing; c.ppqPerSample = bpm / 60.0 / 48000.0; c.scale = scales()[0].iv;
+            for (size_t pos = 0; pos < x.size(); pos += (size_t) block)
+            {
+                const int n = (int) std::min ((size_t) block, x.size() - pos);
+                for (auto& b : m->in) std::fill (b.begin(), b.begin() + n, 0.0f);
+                std::copy (x.begin() + (long) pos, x.begin() + (long) pos + n, m->in[0].begin());
+                c.ppq = ppq;
+                m->process (n, c);
+                std::copy (m->out[outPort].begin(), m->out[outPort].begin() + n, y.begin() + (long) pos);
+                ppq += n * c.ppqPerSample;
+            }
+            return y;
+        }
+        std::unique_ptr<Module> m; double ppq = 0;
+    };
+    auto sine = [] (double hz, size_t n, float amp = 0.5f) { std::vector<float> v (n); for (size_t i = 0; i < n; ++i) v[i] = amp * (float) std::sin (2.0 * kPi * hz * (double) i / 48000.0); return v; };
+    auto rms = [] (const std::vector<float>& v, size_t from, size_t to) { double s = 0; to = std::min (to, v.size()); for (size_t i = from; i < to; ++i) s += (double) v[i] * v[i]; return (float) std::sqrt (s / (double) std::max<size_t> (1, to - from)); };
+    // A varied test signal: two tones and a click train
+    std::vector<float> mixSig (48000);
+    for (size_t i = 0; i < mixSig.size(); ++i) mixSig[i] = 0.3f * (float) std::sin (2.0 * kPi * 220.0 * (double) i / 48000.0) + 0.2f * (float) std::sin (2.0 * kPi * 3100.0 * (double) i / 48000.0) + (i % 6000 == 0 ? 0.4f : 0.0f);
+    const std::vector<float> silenceSig (48000, 0.0f);
+
+    struct FxCase { const char* type; const char* neutralKnob; float neutralValue; size_t outs; };
+    const FxCase cases[] = {
+        { "room", "mix", 0, 2 }, { "hall", "mix", 0, 2 }, { "plate", "mix", 0, 2 },
+        { "delay", "mix", 0, 1 }, { "tape", "mix", 0, 1 }, { "pingpong", "mix", 0, 2 },
+        { "hardclip", "drive", 0, 1 }, { "chorus", "mix", 0, 2 }, { "flanger", "mix", 0, 1 }, { "phaser", "mix", 0, 1 } };
+    // 24. Every effect: at 0% it passes the sound exactly; switched on it changes it; it never blows up or makes its own noise
+    for (auto& fc : cases)
+    {
+        CHECK (findType (fc.type) != nullptr, fc.type);
+        for (size_t port = 0; port < fc.outs; ++port)
+        {
+            Fx off (fc.type); off.m->set (fc.neutralKnob, fc.neutralValue);
+            CHECK (off.run (mixSig, port) == mixSig, "an effect at 0% passes the sound through exactly");
+            Fx on (fc.type);
+            const auto y = on.run (mixSig, port);
+            CHECK (y != mixSig, "switched on, it changes the sound");
+            CHECK (allFinite (y) && peakOf (y) < 4.0f, "and stays under control");
+            Fx quiet (fc.type);
+            CHECK (peakOf (quiet.run (silenceSig, port)) == 0.0f, "silence in, silence out");
+            // the same result whatever block size the host uses
+            Fx a (fc.type), b (fc.type);
+            const auto ya = a.run (mixSig, port, 64), yb = b.run (mixSig, port, 37);
+            float diff = 0; for (size_t i = 0; i < ya.size(); ++i) diff = std::max (diff, std::abs (ya[i] - yb[i]));
+            CHECK (diff < 1.0e-4f, "block size does not change an effect's sound");
+        }
+    }
+    {
+        Fx crush ("bitcrush"); crush.m->set ("crush", 0); crush.m->set ("rate", 0);
+        CHECK (crush.run (mixSig) == mixSig, "bitcrusher with both knobs at 0% passes the sound exactly");
+        Fx on ("bitcrush"), quiet ("bitcrush");
+        CHECK (on.run (mixSig) != mixSig && peakOf (quiet.run (silenceSig)) == 0.0f, "bitcrusher changes sound and stays silent on silence");
+    }
+
+    // 25. Reverbs ring on after the sound stops, then die away; the hall is longer than the room; turning Decay up lengthens it
+    {
+        std::vector<float> burst (48000 * 6, 0.0f);
+        for (size_t i = 0; i < 2400; ++i) burst[i] = 0.5f * (float) std::sin (2.0 * kPi * 440.0 * (double) i / 48000.0);
+        auto tail = [&] (const char* type, float decay) { Fx f (type); f.m->set ("mix", 1.0f); if (decay >= 0) f.m->set ("decay", decay); return f.run (burst); };
+        const auto room = tail ("room", -1), hall = tail ("hall", -1), plate = tail ("plate", -1);
+        for (auto* t : { &room, &hall, &plate })
+        {
+            CHECK (rms (*t, 4800, 14400) > 0.0005f, "a reverb rings on after the sound stops");
+            CHECK (rms (*t, 48000 * 5, 48000 * 6) < rms (*t, 4800, 14400) * 0.05f, "and dies away");
+            CHECK (allFinite (*t), "without blowing up");
+        }
+        CHECK (rms (hall, 48000, 96000) > rms (room, 48000, 96000) * 3.0f, "the hall lasts longer than the room");
+        CHECK (rms (tail ("hall", 1.0f), 96000, 144000) > rms (tail ("hall", 0.0f), 96000, 144000) * 5.0f, "Decay makes it longer");
+        // stereo: the two sides are different, which is what makes it sound wide
+        Fx st ("hall"); st.m->set ("mix", 1.0f);
+        const auto l = st.run (burst, 0); Fx st2 ("hall"); st2.m->set ("mix", 1.0f); const auto r = st2.run (burst, 1);
+        CHECK (l != r, "left and right of a reverb differ");
+        // even at full decay, fed constantly, it stays bounded
+        Fx hot ("hall"); hot.m->set ("decay", 1.0f); hot.m->set ("mix", 1.0f); hot.m->set ("damp", 0.0f);
+        const auto loud = hot.run (sine (220, 48000 * 6, 0.9f));
+        // (a constant tone into maximum decay with no damping is the worst case: loud, but it must level off, not run away)
+        CHECK (allFinite (loud) && peakOf (loud) < 30.0f, "a reverb at full decay stays bounded");
+        CHECK (peakOf (std::vector<float> (loud.end() - 48000, loud.end())) < peakOf (std::vector<float> (loud.begin() + 48000 * 4, loud.begin() + 48000 * 5)) * 1.1f, "and has stopped growing");
+    }
+
+    // 26. Delays: the echo lands exactly on the note length, and follows the tempo
+    {
+        std::vector<float> click (48000 * 3, 0.0f); click[0] = 1.0f;
+        auto firstEcho = [&] (const char* type, int timeChoice, double bpm, size_t port = 0)
+        {
+            Fx f (type); f.m->set ("time", (float) timeChoice); f.m->set ("mix", 1.0f); f.m->set ("feedback", 0.0f);
+            if (std::string (type) == "tape") f.m->set ("wobble", 0.0f);
+            const auto y = f.run (click, port, 64, bpm);
+            size_t at = 0; float best = 0;
+            for (size_t i = 100; i < y.size(); ++i) if (std::abs (y[i]) > best) { best = std::abs (y[i]); at = i; }
+            return at;
+        };
+        CHECK (std::abs ((long) firstEcho ("delay", 6, 120.0) - 24000) <= 2, "a 1/4 echo at 120 BPM lands half a second later");
+        CHECK (std::abs ((long) firstEcho ("delay", 4, 120.0) - 12000) <= 2, "a 1/8 echo lands a quarter of a second later");
+        CHECK (std::abs ((long) firstEcho ("delay", 6, 150.0) - 19200) <= 2, "at 150 BPM the same echo is shorter: it follows the tempo");
+        CHECK (std::abs ((long) firstEcho ("delay", 5, 120.0) - 18000) <= 2, "a dotted 1/8 is three sixteenths");
+        CHECK (std::abs ((long) firstEcho ("tape", 6, 120.0) - 24000) <= 40, "the tape echo is in time too");
+        CHECK (std::abs ((long) firstEcho ("pingpong", 4, 120.0, 0) - 12000) <= 2, "ping-pong: the first echo is on the left");
+        CHECK (std::abs ((long) firstEcho ("pingpong", 4, 120.0, 1) - 24000) <= 2, "and the second is on the right, one step later");
+        // repeats fade; even at the top of the knob they don't run away
+        Fx rep ("delay"); rep.m->set ("time", 4); rep.m->set ("mix", 1.0f); rep.m->set ("feedback", 0.5f);
+        const auto y = rep.run (click);
+        CHECK (std::abs (y[12000]) > 0.9f && std::abs (std::abs (y[24000]) - 0.5f) < 0.02f && std::abs (std::abs (y[36000]) - 0.25f) < 0.02f, "each repeat is quieter by the Repeats amount");
+        for (const char* type : { "delay", "tape", "pingpong" })
+        {
+            Fx hot (type); hot.m->set ("feedback", 0.95f); hot.m->set ("mix", 1.0f); hot.m->set ("time", 1);
+            const auto loud = hot.run (sine (330, 48000 * 6, 0.5f));
+            CHECK (allFinite (loud) && peakOf (loud) < 30.0f, "repeats at maximum stay bounded");
+        }
+        Fx dull ("tape"); dull.m->set ("mix", 1.0f); dull.m->set ("feedback", 0.8f); dull.m->set ("time", 2); dull.m->set ("tone", 0.2f);
+        std::vector<float> bright (48000 * 2, 0.0f); for (size_t i = 0; i < 2000; ++i) bright[i] = 0.5f * (float) std::sin (2.0 * kPi * 6000.0 * (double) i / 48000.0);
+        const auto t = dull.run (bright);
+        CHECK (rms (t, 40000, 60000) < rms (t, 9000, 13000) * 0.3f, "tape echoes get duller with each repeat");
+    }
+
+    // 27. EQ: flat does nothing; a boost raises its band; the cuts remove what they should
+    {
+        const auto low = sine (80, 48000), mid = sine (1000, 48000), high = sine (9000, 48000);
+        Fx flat ("eq3"); CHECK (flat.run (mixSig) == mixSig, "a flat EQ passes the sound exactly");
+        Fx pflat ("parameq"); CHECK (pflat.run (mixSig) == mixSig, "a flat parametric EQ passes the sound exactly");
+        Fx open ("cuts"); CHECK (open.run (mixSig) == mixSig, "low cut and high cut fully open pass the sound exactly");
+        auto gain = [&] (const char* type, const char* knob, float v, const std::vector<float>& tone) { Fx f (type); f.m->set (knob, v); return rms (f.run (tone), 24000, 48000) / rms (tone, 24000, 48000); };
+        CHECK (gain ("eq3", "low", 12, low) > 3.0f && gain ("eq3", "low", 12, high) < 1.1f, "Low up lifts the bass and leaves the top");
+        CHECK (gain ("eq3", "high", -12, high) < 0.35f && gain ("eq3", "high", -12, low) > 0.9f, "High down cuts the top and leaves the bass");
+        CHECK (gain ("eq3", "mid", 12, mid) > 3.0f && gain ("eq3", "mid", 12, low) < 1.3f, "Mid lifts the middle");
+        CHECK (gain ("parameq", "g2", 12, sine (500, 48000)) > 3.0f && gain ("parameq", "g2", 12, high) < 1.1f, "a parametric band lifts where it is set");
+        {   // narrower band, less effect a little way off its centre
+            auto off = [&] (float width) { Fx f ("parameq"); f.m->set ("g2", 12); f.m->set ("q2", width); const auto tone = sine (1000, 48000); return rms (f.run (tone), 24000, 48000) / rms (tone, 24000, 48000); };
+            CHECK (off (6.0f) > off (0.4f) + 0.2f, "a wider band reaches further from its centre");
+        }
+        CHECK (gain ("cuts", "lowcut", 0.45f, low) < 0.1f && gain ("cuts", "lowcut", 0.45f, high) > 0.95f, "low cut removes the bass and keeps the top");
+        CHECK (gain ("cuts", "highcut", 0.55f, high) < 0.1f && gain ("cuts", "highcut", 0.55f, low) > 0.95f, "high cut removes the top and keeps the bass");
+    }
+
+    // 28. Distortion: more Drive means more squashing; quiet in, quieter-than-clipped out
+    {
+        const auto tone = sine (200, 48000, 0.5f);
+        Fx soft ("hardclip"); soft.m->set ("drive", 1.0f);
+        const auto y = soft.run (tone);
+        CHECK (peakOf (y) <= 1.0f && rms (y, 0, 48000) > rms (tone, 0, 48000) * 1.3f, "hard clip flattens the peaks and fills the sound out");
+        Fx bits ("bitcrush"); bits.m->set ("crush", 1.0f); bits.m->set ("rate", 0.0f);
+        const auto b = bits.run (tone);
+        std::vector<float> uniq (b.begin(), b.begin() + 4800); std::sort (uniq.begin(), uniq.end()); uniq.erase (std::unique (uniq.begin(), uniq.end()), uniq.end());
+        CHECK (uniq.size() <= 9, "a fully crushed sound has only a few steps of loudness");
+        Fx hold ("bitcrush"); hold.m->set ("crush", 0.0f); hold.m->set ("rate", 1.0f);
+        const auto h = hold.run (tone);
+        int changes = 0; for (size_t i = 1; i < 4800; ++i) changes += h[i] != h[i - 1] ? 1 : 0;
+        CHECK (changes <= 4800 / 40 + 2, "full downsample holds each sample for 40");
+    }
+
+    // 29. Movement effects are in time with the song: after one full cycle the sweep is back where it started
+    for (const char* type : { "chorus", "flanger", "phaser" })
+    {
+        Fx f (type); f.m->set ("rate", 5); f.m->set ("mix", 1.0f);        // one sweep per 1/4 note: 24000 samples at 120 BPM
+        const auto tone = sine (440, 48000 * 2, 0.4f);
+        const auto y = f.run (tone);
+        // compare the loudness pattern of one cycle with the next: they match because the sweep repeats exactly
+        float worst = 0;
+        for (size_t k = 0; k < 8; ++k)
+            worst = std::max (worst, std::abs (rms (y, 48000 + k * 3000, 48000 + (k + 1) * 3000) - rms (y, 72000 + k * 3000, 72000 + (k + 1) * 3000)));
+        CHECK (worst < 0.02f, "a movement effect repeats every cycle of its Rate");
+        float spread = 0, lo = 9, hi = 0;
+        for (size_t k = 0; k < 8; ++k) { const float v = rms (y, 48000 + k * 3000, 48000 + (k + 1) * 3000); lo = std::min (lo, v); hi = std::max (hi, v); }
+        spread = hi - lo;
+        CHECK (allFinite (y) && (spread > 0.0005f || std::string (type) == "chorus"), "and it is actually moving");
+    }
+
+    // 30. Every unit in the menu has a heading that exists, a hint, and a unique id
+    {
+        std::vector<std::string> ids;
+        for (auto* t : allTypes())
+        {
+            bool shelf = false;
+            for (auto* s : shelves()) shelf = shelf || std::string (s) == t->shelf;
+            CHECK (shelf, t->name);
+            CHECK (std::string (t->hint).size() > 8, "every unit explains itself in the menu");
+            CHECK (std::find (ids.begin(), ids.end(), t->type) == ids.end(), "unit ids are unique");
+            ids.push_back (t->type);
+            for (auto& p : t->params) CHECK (p.def >= p.lo && p.def <= p.hi, "every knob starts inside its range");
+        }
+        CHECK (ids.size() >= 28, "the effects are in the menu");
+    }
+
+    // 31. Pad and stab now go through their effects and still behave
+    for (const char* type : { "pad", "stab" })
+    {
+        std::unique_ptr<Rack> rack (one (type));
+        auto a = render (*rack, 8);
+        CHECK (peakOf (a.l) > 0.02f && peakOf (a.l) <= 1.0f && allFinite (a.l) && allFinite (a.r), type);
+        CHECK (a.l != a.r, "with reverb the two sides differ: it is in stereo");
+        for (auto& m : rack->boards[0]->modules) CHECK (m->live, "every preset module is heard");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

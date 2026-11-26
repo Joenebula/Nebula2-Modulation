@@ -586,7 +586,7 @@ ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, M
     {
         auto* c = cells.add (new ParamCell (p, m, i));
         addAndMakeVisible (c);
-        c->setTopLeftPosition (x0 + (i % lay::perRow) * lay::cell, y0 + (i / lay::perRow) * lay::cellH);
+        c->setTopLeftPosition (x0 + (i % lay::rowLen (info)) * lay::cell, y0 + (i / lay::rowLen (info)) * lay::cellH);
     }
     setAlpha (m.live ? 1.0f : 0.45f);
 }
@@ -1370,33 +1370,33 @@ AddPanel::AddPanel()
 
 void AddPanel::open() { ticked.clear(); add.setEnabled (false); setVisible (true); toFront (true); repaint(); }
 
-static constexpr int kRowH = 40, kHeadH = 30, kCardW = 700;
+static constexpr int kRowH = 38, kHeadH = 28, kCardW = 1140, kAddCols = 3;
 
 juce::Rectangle<int> AddPanel::card() const
 {
     int total = 0;
     for (auto* s : shelves()) { juce::ignoreUnused (s); total += kHeadH; }
     total += (int) allTypes().size() * kRowH;
-    const int h = juce::jmin (getHeight() - 40, total / 2 + kHeadH + kRowH + 120);
+    const int h = juce::jmin (getHeight() - 24, total / kAddCols + 2 * kHeadH + 3 * kRowH + 120);
     return juce::Rectangle<int> (kCardW, h).withCentre (getLocalBounds().getCentre());
 }
 
 std::vector<AddPanel::Row> AddPanel::rows() const
 {
-    // Two columns of headings; a heading never splits across columns
+    // Three columns of headings; a heading never splits across columns
     std::vector<Row> out;
     const auto c = card();
     int total = 0;
     const auto types = allTypes();
     for (auto* s : shelves()) { total += kHeadH; for (auto* t : types) if (std::string (t->shelf) == s) total += kRowH; }
-    const int colW = (kCardW - 48) / 2;
+    const int colW = (kCardW - 40 - (kAddCols - 1) * 12) / kAddCols;
     int col = 0, y = c.getY() + 56, used = 0;
     for (auto* s : shelves())
     {
         int block = kHeadH;
         for (auto* t : types) if (std::string (t->shelf) == s) block += kRowH;
-        if (col == 0 && used > 0 && used + block / 2 > total / 2) { col = 1; y = c.getY() + 56; }
-        const int x = c.getX() + 20 + col * (colW + 8);
+        if (col < kAddCols - 1 && used > 0 && used + block / 2 > total * (col + 1) / kAddCols) { ++col; y = c.getY() + 56; }
+        const int x = c.getX() + 20 + col * (colW + 12);
         out.push_back ({ { x, y, colW, kHeadH }, nullptr });
         y += kHeadH;
         for (auto* t : types)

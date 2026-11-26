@@ -48,7 +48,7 @@ The screen draws it from `desc()`. No screen code is needed per module.
 Signals on cables: audio is -1..1; pitch is octaves from middle C; a gate is "above 0.5"; envelopes are 0..1; LFOs are -1..1.
 
 Rules that tests hold in place:
-- A knob at 0% does nothing at all (Drive at 0% is identical to no Drive).
+- A knob at 0% does nothing at all (Drive at 0% is identical to no Drive). Every effect at Mix 0% passes its input through exactly, and gives silence for silence.
 - Anything rhythmic is stored as a note length and worked out from the tempo, never milliseconds.
 - Saves are text, named by id. Unknown modules and knobs are skipped on load, so never rename an id.
 - The sound must not depend on the host's block size.
@@ -86,10 +86,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.6'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.7'
 ```
 
-The latest release is **v0.1.5**. Bump by one each time.
+The latest release is **v0.1.6**. Bump by one each time.
 
 ## What can't be checked here
 

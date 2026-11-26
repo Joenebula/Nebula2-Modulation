@@ -9,7 +9,7 @@ it, and a mixing desk underneath.
 
 ![The Add units menu](docs/screenshot-add-units.png)
 
-This is an early build: the rack, the core sound modules and the first set of sounds. What's planned next is in
+This is an early build: the rack, the sound modules, effects, chords, plugin slots and the first set of sounds. What's planned next is in
 [docs/BUILD-PLAN.md](docs/BUILD-PLAN.md); the full design is in [docs/SPEC.md](docs/SPEC.md).
 
 ## Install
@@ -31,7 +31,8 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
    **Play** in the plugin runs it on its own when Cubase is stopped.
 2. Each **tab** is one sound. Click a tab to see only that sound's modules.
 3. **+** adds a sound: kick, snare, hi-hat, percussion, bass, lead, stab, pad, or an empty board. It arrives cabled and playing.
-4. **Add units** opens the menu of modules. Tick one or several and they land on the board, unconnected.
+4. **Add units** opens the menu of modules: sound sources, envelopes, filters, EQ, distortion, reverb, delay, chorus,
+   phaser, flanger and more. Tick one or several and they land on the board, unconnected.
 5. **Cables:** drag from an output jack (coloured ring) to an input jack. Pull a plug out of an input to move it,
    or drop it on nothing to remove it. Right-click a module to disconnect or delete it.
 6. A module marked **not connected** has no path to the Output, so it can't be heard yet.

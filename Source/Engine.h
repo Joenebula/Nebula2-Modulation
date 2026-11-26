@@ -59,7 +59,7 @@ inline int degreeToSemis (int degree, const int* scale)
 }
 
 // ---- What a module type looks like from outside ----
-enum class Fmt { Plain, Percent, Bipolar, Semis, Cents, Time, Freq, Int, Octaves };
+enum class Fmt { Plain, Percent, Bipolar, Semis, Cents, Time, Freq, Int, Octaves, Db };
 
 struct Port { const char* id; const char* name; };
 struct Param
@@ -78,6 +78,7 @@ struct Info
     std::vector<Port> ins, outs;
     std::vector<Param> params;
     Seq seq = Seq::None;
+    int perRow = 0;          // knobs per row on screen; 0 = the usual
 };
 
 // Knob position (0..1) to value and back
@@ -107,6 +108,7 @@ inline std::string paramText (const Param& p, float v)
         case Fmt::Semis:   std::snprintf (b, sizeof b, "%+d st", (int) std::lround (v)); break;
         case Fmt::Cents:   std::snprintf (b, sizeof b, "%+d ct", (int) std::lround (v)); break;
         case Fmt::Octaves: std::snprintf (b, sizeof b, "%+.1f oct", (double) v); break;
+        case Fmt::Db:      std::snprintf (b, sizeof b, "%+.1f dB", (double) v); break;
         case Fmt::Int:     std::snprintf (b, sizeof b, "%d", (int) std::lround (v)); break;
         case Fmt::Time:
             if (v < 1.0f) std::snprintf (b, sizeof b, "%d ms", (int) std::lround (v * 1000));

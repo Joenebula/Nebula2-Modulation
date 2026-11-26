@@ -568,6 +568,481 @@ struct MultiOsc : Module
     double phase[4][2] { { 0.0, 0.37 }, { 0.61, 0.13 }, { 0.29, 0.83 }, { 0.47, 0.71 } };
 };
 
+// ================================================================ Effects
+// Shared pieces. Two rules run through all of these:
+//   - a Mix (or amount) at 0% passes the sound through exactly untouched;
+//   - silence in gives silence out: no effect makes noise of its own.
+
+// A length of remembered sound, for echoes, reverbs and anything that needs "what came a moment ago"
+struct DelayBuf
+{
+    void size (int n) { b.assign ((size_t) std::max (8, n), 0.0f); w = 0; }
+    void push (float x) { if (b.empty()) return; b[(size_t) w] = std::isfinite (x) ? x : 0.0f; if (++w >= (int) b.size()) w = 0; }
+    float tapInt (int d) const
+    {
+        if (b.empty()) return 0.0f;
+        d = std::min ((int) b.size() - 1, std::max (1, d));
+        int i = w - d; if (i < 0) i += (int) b.size();
+        return b[(size_t) i];
+    }
+    float tap (float d) const       // d samples back, between samples
+    {
+        if (b.empty()) return 0.0f;
+        d = std::min ((float) b.size() - 2.0f, std::max (1.0f, d));
+        float p = (float) w - d; if (p < 0) p += (float) b.size();
+        const int i = (int) p; const float f = p - (float) i;
+        const int j = i + 1 >= (int) b.size() ? 0 : i + 1;
+        return b[(size_t) i] + (b[(size_t) j] - b[(size_t) i]) * f;
+    }
+    std::vector<float> b; int w = 0;
+};
+
+// A slow sweep in time with the song, for chorus, phaser and flanger. Lengths in quarter notes.
+inline const double kSweepLen[7] = { 32, 16, 8, 4, 2, 1, 0.5 };
+#define N2M_SWEEP_CHOICES { "8 bars", "4 bars", "2 bars", "1 bar", "1/2", "1/4", "1/8" }
+struct Sweep
+{
+    // 0..1 position in the cycle at sample i
+    double at (const Ctx& c, int i, float rateParam)
+    {
+        const double len = kSweepLen[std::min (6, std::max (0, (int) std::lround (rateParam)))];
+        if (c.playing) { const double p = (c.ppq + i * c.ppqPerSample) / len; phase = p - std::floor (p); }
+        else { phase += c.ppqPerSample / len; phase -= std::floor (phase); }
+        return phase;
+    }
+    double phase = 0;
+};
+
+// Echo times as note lengths (in quarter notes), so every echo is in time and follows the tempo
+inline const double kEchoLen[10] = { 0.125, 0.25, 0.375, 1.0 / 3.0, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0 };
+#define N2M_ECHO_CHOICES { "1/32", "1/16", "1/16 dot", "1/8 trip", "1/8", "1/8 dot", "1/4", "1/4 dot", "1/2", "1 bar" }
+inline float echoSamples (const Ctx& c, float timeParam, const DelayBuf& buf)
+{
+    const double q = kEchoLen[std::min (9, std::max (0, (int) std::lround (timeParam)))];
+    return (float) std::min ((double) buf.b.size() - 4.0, std::max (2.0, q * 60.0 / std::max (20.0, c.bpm) * c.sr));
+}
+
+// The standard EQ building block
+struct Biquad
+{
+    float run (float x) { const float y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; if (! std::isfinite (z1) || ! std::isfinite (z2)) z1 = z2 = 0; return y; }
+    void set (double B0, double B1, double B2, double A0, double A1, double A2)
+    { b0 = (float) (B0 / A0); b1 = (float) (B1 / A0); b2 = (float) (B2 / A0); a1 = (float) (A1 / A0); a2 = (float) (A2 / A0); }
+    static double w0 (double hz, double sr) { return 2.0 * kPi * std::min (sr * 0.45, std::max (10.0, hz)) / sr; }
+    void peak (double hz, double db, double q, double sr)
+    {
+        const double A = std::pow (10.0, db / 40.0), w = w0 (hz, sr), al = std::sin (w) / (2.0 * q), cs = std::cos (w);
+        set (1 + al * A, -2 * cs, 1 - al * A, 1 + al / A, -2 * cs, 1 - al / A);
+    }
+    void lowShelf (double hz, double db, double sr)
+    {
+        const double A = std::pow (10.0, db / 40.0), w = w0 (hz, sr), cs = std::cos (w), al = std::sin (w) / 2.0 * std::sqrt (2.0), r = 2.0 * std::sqrt (A) * al;
+        set (A * ((A + 1) - (A - 1) * cs + r), 2 * A * ((A - 1) - (A + 1) * cs), A * ((A + 1) - (A - 1) * cs - r),
+             (A + 1) + (A - 1) * cs + r, -2 * ((A - 1) + (A + 1) * cs), (A + 1) + (A - 1) * cs - r);
+    }
+    void highShelf (double hz, double db, double sr)
+    {
+        const double A = std::pow (10.0, db / 40.0), w = w0 (hz, sr), cs = std::cos (w), al = std::sin (w) / 2.0 * std::sqrt (2.0), r = 2.0 * std::sqrt (A) * al;
+        set (A * ((A + 1) + (A - 1) * cs + r), -2 * A * ((A - 1) + (A + 1) * cs), A * ((A + 1) + (A - 1) * cs - r),
+             (A + 1) - (A - 1) * cs + r, 2 * ((A - 1) - (A + 1) * cs), (A + 1) - (A - 1) * cs - r);
+    }
+    void lowPass (double hz, double sr)
+    {
+        const double w = w0 (hz, sr), cs = std::cos (w), al = std::sin (w) / (2.0 * 0.7071);
+        set ((1 - cs) / 2, 1 - cs, (1 - cs) / 2, 1 + al, -2 * cs, 1 - al);
+    }
+    void highPass (double hz, double sr)
+    {
+        const double w = w0 (hz, sr), cs = std::cos (w), al = std::sin (w) / (2.0 * 0.7071);
+        set ((1 + cs) / 2, -(1 + cs), (1 + cs) / 2, 1 + al, -2 * cs, 1 - al);
+    }
+    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+};
+
+// ---------------------------------------------------------------- Reverb
+// One design, three characters. Room: small and tight. Hall: large and smooth, with a moment before it blooms.
+// Plate: bright and dense. Stereo in and out; with only In L plugged, both sides are fed from it.
+enum { kRoom, kHall, kPlate };
+template <int Kind>
+struct Reverb : Module
+{
+    static const Info& desc()
+    {
+        static const char* const type[3] = { "room", "hall", "plate" };
+        static const char* const name[3] = { "Room reverb", "Hall reverb", "Plate reverb" };
+        static const char* const hint[3] = { "Small and tight. Good on drums", "Large and smooth, for pads and space", "Bright and dense. Classic on snares and stabs" };
+        static const float decay[3] = { 0.35f, 0.6f, 0.5f }, damp[3] = { 0.45f, 0.4f, 0.15f };
+        static const Info i { type[Kind], name[Kind], "Reverb", hint[Kind],
+            { { "inl", "In L" }, { "inr", "In R" } }, { { "outl", "Out L" }, { "outr", "Out R" } },
+            { { "size", "Size", 0, 1, 0.5f, Fmt::Percent }, { "decay", "Decay", 0, 1, decay[Kind], Fmt::Percent },
+              { "damp", "Damping", 0, 1, damp[Kind], Fmt::Percent }, { "mix", "Mix", 0, 1, 0.3f, Fmt::Percent } } };
+        return i;
+    }
+    static constexpr int nComb = 8, nAll = 4;
+    void prepare (double sampleRate) override
+    {
+        sr = sampleRate;
+        const int big = (int) (0.12 * sr * 2.4) + 64;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            for (auto& c : comb[ch]) c.size (big);
+            for (auto& a : all[ch]) a.size ((int) (0.03 * sr) + 64);
+            pre[ch].size ((int) (0.06 * sr) + 64);
+            std::fill (std::begin (filt[ch]), std::end (filt[ch]), 0.0f);
+        }
+    }
+    void process (int n, const Ctx&) override
+    {
+        static const int combLen[nComb] = { 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };   // at 44.1 kHz
+        static const int allLen[nAll] = { 556, 441, 341, 225 };
+        static const float scale[3] = { 0.55f, 1.35f, 0.8f }, fbLo[3] = { 0.60f, 0.80f, 0.74f }, fbHi[3] = { 0.88f, 0.975f, 0.96f };
+        static const int spread[3] = { 17, 31, 23 }, preMs[3] = { 0, 22, 4 };
+        const float mix = P (3);
+        const bool stereoIn = inOn[1] != 0;
+        if (mix <= 0.0f)
+        {
+            // Mix at 0%: the dry sound, untouched. The tail still has to be kept running so it isn't stale later.
+            for (int i = 0; i < n; ++i) { out[0][(size_t) i] = in[0][(size_t) i]; out[1][(size_t) i] = stereoIn ? in[1][(size_t) i] : in[0][(size_t) i]; }
+        }
+        const float sz = (0.6f + 0.8f * P (0)) * scale[Kind] * (float) (sr / 44100.0);
+        const float fb = fbLo[Kind] + (fbHi[Kind] - fbLo[Kind]) * P (1);
+        const float damp = std::min (0.95f, P (2) * 0.9f);
+        const int preLen = std::max (1, (int) (preMs[Kind] * 0.001 * sr));
+        for (int i = 0; i < n; ++i)
+        {
+            const float dry[2] = { in[0][(size_t) i], stereoIn ? in[1][(size_t) i] : in[0][(size_t) i] };
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const float x = pre[ch].tapInt (preLen);
+                pre[ch].push (dry[ch] * 0.03f);
+                float sum = 0;
+                for (int k = 0; k < nComb; ++k)
+                {
+                    const int len = (int) ((float) (combLen[k] + ch * spread[Kind]) * sz);
+                    const float y = comb[ch][k].tapInt (len);
+                    filt[ch][k] = y * (1.0f - damp) + filt[ch][k] * damp;
+                    if (std::abs (filt[ch][k]) < 1.0e-15f) filt[ch][k] = 0.0f;
+                    comb[ch][k].push (x + filt[ch][k] * fb);
+                    sum += y;
+                }
+                for (int k = 0; k < nAll; ++k)
+                {
+                    const int len = (int) ((float) (allLen[k] + ch * spread[Kind]) * (Kind == kPlate ? 1.3f : 1.0f) * (float) (sr / 44100.0));
+                    const float y = all[ch][k].tapInt (len);
+                    all[ch][k].push (sum + y * 0.5f);
+                    sum = y - sum;
+                }
+                if (mix > 0.0f) out[(size_t) ch][(size_t) i] = dry[ch] * (1.0f - mix) + sum * 2.2f * mix;
+            }
+        }
+    }
+    double sr = 48000;
+    DelayBuf comb[2][nComb], all[2][nAll], pre[2];
+    float filt[2][nComb] {};
+};
+
+// ---------------------------------------------------------------- Delay and echo
+struct DigitalDelay : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "delay", "Digital delay", "Delay and echo", "Clean echoes, in time with the song",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "time", "Time", 0, 9, 5, Fmt::Int, 1, N2M_ECHO_CHOICES }, { "feedback", "Repeats", 0, 0.95f, 0.4f, Fmt::Percent },
+              { "mix", "Mix", 0, 1, 0.35f, Fmt::Percent } } };
+        return i;
+    }
+    void prepare (double sr) override { buf.size ((int) (sr * 4.0) + 16); cur = 0; }
+    void process (int n, const Ctx& c) override
+    {
+        const float target = echoSamples (c, P (0), buf), fb = P (1), mix = P (2);
+        if (cur <= 0) cur = target;
+        for (int i = 0; i < n; ++i)
+        {
+            cur += (target - cur) * 0.0008f;           // a tempo or time change glides, it doesn't click
+            const float wet = buf.tap (cur);
+            buf.push (in[0][(size_t) i] + wet * fb);
+            out[0][(size_t) i] = mix > 0.0f ? in[0][(size_t) i] + wet * mix : in[0][(size_t) i];
+        }
+    }
+    DelayBuf buf; float cur = 0;
+};
+
+// Tape echo: each repeat is duller and a little saturated, and the time wobbles like worn tape
+struct TapeEcho : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "tape", "Tape echo", "Delay and echo", "Warm, wobbly echoes that get duller as they repeat",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "time", "Time", 0, 9, 5, Fmt::Int, 1, N2M_ECHO_CHOICES }, { "feedback", "Repeats", 0, 0.95f, 0.5f, Fmt::Percent },
+              { "tone", "Tone", 0, 1, 0.5f, Fmt::Percent }, { "wobble", "Wobble", 0, 1, 0.3f, Fmt::Percent },
+              { "mix", "Mix", 0, 1, 0.35f, Fmt::Percent } } };
+        return i;
+    }
+    void prepare (double sr) override { buf.size ((int) (sr * 4.2) + 16); cur = 0; lp = 0; }
+    void process (int n, const Ctx& c) override
+    {
+        const float target = echoSamples (c, P (0), buf), fb = P (1), mix = P (4);
+        const float a = 1.0f - std::exp (-2.0f * (float) kPi * (600.0f * std::pow (20.0f, P (2))) / (float) c.sr);
+        const float depth = P (3) * 0.004f;
+        if (cur <= 0) cur = target;
+        for (int i = 0; i < n; ++i)
+        {
+            cur += (target - cur) * 0.0004f;
+            wow += 0.45 / c.sr; wow -= std::floor (wow);
+            const float wet = buf.tap (cur * (1.0f + depth * (float) std::sin (2.0 * kPi * wow)));
+            lp += a * (wet - lp);
+            if (std::abs (lp) < 1.0e-15f) lp = 0.0f;
+            buf.push (in[0][(size_t) i] + std::tanh (lp * fb * 1.2f));
+            out[0][(size_t) i] = mix > 0.0f ? in[0][(size_t) i] + lp * mix : in[0][(size_t) i];
+        }
+    }
+    DelayBuf buf; float cur = 0, lp = 0; double wow = 0;
+};
+
+// Ping-pong: the echoes bounce left, right, left
+struct PingPong : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "pingpong", "Ping-pong delay", "Delay and echo", "Echoes that bounce from left to right",
+            { { "in", "In" } }, { { "outl", "Out L" }, { "outr", "Out R" } },
+            { { "time", "Time", 0, 9, 4, Fmt::Int, 1, N2M_ECHO_CHOICES }, { "feedback", "Repeats", 0, 0.95f, 0.5f, Fmt::Percent },
+              { "mix", "Mix", 0, 1, 0.4f, Fmt::Percent } } };
+        return i;
+    }
+    void prepare (double sr) override { l.size ((int) (sr * 4.0) + 16); r.size ((int) (sr * 4.0) + 16); cur = 0; }
+    void process (int n, const Ctx& c) override
+    {
+        const float target = echoSamples (c, P (0), l), fb = P (1), mix = P (2);
+        if (cur <= 0) cur = target;
+        for (int i = 0; i < n; ++i)
+        {
+            cur += (target - cur) * 0.0008f;
+            const float dl = l.tap (cur), dr = r.tap (cur);
+            l.push (in[0][(size_t) i] + dr * fb);
+            r.push (dl);
+            out[0][(size_t) i] = mix > 0.0f ? in[0][(size_t) i] + dl * mix : in[0][(size_t) i];
+            out[1][(size_t) i] = mix > 0.0f ? in[0][(size_t) i] + dr * mix : in[0][(size_t) i];
+        }
+    }
+    DelayBuf l, r; float cur = 0;
+};
+
+// ---------------------------------------------------------------- Distortion
+struct HardClip : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "hardclip", "Hard clip", "Distortion", "Aggressive, flat-topped distortion. At 0% the sound passes untouched",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "drive", "Drive", 0, 1, 0.4f, Fmt::Percent }, { "level", "Level", 0, 1.5f, 1.0f, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx&) override
+    {
+        const float d = clamp01 (P (0)), level = P (1), gain = 1.0f + d * 29.0f, mix = std::min (1.0f, d * 8.0f), trim = 1.0f / (1.0f + d * 0.6f);
+        for (int i = 0; i < n; ++i)
+        {
+            const float x = in[0][(size_t) i];
+            const float y = std::min (1.0f, std::max (-1.0f, x * gain)) * trim;
+            out[0][(size_t) i] = (x + (y - x) * mix) * level;
+        }
+    }
+};
+
+struct Bitcrusher : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "bitcrush", "Bitcrusher", "Distortion", "Lo-fi digital grit: fewer steps of loudness, fewer samples",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "crush", "Crush", 0, 1, 0.5f, Fmt::Percent }, { "rate", "Downsample", 0, 1, 0.3f, Fmt::Percent },
+              { "level", "Level", 0, 1.5f, 1.0f, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx&) override
+    {
+        const float crush = clamp01 (P (0)), rate = clamp01 (P (1)), level = P (2);
+        const float levels = std::pow (2.0f, 15.0f - crush * 13.0f);
+        const int every = 1 + (int) (rate * 39.0f);
+        for (int i = 0; i < n; ++i)
+        {
+            if (++count >= every) { count = 0; held = in[0][(size_t) i]; }
+            float y = rate > 0.0f ? held : in[0][(size_t) i];
+            if (crush > 0.0f) y = std::round (y * levels) / levels;
+            out[0][(size_t) i] = y * level;
+        }
+    }
+    int count = 0; float held = 0;
+};
+
+// ---------------------------------------------------------------- Movement
+struct Chorus : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "chorus", "Chorus", "Movement", "Thickens a sound and spreads it left and right",
+            { { "in", "In" } }, { { "outl", "Out L" }, { "outr", "Out R" } },
+            { { "rate", "Rate", 0, 6, 3, Fmt::Int, 1, N2M_SWEEP_CHOICES }, { "depth", "Depth", 0, 1, 0.5f, Fmt::Percent },
+              { "mix", "Mix", 0, 1, 0.5f, Fmt::Percent } } };
+        return i;
+    }
+    void prepare (double sr) override { buf.size ((int) (sr * 0.05) + 16); }
+    void process (int n, const Ctx& c) override
+    {
+        const float depth = P (1), mix = P (2);
+        const float base = 0.012f * (float) c.sr, swing = 0.006f * (float) c.sr * depth;
+        for (int i = 0; i < n; ++i)
+        {
+            const double ph = sweep.at (c, i, P (0));
+            const float x = in[0][(size_t) i];
+            const float a = buf.tap (base + swing * (float) std::sin (2.0 * kPi * ph));
+            const float b = buf.tap (base + swing * (float) std::sin (2.0 * kPi * (ph + 0.25)));
+            buf.push (x);
+            out[0][(size_t) i] = mix > 0.0f ? x * (1.0f - mix) + a * mix : x;
+            out[1][(size_t) i] = mix > 0.0f ? x * (1.0f - mix) + b * mix : x;
+        }
+    }
+    DelayBuf buf; Sweep sweep;
+};
+
+struct Flanger : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "flanger", "Flanger", "Movement", "The jet-plane sweep",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "rate", "Rate", 0, 6, 2, Fmt::Int, 1, N2M_SWEEP_CHOICES }, { "depth", "Depth", 0, 1, 0.7f, Fmt::Percent },
+              { "feedback", "Feedback", 0, 0.9f, 0.5f, Fmt::Percent }, { "mix", "Mix", 0, 1, 0.5f, Fmt::Percent } } };
+        return i;
+    }
+    void prepare (double sr) override { buf.size ((int) (sr * 0.02) + 16); }
+    void process (int n, const Ctx& c) override
+    {
+        const float depth = P (1), fb = P (2), mix = P (3);
+        for (int i = 0; i < n; ++i)
+        {
+            const double ph = sweep.at (c, i, P (0));
+            const float x = in[0][(size_t) i];
+            const float d = (0.0004f + 0.0055f * depth * (0.5f + 0.5f * (float) std::sin (2.0 * kPi * ph))) * (float) c.sr;
+            const float wet = buf.tap (d);
+            buf.push (x + wet * fb);
+            out[0][(size_t) i] = mix > 0.0f ? x * (1.0f - mix) + wet * mix : x;
+        }
+    }
+    DelayBuf buf; Sweep sweep;
+};
+
+struct Phaser : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "phaser", "Phaser", "Movement", "Slow, swirling notches",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "rate", "Rate", 0, 6, 2, Fmt::Int, 1, N2M_SWEEP_CHOICES }, { "depth", "Depth", 0, 1, 0.8f, Fmt::Percent },
+              { "feedback", "Feedback", 0, 0.9f, 0.4f, Fmt::Percent }, { "mix", "Mix", 0, 1, 0.5f, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const float depth = P (1), fb = P (2), mix = P (3);
+        for (int i = 0; i < n; ++i)
+        {
+            const double ph = sweep.at (c, i, P (0));
+            const float x = in[0][(size_t) i];
+            if ((tick++ & 15) == 0)
+            {
+                const float hz = 300.0f * std::pow (12.0f, depth * (0.5f + 0.5f * (float) std::sin (2.0 * kPi * ph)));
+                const float g = (float) std::tan (kPi * std::min ((double) hz, c.sr * 0.45) / c.sr);
+                a = (g - 1.0f) / (g + 1.0f);
+            }
+            float y = x + last * fb;
+            for (auto& s : st) { const float o = a * y + s; s = y - a * o; if (std::abs (s) < 1.0e-15f) s = 0.0f; y = o; }
+            last = std::isfinite (y) ? y : 0.0f;
+            out[0][(size_t) i] = mix > 0.0f ? x * (1.0f - mix) + y * mix : x;
+        }
+    }
+    float st[6] {}, a = 0, last = 0; unsigned tick = 0; Sweep sweep;
+};
+
+// ---------------------------------------------------------------- EQ
+struct Eq3 : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "eq3", "3-band EQ", "EQ", "Quick low, mid and high",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "low", "Low", -15, 15, 0, Fmt::Db }, { "mid", "Mid", -15, 15, 0, Fmt::Db }, { "high", "High", -15, 15, 0, Fmt::Db } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const float lo = P (0), mi = P (1), hi = P (2);
+        if (lo == 0.0f && mi == 0.0f && hi == 0.0f) { std::copy (in[0].begin(), in[0].begin() + n, out[0].begin()); return; }   // flat: untouched
+        b[0].lowShelf (200, lo, c.sr); b[1].peak (1000, mi, 0.7, c.sr); b[2].highShelf (5000, hi, c.sr);
+        for (int i = 0; i < n; ++i) out[0][(size_t) i] = b[2].run (b[1].run (b[0].run (in[0][(size_t) i])));
+    }
+    Biquad b[3];
+};
+
+// Four bands; each row of knobs is one band: where, how much, how wide
+struct ParamEq : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "parameq", "Parametric EQ", "EQ", "Four bands. Each row: where, how much, how wide",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "f1", "Freq 1", 0, 1, 0.233f, Fmt::Freq }, { "g1", "Gain 1", -18, 18, 0, Fmt::Db }, { "q1", "Width 1", 0.3f, 8, 1, Fmt::Plain, 2 },
+              { "f2", "Freq 2", 0, 1, 0.466f, Fmt::Freq }, { "g2", "Gain 2", -18, 18, 0, Fmt::Db }, { "q2", "Width 2", 0.3f, 8, 1, Fmt::Plain, 2 },
+              { "f3", "Freq 3", 0, 1, 0.667f, Fmt::Freq }, { "g3", "Gain 3", -18, 18, 0, Fmt::Db }, { "q3", "Width 3", 0.3f, 8, 1, Fmt::Plain, 2 },
+              { "f4", "Freq 4", 0, 1, 0.867f, Fmt::Freq }, { "g4", "Gain 4", -18, 18, 0, Fmt::Db }, { "q4", "Width 4", 0.3f, 8, 1, Fmt::Plain, 2 } },
+            Seq::None, 3 };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        bool flat = true;
+        for (int k = 0; k < 4; ++k) flat = flat && P (k * 3 + 1) == 0.0f;
+        if (flat) { std::copy (in[0].begin(), in[0].begin() + n, out[0].begin()); return; }
+        // A wide band is a low Q, so the Width knob reads the natural way round
+        for (int k = 0; k < 4; ++k) b[k].peak (cutoffHz (P (k * 3)), P (k * 3 + 1), 1.0 / std::max (0.1f, P (k * 3 + 2)) * 1.4, c.sr);
+        for (int i = 0; i < n; ++i)
+        {
+            float y = in[0][(size_t) i];
+            for (int k = 0; k < 4; ++k) if (P (k * 3 + 1) != 0.0f) y = b[k].run (y);
+            out[0][(size_t) i] = y;
+        }
+    }
+    Biquad b[4];
+};
+
+struct CutFilter : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "cuts", "Low cut / high cut", "EQ", "Clears out rumble below and fizz above. Fully open, it does nothing",
+            { { "in", "In" } }, { { "out", "Out" } },
+            { { "lowcut", "Low cut", 0, 1, 0, Fmt::Freq }, { "highcut", "High cut", 0, 1, 1, Fmt::Freq } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const bool lowOn = P (0) > 0.001f, highOn = P (1) < 0.999f;
+        if (lowOn) hp.highPass (cutoffHz (P (0)), c.sr);
+        if (highOn) lp.lowPass (cutoffHz (P (1)), c.sr);
+        for (int i = 0; i < n; ++i)
+        {
+            float y = in[0][(size_t) i];
+            if (lowOn) y = hp.run (y);
+            if (highOn) y = lp.run (y);
+            out[0][(size_t) i] = y;
+        }
+    }
+    Biquad hp, lp;
+};
+
 // Turns a gate and up to four pitch signals into note-on and note-off events, for playing another plugin.
 // A note starts when the gate goes up, ends when it drops, and re-plays if its pitch changes while held.
 struct NoteTracker
@@ -601,7 +1076,11 @@ inline const std::vector<TypeEntry>& registry()
         entry<Oscillator>(), entry<MultiOsc>(), entry<Noise>(),
         entry<HitEnv>(), entry<Adsr>(),
         entry<Filter>(),
-        entry<Drive>(),
+        entry<Drive>(), entry<HardClip>(), entry<Bitcrusher>(),
+        entry<Eq3>(), entry<ParamEq>(), entry<CutFilter>(),
+        entry<Reverb<kRoom>>(), entry<Reverb<kHall>>(), entry<Reverb<kPlate>>(),
+        entry<DigitalDelay>(), entry<TapeEcho>(), entry<PingPong>(),
+        entry<Chorus>(), entry<Phaser>(), entry<Flanger>(),
         entry<Lfo>(),
         entry<DrumSeq>(), entry<NoteSeq>(), entry<ChordGen>(),
         entry<Vca>(), entry<Mixer4>(), entry<Atten>(), entry<OutputModule>() };
@@ -611,7 +1090,7 @@ inline const std::vector<TypeEntry>& registry()
 // Menu headings, in the order they are shown
 inline const std::vector<const char*>& shelves()
 {
-    static const std::vector<const char*> s { "Sources", "Shapers", "Filters", "Distortion", "Movers", "Notes and rhythm", "Utilities", "Your plugins" };
+    static const std::vector<const char*> s { "Sources", "Shapers", "Filters", "EQ", "Distortion", "Reverb", "Delay and echo", "Movement", "Movers", "Notes and rhythm", "Utilities", "Your plugins" };
     return s;
 }
 } // namespace n2m

@@ -50,16 +50,21 @@ Cubase. Tick things off here as they land.
 - [ ] Pattern chaining
 - [ ] Bigger Ideas libraries per sound
 
-## Stage 4: effects and thickeners
+## Stage 4: effects and thickeners (most done, v0.1.6)
 
-- [ ] Reverb: room, hall, plate
-- [ ] Delay: digital, tape, ping-pong (all tempo-synced)
-- [ ] Distortion: hard clip, bitcrusher
-- [ ] Movement: chorus, phaser, flanger
-- [ ] EQ: 3-band, parametric, low cut / high cut
+- [x] Reverb: room, hall, plate (stereo in and out)
+- [x] Delay: digital, tape echo, ping-pong. Times are note lengths and follow the tempo
+- [x] Distortion: hard clip, bitcrusher (alongside soft saturation)
+- [x] Movement: chorus, phaser, flanger. Rates are note lengths, in time with the song
+- [x] EQ: 3-band, parametric (4 bands), low cut / high cut
+- [x] Pad now runs through chorus and hall reverb in stereo; stab through plate reverb
+- [x] Add units menu widened to three columns to hold them
 - [ ] Dynamics: compressor with sidechain, transient shaper, ducker
 - [ ] Tripler, Harmoniser, stereo width, pan
 - [ ] Send effects on the mixing desk
+
+Every effect is held to two rules by tests: at 0% it passes the sound through exactly, and silence in gives
+silence out.
 
 ## Stage 5: movers and utilities
 

@@ -15,8 +15,9 @@ constexpr int hostW = 360, hostSeqH = 58;
 inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : 0; }
 inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq != Seq::None ? seqW : 0; }
 constexpr int perRow = 5;
-inline int cols (const Info& i) { return (int) std::min<size_t> (perRow, i.params.size()); }
-inline int rows (const Info& i) { return (int) ((i.params.size() + perRow - 1) / perRow); }
+inline int rowLen (const Info& i) { return i.perRow > 0 ? i.perRow : perRow; }
+inline int cols (const Info& i) { return (int) std::min<size_t> ((size_t) rowLen (i), i.params.size()); }
+inline int rows (const Info& i) { return (int) ((i.params.size() + (size_t) rowLen (i) - 1) / (size_t) rowLen (i)); }
 inline int width (const Info& i)
 {
     const int jacks = (int) (i.ins.size() + i.outs.size());
@@ -378,7 +379,12 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
         auto* vca = add ("vca"); vca->set ("level", 0.8f);
         cable (ch, "v1", osc, "p1"); cable (ch, "v2", osc, "p2"); cable (ch, "v3", osc, "p3"); cable (ch, "v4", osc, "p4");
         cable (ch, "gate", env, "gate"); cable (osc, "out", filt, "in"); cable (lfo, "out", filt, "cutoff");
-        cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv"); cable (vca, "out", out, "left");
+        // Chorus for width, then a hall, in stereo all the way to the Output
+        auto* chorus = add ("chorus"); chorus->set ("rate", 2); chorus->set ("mix", 0.4f);
+        auto* hall = add ("hall"); hall->set ("mix", 0.35f); hall->set ("decay", 0.65f);
+        cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv"); cable (vca, "out", chorus, "in");
+        cable (chorus, "outl", hall, "inl"); cable (chorus, "outr", hall, "inr");
+        cable (hall, "outl", out, "left"); cable (hall, "outr", out, "right");
     }
     else if (b->type == "stab")
     {
@@ -390,7 +396,9 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
         auto* drive = add ("drive"); drive->set ("drive", 0.15f);
         cable (ch, "v1", osc, "p1"); cable (ch, "v2", osc, "p2"); cable (ch, "v3", osc, "p3"); cable (ch, "v4", osc, "p4");
         cable (ch, "gate", snap, "trig"); cable (osc, "out", filt, "in"); cable (snap, "out", filt, "cutoff");
-        cable (filt, "out", vca, "in"); cable (snap, "out", vca, "cv"); cable (vca, "out", drive, "in"); cable (drive, "out", out, "left");
+        auto* plate = add ("plate"); plate->set ("mix", 0.22f); plate->set ("decay", 0.4f);
+        cable (filt, "out", vca, "in"); cable (snap, "out", vca, "cv"); cable (vca, "out", drive, "in");
+        cable (drive, "out", plate, "inl"); cable (plate, "outl", out, "left"); cable (plate, "outr", out, "right");
     }
     tidy (*b);
     return b;

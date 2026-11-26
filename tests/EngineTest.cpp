@@ -459,6 +459,54 @@ int main()
         CHECK (firstOf (*other.boards[0], "noteseq")->patternLink == 1 && firstOf (*other.boards[2], "drumseq")->patternLink == 1 && firstOf (*other.boards[1], "noteseq")->patternLink == 0, "each sequencer comes back in its group");
     }
 
+    // 22b. Follow link: the follower keeps its own pattern and moves, in key, to match the leader's line
+    {
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("bass", 48000)); rack.addBoard (makeBoard ("lead", 48000));
+        auto& lb = *rack.boards[1];
+        auto* leader = firstOf (*rack.boards[0], "noteseq"); auto* follower = firstOf (lb, "noteseq");
+        rack.boards[0]->mute.store (true);                       // listen to the follower alone
+        for (auto* q : { leader, follower })
+        {
+            q->set ("follow", 0); q->set ("gatelen", 1.0f);
+            for (int i = 0; i < kMaxSteps; ++i) { q->data[(size_t) i].store (1.0f); q->data[(size_t) (kMaxSteps + i)].store (0.0f); }
+        }
+        // a plain sine lead so pitch is easy to measure
+        firstOf (lb, "filter")->set ("cutoff", 1.0f); firstOf (lb, "filter")->set ("modamt", 0.0f); firstOf (lb, "filter")->set ("res", 0.0f);
+        for (auto& m : lb.modules) if (std::string (m->info->type) == "osc") { m->set ("wave", 0); m->set ("fine", 0); }
+        follower->set ("octave", -1);
+        follower->data[(size_t) (kMaxSteps + 3)].store (2.0f);   // the follower's own shape: step 4 is a third up
+        const std::string followerBefore = [&] { std::string t; for (int i = 0; i < 32; ++i) t += std::to_string ((int) follower->data[(size_t) (kMaxSteps + i)].load()) + ","; return t; }();
+
+        rack.linkPattern (*leader, 3, 3);
+        rack.linkPattern (*follower, 3, 4);
+        rack.root.store (9); rack.scale.store (0);               // A minor
+        const double a3 = 220.0;
+        auto hz = [&] { auto a = render (rack, 1); return roughHz (a.l, 30000, 80000, 48000); };
+        CHECK (std::abs (hz() - a3) < 6.0, "leader on the key note: the follower plays where it was written");
+        for (int i = 0; i < kMaxSteps; ++i) leader->data[(size_t) (kMaxSteps + i)].store (2.0f);     // leader moves up a third (A to C)
+        rack.pushPattern (*leader);
+        const std::string followerAfter = [&] { std::string t; for (int i = 0; i < 32; ++i) t += std::to_string ((int) follower->data[(size_t) (kMaxSteps + i)].load()) + ","; return t; }();
+        CHECK (followerAfter == followerBefore, "the follower's own pattern is left exactly as it was");
+        CHECK (std::abs (hz() - 261.6) < 7.0, "the leader moves up a third and the follower moves with it, in key");
+        for (int i = 0; i < kMaxSteps; ++i) leader->data[(size_t) (kMaxSteps + i)].store (9.0f);     // an octave and a third: still just a third for the follower
+        CHECK (std::abs (hz() - 261.6) < 7.0, "an octave jump in the leader doesn't throw the follower an octave");
+        for (int i = 0; i < kMaxSteps; ++i) leader->data[(size_t) (kMaxSteps + i)].store (i < 16 ? -1.0f : 0.0f);   // one step below the key note
+        CHECK (std::abs (hz() - 196.0) < 6.0, "the leader steps down and the follower steps down");
+        // the leader resting doesn't drop the follower back: it holds the leader's last note
+        for (int i = 0; i < kMaxSteps; ++i) { leader->data[(size_t) (kMaxSteps + i)].store (2.0f); leader->data[(size_t) i].store (i % 16 == 0 ? 1.0f : 0.0f); }
+        CHECK (std::abs (hz() - 261.6) < 7.0, "while the leader rests, the follower stays with its last note");
+        CHECK (leaderShift (*leader, 5) == 2 && leaderShift (*leader, 16) == 2, "the shift is read from the leader's pattern");
+        // unlinked: back to its own key
+        rack.linkPattern (*follower, 0, 4);
+        CHECK (std::abs (hz() - a3) < 6.0, "unlinked, the follower goes back to where it was written");
+        // a follower with no leader in its group just plays as written
+        rack.linkPattern (*leader, 0, 3); rack.linkPattern (*follower, 5, 4);
+        CHECK (std::abs (hz() - a3) < 6.0, "a follower with nothing to follow plays as written");
+        Rack other; other.prepare (48000);
+        CHECK (other.load (rack.save()) && firstOf (*other.boards[1], "noteseq")->patternShare == 4, "the follow setting saves with the project");
+    }
+
     // 23. Links: knobs in the same group move together, by knob position
     {
         Rack rack; rack.prepare (48000);

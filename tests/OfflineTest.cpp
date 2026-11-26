@@ -144,6 +144,15 @@ int main (int argc, char** argv)
         FakeCubase stopped; r.setPlayHead (&stopped);
         CHECK (run (r, stopped, 1.0) > 0.05f, "the re-cabled kick still sounds");
 
+        // The board is wider and taller than the window, so it scrolls both ways
+        auto* vp = view.findParentComponentOfClass<juce::Viewport>();
+        CHECK (vp != nullptr && view.getWidth() > vp->getWidth() + 200 && view.getHeight() > vp->getHeight() + 100, "the board has room to scroll sideways and down");
+        vp->setViewPosition (200, 120);
+        if (vp->getViewPositionX() != 200 || vp->getViewPositionY() != 120)
+            std::printf ("view %d x %d, window %d x %d, position %d, %d\n", view.getWidth(), view.getHeight(), vp->getWidth(), vp->getHeight(), vp->getViewPositionX(), vp->getViewPositionY());
+        CHECK (vp->getViewPositionX() == 200 && vp->getViewPositionY() == 120, "it scrolls left to right and up and down");
+        vp->setViewPosition (0, 0);
+
         // Switching tabs shows only that sound
         ed->selectTab (2);
         CHECK (view.board == r.rack.boards[2].get(), "another tab shows another board");

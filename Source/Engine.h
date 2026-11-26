@@ -155,6 +155,8 @@ struct Ctx
     int root = 2;                // key note, 0 = C
     const int* scale = nullptr;  // 7 intervals
     const Timeline* chords = nullptr;
+    // Per link group: the note sequencer the others follow (nullptr if the group has none)
+    const struct Module* leaders[kLinkGroups + 1] {};
 };
 
 using Buf = std::array<float, kBlock>;
@@ -209,7 +211,7 @@ struct Module
     // Links (set from the screen): things in the same group, on any tab, change together
     std::vector<int> paramLink;                        // per knob: 0 = not linked, 1.. = group A, B, C ...
     int patternLink = 0;                               // a sequencer's group, 0 = not linked
-    int patternShare = 3;                              // what it shares: 1 rhythm, 2 notes, 3 both
+    int patternShare = 3;                              // what it shares: 1 rhythm, 2 notes, 3 both, 4 = keeps its own pattern and moves to match the group's leader
     bool live = true;                                  // can its signal reach the board's output
 };
 
@@ -579,7 +581,7 @@ struct Rack
     // Putting a sequencer into a group: it takes the group's pattern if the group already has members
     void linkPattern (Module& mod, int group, int share)
     {
-        mod.patternShare = share >= 1 && share <= 3 ? share : 3;
+        mod.patternShare = share >= 1 && share <= 4 ? share : 3;
         mod.patternLink = 0;
         if (group > 0)
             for (auto& b : boards)
@@ -625,6 +627,11 @@ struct Rack
         c.root = root.load();
         c.scale = scales()[(size_t) std::min ((int) scales().size() - 1, std::max (0, scale.load()))].iv;
         c.chords = &timeline;
+        // A group's leader is its first note sequencer that isn't itself following
+        for (auto& b : boards)
+            for (auto& m : b->modules)
+                if (m->patternLink > 0 && m->patternShare != 4 && m->info->seq == Seq::Note && c.leaders[m->patternLink] == nullptr)
+                    c.leaders[m->patternLink] = m.get();
         bool anySolo = false;
         for (auto& b : boards) anySolo = anySolo || b->solo.load();
         for (int pos = 0; pos < n; pos += kBlock)
@@ -800,7 +807,7 @@ struct Rack
             else if (tag == "k")
             {
                 int uid = 0, group = 0, share = 3; ls >> uid >> group >> share;
-                if (auto* m = b->find (uid)) { m->patternLink = std::min (kLinkGroups, std::max (0, group)); m->patternShare = share >= 1 && share <= 3 ? share : 3; }
+                if (auto* m = b->find (uid)) { m->patternLink = std::min (kLinkGroups, std::max (0, group)); m->patternShare = share >= 1 && share <= 4 ? share : 3; }
             }
             else if (tag == "x")
             {

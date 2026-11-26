@@ -147,6 +147,10 @@ public:
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void tick();
+    // Drag the empty background to move around the board
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
 
     // Cable dragging, driven by the module the drag started on
     void beginCable (ModuleComp&, bool isOut, int port, juce::Point<int> at);
@@ -167,6 +171,7 @@ private:
     Nebula2ModulationProcessor& proc;
     juce::OwnedArray<ModuleComp> comps;
     struct Drag { bool active = false, fromOut = true; int uid = 0, port = 0; juce::Point<int> at; } drag;
+    juce::Point<int> panStart;
 };
 
 // The tabs along the top: one per sound, plus the + button

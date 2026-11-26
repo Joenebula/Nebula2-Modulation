@@ -373,6 +373,28 @@ struct DrumSeq : Module
     float vel = 0.72f;
 };
 
+// For a sequencer that follows another: how far the leader's line has moved from the key note at this step,
+// in steps of the key. The leader's most recent note counts, so the follower holds through the leader's rests.
+// Folded to within three steps either way, so an octave jump in the leader doesn't throw the follower an octave.
+inline int leaderShift (const Module& leader, long step)
+{
+    const int li = leader.paramIndex ("length"), bi = leader.paramIndex ("bars");
+    if (li < 0 || bi < 0) return 0;
+    const int len = loopSteps (leader.P (li), leader.P (bi));
+    const int at = wrapStep (step, len);
+    for (int back = 0; back < len; ++back)
+    {
+        const int k = wrapStep (at - back, len);
+        if (leader.data[(size_t) k].load (std::memory_order_relaxed) > 0.5f)
+        {
+            int d = (int) std::lround (leader.data[(size_t) (kMaxSteps + k)].load (std::memory_order_relaxed));
+            d = ((d % 7) + 7) % 7;
+            return d > 3 ? d - 7 : d;
+        }
+    }
+    return 0;
+}
+
 // Note sequencer: up to 8 bars. First row of data = note on/off, second row = which note of the key.
 // Notes are stored as scale steps, so changing the key moves every pattern with it.
 // With Follow on, the steps count from the chord playing now, so the line moves with the chords.
@@ -414,6 +436,9 @@ struct NoteSeq : Module
                             const int ci = c.chords->indexAt (s);
                             if (ci >= 0) { deg += c.chords->slots[(size_t) ci].deg; lift = c.chords->slots[(size_t) ci].tr; }
                         }
+                        // Linked as a follower: keep this pattern, and move it to match the leader's line
+                        if (patternShare == 4 && patternLink > 0 && c.leaders[patternLink] != nullptr && c.leaders[patternLink] != this)
+                            deg += leaderShift (*c.leaders[patternLink], s);
                         const int semis = c.root + degreeToSemis (deg, c.scale) + lift + 12 * (int) std::lround (P (0));
                         pitch = (float) semis / 12.0f;
                         left = gateLen;

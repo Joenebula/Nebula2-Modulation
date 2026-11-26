@@ -94,6 +94,7 @@ Joe: "lock a bass to a string and change one, the other changes also", for anyth
 - [x] A drum sequencer and a note sequencer can share rhythm
 - [x] Knob links: right-click any knob to put it in a group (A to H). Knobs in a group move together, by knob position
 - [x] Joining a group takes the group's pattern or position; links save with the project
+- [x] Follow link (v0.1.4): a note sequencer keeps its own pattern and moves, in key, to match the group's leader (the first sequencer in the group that isn't following). This is what Joe meant by locking; a sequencer joining a group now follows by default
 - [ ] A linked knob moved by a cable (not by hand) doesn't move the others
 - [ ] Offsets between linked things (the same line a third up, a knob that moves half as far)
 
@@ -105,7 +106,8 @@ Joe: "lock a bass to a string and change one, the other changes also", for anyth
 
 ## Screen polish (Joe: "we can work the UI later")
 
-- [ ] Drag the board background to move around; zoom out to see a whole board
+- [x] Drag the board background to move around; the board always has spare room to the right and below (v0.1.4)
+- [ ] Zoom out to see a whole board
 - [ ] Add units menu: show a picture of each unit, so you can see what you're adding
 
 ## Later units

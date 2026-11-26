@@ -602,7 +602,7 @@ juce::Point<int> ModuleComp::jackCentre (bool isOut, int port) const
 static juce::String linkText (const Module& m)
 {
     if (m.patternLink <= 0) return "LINK";
-    return "LINK " + groupLetter (m.patternLink) + (m.patternShare == 1 ? ": RHYTHM" : m.patternShare == 2 ? ": NOTES" : ": RHYTHM + NOTES");
+    return "LINK " + groupLetter (m.patternLink) + (m.patternShare == 1 ? ": RHYTHM" : m.patternShare == 2 ? ": NOTES" : m.patternShare == 4 ? ": FOLLOWS" : ": RHYTHM + NOTES");
 }
 
 juce::Rectangle<int> ModuleComp::linkArea() const
@@ -626,17 +626,26 @@ void ModuleComp::linkMenu()
         m.addItem (g + 1, "Group " + groupLetter (g) + (n > 0 ? "   (" + juce::String (n) + (n == 1 ? " pattern)" : " patterns)") : ""), true, module.patternLink == g);
     }
     m.addSeparator();
-    m.addSectionHeader ("What it shares");
-    m.addItem (103, "Rhythm and notes", true, module.patternShare == 3);
-    m.addItem (101, "Rhythm only", true, module.patternShare == 1);
-    m.addItem (102, "Notes only", true, module.patternShare == 2);
+    m.addSectionHeader ("Follow");
+    if (module.info->seq == Seq::Note)
+        m.addItem (104, "Keep my pattern, move to match the others", true, module.patternShare == 4);
+    m.addSectionHeader ("Or share the same pattern");
+    m.addItem (103, "Same rhythm and notes", true, module.patternShare == 3);
+    m.addItem (101, "Same rhythm only", true, module.patternShare == 1);
+    m.addItem (102, "Same notes only", true, module.patternShare == 2);
     juce::Component::SafePointer<ModuleComp> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (linkArea())), [safe] (int r)
     {
         if (safe == nullptr || r <= 0) return;
         auto& mod = safe->module;
         if (r > 100) safe->proc.rack.linkPattern (mod, mod.patternLink, r - 100);
-        else safe->proc.rack.linkPattern (mod, r - 1, mod.patternShare);
+        else
+        {
+            // A note sequencer joining a group that already has members follows them, keeping its own pattern,
+            // unless it was already set to share
+            const bool joining = mod.patternLink == 0 && r - 1 > 0 && safe->proc.rack.membersOf (r - 1, true) > 0;
+            safe->proc.rack.linkPattern (mod, r - 1, joining && mod.info->seq == Seq::Note ? 4 : mod.patternShare);
+        }
         safe->owner.repaintAll();
     });
 }
@@ -788,7 +797,7 @@ void BoardView::fitToContent()
 {
     int w = 0, h = 0;
     for (auto* c : comps) { w = juce::jmax (w, c->getRight()); h = juce::jmax (h, c->getBottom()); }
-    w += 60; h += 60;
+    w += 500; h += 320;        // always some room to scroll into and put new units
     if (auto* vp = findParentComponentOfClass<juce::Viewport>())
     {
         // Leave room for the scroll bars, so one appearing doesn't summon the other
@@ -898,6 +907,25 @@ void BoardView::endCable (juce::Point<int> at)
     drag.active = false;
     refreshLive();
 }
+
+void BoardView::mouseDown (const juce::MouseEvent& e)
+{
+    if (auto* vp = findParentComponentOfClass<juce::Viewport>()) panStart = vp->getViewPosition();
+    juce::ignoreUnused (e);
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+}
+
+void BoardView::mouseDrag (const juce::MouseEvent& e)
+{
+    // Screen distance, because the board itself moves under the mouse as it scrolls
+    if (auto* vp = findParentComponentOfClass<juce::Viewport>())
+    {
+        const auto moved = e.getScreenPosition() - e.getMouseDownScreenPosition();
+        vp->setViewPosition (panStart.x - moved.x, panStart.y - moved.y);
+    }
+}
+
+void BoardView::mouseUp (const juce::MouseEvent&) { setMouseCursor (juce::MouseCursor::NormalCursor); }
 
 bool BoardView::isInterestedInFileDrag (const juce::StringArray& files)
 {

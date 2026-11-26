@@ -14,7 +14,7 @@ static void run (Nebula2ModulationProcessor& p, double seconds)
     for (int b = 0; b < (int) (48000 * seconds / 256); ++b) { juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m; p.processBlock (buf, m); }
 }
 
-int main (int, char** argv)
+int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
     const juce::String dir (argv[1]);
@@ -66,5 +66,25 @@ int main (int, char** argv)
     p.rack.addBoard (n2m::makeBoard ("empty", 48000));
     e->selectTab ((int) p.rack.boards.size() - 1);
     shoot (*ed, dir + "/ui_empty.png");
+
+    // Plugin slots: one empty, and (when a .vst3 path is given) one holding a plugin, then that plugin's window
+    {
+        auto& eb = *p.rack.boards.back();
+        p.rack.addModule (eb, "plugin", 24, 160);
+        auto* slot = dynamic_cast<n2m::HostedModule*> (p.rack.addModule (eb, "plugin", 24, 360));
+        if (argc > 2 && slot != nullptr)
+        {
+            const auto found = n2m::pluginsInFile (argv[2]);
+            if (! found.empty()) slot->load (found[0]);
+        }
+        e->board().rebuild();
+        shoot (*ed, dir + "/ui_slots.png");
+        if (slot != nullptr && slot->hasPlugin())
+        {
+            e->hostOverlay.open (*slot, eb.name);
+            shoot (*ed, dir + "/ui_plugin_open.png");
+            e->hostOverlay.close();
+        }
+    }
     return 0;
 }

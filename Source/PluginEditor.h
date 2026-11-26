@@ -72,6 +72,40 @@ private:
 
 class BoardView;
 
+// On a Plugin slot: which plugin is in it, Load and Open
+class HostView : public juce::Component
+{
+public:
+    HostView (BoardView&, HostedModule&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void loadFile (const juce::String& path);
+private:
+    void showLoadMenu();
+    void refresh();
+    BoardView& owner; HostedModule& module;
+    juce::TextButton load { "Load" }, open { "Open" };
+    std::unique_ptr<juce::FileChooser> chooser;
+};
+
+// A hosted plugin's own window, shown over the whole screen with a way back
+class HostOverlay : public juce::Component
+{
+public:
+    HostOverlay();
+    ~HostOverlay() override;
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void open (HostedModule&, const juce::String& tabName);
+    void close();
+    HostedModule* showing = nullptr;
+private:
+    juce::TextButton back { "Back" };
+    juce::Viewport viewport;
+    std::unique_ptr<juce::AudioProcessorEditor> pluginEditor;
+    juce::String title;
+};
+
 // A module on the board: panel, knobs, jacks
 class ModuleComp : public juce::Component
 {
@@ -87,6 +121,7 @@ public:
     Module& module;
     std::unique_ptr<SeqView> seq;
     std::unique_ptr<ChordView> chords;
+    std::unique_ptr<HostView> host;
 private:
     BoardView& owner; Nebula2ModulationProcessor& proc; Board& board;
     juce::OwnedArray<ParamCell> cells;
@@ -94,7 +129,7 @@ private:
 };
 
 // The board for the selected tab: its modules and the cables between them
-class BoardView : public juce::Component
+class BoardView : public juce::Component, public juce::FileDragAndDropTarget
 {
 public:
     BoardView (Nebula2ModulationProcessor&);
@@ -112,8 +147,13 @@ public:
     void endCable (juce::Point<int> at);
     ModuleComp* compFor (int uid) const;
 
+    // Dropping a .vst3 file on the board puts it in a new Plugin slot there
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
     Board* board = nullptr;
     std::function<void()> onChanged;
+    std::function<void (HostedModule&)> onOpenPlugin;
 private:
     bool findJack (juce::Point<int> at, ModuleComp*& comp, bool& isOut, int& port) const;
     void drawCable (juce::Graphics&, juce::Point<float> a, juce::Point<float> b, juce::Colour, bool ghost) const;
@@ -198,6 +238,7 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void selectTab (int index);
     n2m::AddPanel addPanel;      // public so the snapshot test can open it
+    n2m::HostOverlay hostOverlay;
     n2m::BoardView& board() { return boardView; }   // for the tests
     void addUnits (const std::vector<std::string>& types);
 private:

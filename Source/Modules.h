@@ -543,6 +543,29 @@ struct MultiOsc : Module
     double phase[4][2] { { 0.0, 0.37 }, { 0.61, 0.13 }, { 0.29, 0.83 }, { 0.47, 0.71 } };
 };
 
+// Turns a gate and up to four pitch signals into note-on and note-off events, for playing another plugin.
+// A note starts when the gate goes up, ends when it drops, and re-plays if its pitch changes while held.
+struct NoteTracker
+{
+    int sounding[4] { -1, -1, -1, -1 };
+    bool gate = false;
+    static int noteOf (float pitch) { return std::min (127, std::max (0, (int) std::lround (pitch * 12.0f) + 60)); }
+    // emit (note, velocity): velocity 0 means note off
+    template <typename Emit>
+    void step (bool gateNow, const float* pitch, const char* plugged, int velocity, Emit&& emit)
+    {
+        for (int v = 0; v < 4; ++v)
+        {
+            const int want = gateNow && plugged[v] ? noteOf (pitch[v]) : -1;
+            if (want == sounding[v]) continue;
+            if (sounding[v] >= 0) emit (sounding[v], 0);
+            if (want >= 0) emit (want, std::min (127, std::max (1, velocity)));
+            sounding[v] = want;
+        }
+        gate = gateNow;
+    }
+};
+
 // ---------------------------------------------------------------- The list of every module type
 // The order here is the order inside each heading of the Add menu.
 template <typename T> TypeEntry entry() { return { &T::desc(), [] { return std::unique_ptr<Module> (new T()); } }; }
@@ -563,7 +586,7 @@ inline const std::vector<TypeEntry>& registry()
 // Menu headings, in the order they are shown
 inline const std::vector<const char*>& shelves()
 {
-    static const std::vector<const char*> s { "Sources", "Shapers", "Filters", "Distortion", "Movers", "Notes and rhythm", "Utilities" };
+    static const std::vector<const char*> s { "Sources", "Shapers", "Filters", "Distortion", "Movers", "Notes and rhythm", "Utilities", "Your plugins" };
     return s;
 }
 } // namespace n2m

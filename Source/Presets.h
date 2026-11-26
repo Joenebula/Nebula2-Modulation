@@ -11,8 +11,9 @@ namespace lay
 constexpr int cell = 54, cellH = 62, header = 26, jackW = 40, jackH = 44, pad = 8;
 constexpr int drumSeqH = 62, noteSeqH = 118, seqW = 16 * 20;
 constexpr int chordW = 8 * 60, chordTileH = 28, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
-inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : 0; }
-inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq != Seq::None ? seqW : 0; }
+constexpr int hostW = 360, hostSeqH = 58;
+inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : 0; }
+inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq != Seq::None ? seqW : 0; }
 constexpr int perRow = 5;
 inline int cols (const Info& i) { return (int) std::min<size_t> (perRow, i.params.size()); }
 inline int rows (const Info& i) { return (int) ((i.params.size() + perRow - 1) / perRow); }

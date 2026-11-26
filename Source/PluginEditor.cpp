@@ -374,11 +374,146 @@ void ChordView::tick()
 }
 
 //==============================================================================
+HostView::HostView (BoardView& o, HostedModule& m) : owner (o), module (m)
+{
+    addAndMakeVisible (load); addAndMakeVisible (open);
+    load.onClick = [this] { showLoadMenu(); };
+    open.onClick = [this] { if (module.hasPlugin() && owner.onOpenPlugin) owner.onOpenPlugin (module); };
+    setSize (lay::hostW, lay::hostSeqH);
+    refresh();
+}
+
+void HostView::refresh() { open.setEnabled (module.hasPlugin()); repaint(); }
+void HostView::resized() { load.setBounds (0, 30, 80, 24); open.setBounds (86, 30, 80, 24); }
+
+void HostView::paint (juce::Graphics& g)
+{
+    const bool failed = module.status.isNotEmpty();
+    g.setFont (font (13.0f, Weight::SemiBold));
+    g.setColour (module.hasPlugin() ? juce::Colours::white : n7);
+    g.drawText (module.hasPlugin() ? module.pluginName() : "Empty", 0, 2, getWidth(), 18, juce::Justification::centredLeft, true);
+    g.setFont (helpFont());
+    g.setColour (failed ? bandOrange : n7);
+    g.drawFittedText (failed ? module.status : module.hasPlugin() ? "Open shows its own window" : "Load a plugin, or drop a .vst3 file on the board",
+                      172, 30, getWidth() - 172, 24, juce::Justification::centredLeft, 2, 0.8f);
+}
+
+void HostView::loadFile (const juce::String& path)
+{
+    const auto found = pluginsInFile (path);
+    if (found.empty()) module.status = "That file isn't a VST3 plugin this can load";
+    else module.load (found[0]);
+    refresh();
+}
+
+void HostView::showLoadMenu()
+{
+    juce::PopupMenu menu;
+    const auto recent = recentPlugins();
+    if (! recent.empty()) menu.addSectionHeader ("Loaded before");
+    int id = 1;
+    for (auto& d : recent) menu.addItem (id++, d.name + (d.isInstrument ? "" : "  (effect)"));
+    if (! recent.empty()) menu.addSeparator();
+    menu.addItem (1000, "Browse for a .vst3...");
+    if (module.hasPlugin()) menu.addItem (1001, "Empty this slot");
+    juce::Component::SafePointer<HostView> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&load), [safe, recent] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        if (r == 1001) { safe->module.unload(); safe->refresh(); return; }
+        if (r < 1000) { safe->module.load (recent[(size_t) (r - 1)]); safe->refresh(); return; }
+        juce::File start;
+       #if JUCE_WINDOWS
+        start = juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory).getChildFile ("Common Files").getChildFile ("VST3");
+       #elif JUCE_MAC
+        start = juce::File ("~/Library/Audio/Plug-Ins/VST3");
+       #else
+        start = juce::File ("~/.vst3");
+       #endif
+        safe->chooser = std::make_unique<juce::FileChooser> ("Choose a VST3 plugin", start, "*.vst3");
+        safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectDirectories,
+                                    [safe] (const juce::FileChooser& fc)
+                                    {
+                                        if (safe != nullptr && fc.getResult() != juce::File()) safe->loadFile (fc.getResult().getFullPathName());
+                                    });
+    });
+}
+
+//==============================================================================
+HostOverlay::HostOverlay()
+{
+    addAndMakeVisible (back);
+    addAndMakeVisible (viewport);
+    back.onClick = [this] { close(); };
+    addClosingListener (this, [this] (HostedModule* m) { if (m == showing) close(); });
+    setVisible (false);
+}
+
+HostOverlay::~HostOverlay() { removeClosingListener (this); close(); }
+
+void HostOverlay::open (HostedModule& m, const juce::String& tabName)
+{
+    close();
+    auto* inst = m.instance();
+    if (inst == nullptr) return;
+    pluginEditor.reset (inst->createEditorIfNeeded());
+    if (pluginEditor == nullptr) pluginEditor = std::make_unique<juce::GenericAudioProcessorEditor> (*inst);   // a plugin with no window of its own
+    showing = &m;
+    title = m.pluginName() + "   on " + tabName;
+    back.setButtonText ("Back to " + tabName);
+    viewport.setViewedComponent (pluginEditor.get(), false);
+    setVisible (true);
+    toFront (true);
+    resized();
+}
+
+void HostOverlay::close()
+{
+    viewport.setViewedComponent (nullptr, false);
+    pluginEditor.reset();          // the window goes before the plugin can
+    showing = nullptr;
+    setVisible (false);
+}
+
+void HostOverlay::resized()
+{
+    back.setBounds (space4, (topbarH - 28) / 2, 170, 28);
+    auto area = getLocalBounds().withTrimmedTop (topbarH);
+    if (pluginEditor != nullptr)
+    {
+        // Centred when it fits; scrollable when the plugin's window is bigger than ours
+        const int w = juce::jmin (area.getWidth(), pluginEditor->getWidth() + (pluginEditor->getHeight() > area.getHeight() ? viewport.getScrollBarThickness() : 0));
+        const int h = juce::jmin (area.getHeight(), pluginEditor->getHeight() + (pluginEditor->getWidth() > area.getWidth() ? viewport.getScrollBarThickness() : 0));
+        viewport.setBounds (area.withSizeKeepingCentre (w, h));
+    }
+    else viewport.setBounds (area);
+}
+
+void HostOverlay::paint (juce::Graphics& g)
+{
+    g.setGradientFill (juce::ColourGradient (windowTop, 0, 0, windowBottom, 0, (float) getHeight(), false));
+    g.fillAll();
+    g.setFont (titleFont());
+    g.setColour (n8);
+    g.drawText (title, 200, 0, getWidth() - 216, topbarH, juce::Justification::centredLeft, true);
+    dividerH (g, 0, getWidth(), topbarH - 2);
+}
+
+//==============================================================================
 ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, Module& m) : module (m), owner (o), proc (p), board (b)
 {
     const auto& info = *m.info;
     setBounds ((int) m.x, (int) m.y, lay::width (info), lay::height (info));
-    if (info.seq == Seq::Chord)
+    if (info.seq == Seq::Host)
+    {
+        if (auto* hm = dynamic_cast<HostedModule*> (&m))
+        {
+            host = std::make_unique<HostView> (o, *hm);
+            addAndMakeVisible (*host);
+            host->setTopLeftPosition ((getWidth() - lay::hostW) / 2, lay::header);
+        }
+    }
+    else if (info.seq == Seq::Chord)
     {
         chords = std::make_unique<ChordView> (p, m);
         addAndMakeVisible (*chords);
@@ -648,6 +783,27 @@ void BoardView::endCable (juce::Point<int> at)
     }
     drag.active = false;
     refreshLive();
+}
+
+bool BoardView::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files) if (f.endsWithIgnoreCase (".vst3")) return board != nullptr;
+    return false;
+}
+
+void BoardView::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    if (board == nullptr) return;
+    for (auto& f : files)
+    {
+        if (! f.endsWithIgnoreCase (".vst3")) continue;
+        const auto found = pluginsInFile (f);
+        if (found.empty()) continue;
+        if (auto* hm = dynamic_cast<HostedModule*> (proc.rack.addModule (*board, "plugin", (float) juce::jmax (8, x - 40), (float) juce::jmax (8, y - 20))))
+            hm->load (found[0]);
+        x += 40; y += 40;
+    }
+    rebuild();
 }
 
 void BoardView::tick()
@@ -1046,7 +1202,7 @@ juce::Rectangle<int> AddPanel::card() const
 {
     int total = 0;
     for (auto* s : shelves()) { juce::ignoreUnused (s); total += kHeadH; }
-    total += (int) registry().size() * kRowH;
+    total += (int) allTypes().size() * kRowH;
     const int h = juce::jmin (getHeight() - 40, total / 2 + kHeadH + kRowH + 120);
     return juce::Rectangle<int> (kCardW, h).withCentre (getLocalBounds().getCentre());
 }
@@ -1057,19 +1213,20 @@ std::vector<AddPanel::Row> AddPanel::rows() const
     std::vector<Row> out;
     const auto c = card();
     int total = 0;
-    for (auto* s : shelves()) { total += kHeadH; for (auto& e : registry()) if (std::string (e.info->shelf) == s) total += kRowH; }
+    const auto types = allTypes();
+    for (auto* s : shelves()) { total += kHeadH; for (auto* t : types) if (std::string (t->shelf) == s) total += kRowH; }
     const int colW = (kCardW - 48) / 2;
     int col = 0, y = c.getY() + 56, used = 0;
     for (auto* s : shelves())
     {
         int block = kHeadH;
-        for (auto& e : registry()) if (std::string (e.info->shelf) == s) block += kRowH;
+        for (auto* t : types) if (std::string (t->shelf) == s) block += kRowH;
         if (col == 0 && used > 0 && used + block / 2 > total / 2) { col = 1; y = c.getY() + 56; }
         const int x = c.getX() + 20 + col * (colW + 8);
         out.push_back ({ { x, y, colW, kHeadH }, nullptr });
         y += kHeadH;
-        for (auto& e : registry())
-            if (std::string (e.info->shelf) == s) { out.push_back ({ { x, y, colW, kRowH }, e.info }); y += kRowH; }
+        for (auto* t : types)
+            if (std::string (t->shelf) == s) { out.push_back ({ { x, y, colW, kRowH }, t }); y += kRowH; }
         used += block;
     }
     return out;
@@ -1174,6 +1331,9 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addAndMakeVisible (mixer);
     mixer.onSelect = [this] (int i) { selectTab (i); tabs.showSelected(); };
 
+    addChildComponent (hostOverlay);
+    boardView.onOpenPlugin = [this] (HostedModule& m) { if (auto* b = current()) hostOverlay.open (m, b->name); };
+
     addChildComponent (addPanel);
     addPanel.onAdd = [this] (const std::vector<std::string>& types) { addUnits (types); };
 
@@ -1253,6 +1413,7 @@ bool Nebula2ModulationEditor::keyPressed (const juce::KeyPress& k)
 {
     if (k == juce::KeyPress::spaceKey && ! proc.hostPlaying.load()) { proc.preview.store (! proc.preview.load()); return true; }
     if (k == juce::KeyPress::escapeKey && addPanel.isVisible()) { addPanel.setVisible (false); return true; }
+    if (k == juce::KeyPress::escapeKey && hostOverlay.isVisible()) { hostOverlay.close(); return true; }
     return false;
 }
 
@@ -1283,5 +1444,6 @@ void Nebula2ModulationEditor::resized()
     mixer.setBounds (0, getHeight() - kMixerH, getWidth(), kMixerH);
     viewport.setBounds (0, topbarH + kTabsH, getWidth(), getHeight() - topbarH - kTabsH - kMixerH);
     addPanel.setBounds (getLocalBounds());
+    hostOverlay.setBounds (getLocalBounds());
     boardView.fitToContent();
 }

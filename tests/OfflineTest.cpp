@@ -31,7 +31,7 @@ static float run (Nebula2ModulationProcessor& p, FakeCubase& host, double second
     return peak;
 }
 
-int main()
+int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI init;
     FakeCubase host;
@@ -148,6 +148,126 @@ int main()
         ed->selectTab (2);
         CHECK (view.board == r.rack.boards[2].get(), "another tab shows another board");
         CHECK (view.compFor (drive->uid) == nullptr || view.compFor (drive->uid)->module.info != drive->info, "and none of the kick's modules");
+    }
+
+    // ---- Plugin slots: another VST3 running inside. Pass plugin paths on the command line. ----
+    // Argument 1: a plugin that plays by itself when the song plays (this plugin's own .vst3 does).
+    // Argument 2: an instrument that plays notes sent to it (Nebula2 Chord does).
+    if (argc > 1)
+    {
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        while (r.rack.boards.size() > 0) r.rack.removeBoard (0);
+        r.rack.addBoard (n2m::makeBoard ("empty", 48000));
+        auto& b = *r.rack.boards[0];
+        auto* out = b.modules[0].get();
+
+        CHECK (n2m::findType ("plugin") != nullptr, "the plugin slot is offered");
+        auto* slot = dynamic_cast<n2m::HostedModule*> (r.rack.addModule (b, "plugin", 0, 0));
+        CHECK (slot != nullptr && ! slot->hasPlugin(), "a new slot is empty");
+        r.rack.connect (b, slot->uid, 0, out->uid, 0); r.rack.connect (b, slot->uid, 1, out->uid, 1);
+        song.playing = true;
+        CHECK (run (r, song, 0.5) == 0.0f, "an empty slot is silent");
+
+        const auto found = n2m::pluginsInFile (argv[1]);
+        CHECK (! found.empty(), "the .vst3 file is recognised");
+        CHECK (n2m::pluginsInFile ("/nowhere/nothing.vst3").empty(), "a missing file is not");
+        if (! found.empty())
+        {
+            const auto err = slot->load (found[0]);
+            CHECK (err.isEmpty() && slot->hasPlugin(), "the plugin loads into the slot");
+            CHECK (slot->pluginName() == found[0].name, "the slot shows the plugin's name");
+            song.ppq = 0;
+            CHECK (run (r, song, 2.0) > 0.05f, "the plugin inside plays, in time with the song");
+            song.playing = false;
+            run (r, song, 6.0);
+            CHECK (run (r, song, 0.5) < 0.001f, "and stops when the song stops");
+
+            // The level knob at zero is silent
+            slot->set ("level", 0.0f);
+            song.playing = true; song.ppq = 0;
+            CHECK (run (r, song, 1.0) == 0.0f, "slot level at 0% is silent");
+            slot->set ("level", 1.0f);
+            song.playing = false; run (r, song, 6.0);
+
+            // Saved with the project, plugin and all
+            juce::MemoryBlock saved;
+            r.getStateInformation (saved);
+            Nebula2ModulationProcessor q2;
+            FakeCubase song2; q2.setPlayHead (&song2);
+            q2.setRateAndBufferSizeDetails (48000, 256);
+            q2.prepareToPlay (48000, 256);
+            q2.setStateInformation (saved.getData(), (int) saved.getSize());
+            n2m::HostedModule* back = nullptr;
+            for (auto& m : q2.rack.boards[0]->modules) if (auto* hm = dynamic_cast<n2m::HostedModule*> (m.get())) back = hm;
+            CHECK (back != nullptr && back->hasPlugin() && back->pluginName() == found[0].name, "the plugin comes back with the project");
+            song2.playing = true;
+            CHECK (run (q2, song2, 2.0) > 0.05f, "and plays");
+
+            // Its own window opens inside ours and closes again
+            std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+            auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+            ed->hostOverlay.open (*slot, "Sound");
+            CHECK (ed->hostOverlay.isVisible() && ed->hostOverlay.showing == slot && slot->instance()->getActiveEditor() != nullptr, "Open shows the plugin's own window");
+            ed->hostOverlay.close();
+            CHECK (! ed->hostOverlay.isVisible() && slot->instance()->getActiveEditor() == nullptr, "Back closes it");
+            // Emptying the slot while its window is open closes the window first
+            ed->hostOverlay.open (*slot, "Sound");
+            slot->unload();
+            CHECK (! ed->hostOverlay.isVisible() && ! slot->hasPlugin(), "emptying the slot closes its window");
+            // Deleting a slot whose window is open is safe too
+            slot->load (found[0]);
+            ed->hostOverlay.open (*slot, "Sound");
+            r.rack.removeModule (b, slot->uid);
+            CHECK (! ed->hostOverlay.isVisible(), "deleting the slot closes its window");
+            ed->board().rebuild();
+            song.playing = true; song.ppq = 0;
+            CHECK (run (r, song, 0.5) == 0.0f, "and the board is silent again");
+            song.playing = false;
+        }
+
+        // A plugin that can't be found leaves the slot empty with a reason, and doesn't break the board
+        auto* bad = dynamic_cast<n2m::HostedModule*> (r.rack.addModule (b, "plugin", 0, 0));
+        juce::PluginDescription missing; missing.name = "Not Installed"; missing.pluginFormatName = "VST3"; missing.fileOrIdentifier = "/nowhere/Not Installed.vst3";
+        CHECK (bad->load (missing).isNotEmpty() && ! bad->hasPlugin() && bad->status.isNotEmpty(), "a plugin that isn't installed says so");
+        CHECK (run (r, song, 0.2) == 0.0f, "and the rest keeps working");
+    }
+
+    if (argc > 2)
+    {
+        // An instrument played by the board's own cables: note sequencer -> plugin slot -> output
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        while (r.rack.boards.size() > 0) r.rack.removeBoard (0);
+        r.rack.addBoard (n2m::makeBoard ("empty", 48000));
+        auto& b = *r.rack.boards[0];
+        auto* out = b.modules[0].get();
+        auto* slot = dynamic_cast<n2m::HostedModule*> (r.rack.addModule (b, "plugin", 0, 0));
+        auto* seq = r.rack.addModule (b, "noteseq", 0, 0);
+        n2m::setNotes (*seq, n2m::noteIdeas ("lead")[1].gates, n2m::noteIdeas ("lead")[1].deg);
+        r.rack.connect (b, slot->uid, 0, out->uid, 0); r.rack.connect (b, slot->uid, 1, out->uid, 1);
+        const auto found = n2m::pluginsInFile (argv[2]);
+        CHECK (! found.empty() && slot->load (found[0]).isEmpty(), "the instrument loads");
+        song.playing = true;
+        const float alone = run (r, song, 2.0);
+        CHECK (slot->notesSent.load() == 0, "no cables into the slot, no notes sent");
+        song.playing = false; run (r, song, 8.0);
+        r.rack.connect (b, seq->uid, seq->outIndex ("pitch"), slot->uid, slot->inIndex ("p1"));
+        r.rack.connect (b, seq->uid, seq->outIndex ("gate"), slot->uid, slot->inIndex ("gate"));
+        song.playing = true; song.ppq = 0;
+        const float played = run (r, song, 2.0);
+        std::printf ("instrument: %s, level without notes %.4f, with notes from the sequencer %.4f\n", found.empty() ? "?" : found[0].name.toRawUTF8(), (double) alone, (double) played);
+        // (Nebula2 Chord also plays by itself when the song plays, so loudness alone can't prove the notes arrived)
+        CHECK (played > 0.02f, "the instrument sounds");
+        // two seconds at 124 BPM is a little over one bar of 16th notes
+        CHECK (slot->notesSent.load() >= 16 && slot->notesSent.load() <= 18, "every note from the sequencer's cables reaches the instrument");
+        song.playing = false;
+        run (r, song, 10.0);
+        CHECK (run (r, song, 0.5) < 0.002f, "the notes end when the song stops: nothing left hanging");
     }
 
     if (failures == 0) std::printf ("All passed\n");

@@ -4,6 +4,7 @@
 Nebula2ModulationProcessor::Nebula2ModulationProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 {
+    n2m::registerPluginSlot();
     n2m::loadStarter (rack);
 }
 

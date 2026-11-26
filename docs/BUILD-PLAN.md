@@ -70,8 +70,16 @@ Cubase. Tick things off here as they land.
 
 Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, Warmer and VenPressorDyn.
 
-- [ ] VST instrument slot: scan, load by drag and drop, open the plugin's window, save its state in the sound
-- [ ] VST effect slot
+- [x] Plugin slot (v0.1.2): one unit for instruments and effects. Load from a list of plugins used before, browse for a .vst3, or drop a .vst3 on the board
+- [x] Open shows the plugin's own window over the whole screen, with a Back button
+- [x] Notes from cables (four note inputs, gate, velocity) play the plugin; audio in and out on jacks
+- [x] The plugin inside follows the song's tempo and position
+- [x] Saved with the project, including the plugin's own preset and settings
+- [ ] **Joe to test in Cubase on Windows**: loading his plugins and Nexus / HALion, their windows inside ours, drag and drop
+- [ ] List every installed VST3 in the Add units menu (needs a scan; today the list is the plugins loaded before)
+- [ ] Knobs on the slot for the plugin's own parameters, so cables can move them
+- [ ] Notes out of a hosted plugin (so Nebula2 Chord inside a slot could drive other units)
+- [ ] Latency of hosted plugins isn't compensated yet
 - [ ] Per-tab load meter
 - [ ] Freeze / bounce a tab to audio
 

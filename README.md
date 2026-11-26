@@ -42,8 +42,12 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
    **Generate**, and choose the song length and how long each chord lasts. There is one set of chords for the
    whole song. A Note sequencer set to **Follow** moves its notes with the chords, so the bass and lead keep up.
 9. **Key** at the top is shared by every tab. Notes and chords are always in key.
-10. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-11. **Tidy** lines the modules up in signal order.
+10. **Your own plugins:** add a **Plugin slot** from Add units (under Your plugins), press **Load** and browse to
+    a .vst3, or drop a .vst3 file on the board. Plugins you've loaded before are listed under Load. **Open** shows
+    the plugin's own window; **Back** returns to the board. Cable a sequencer's Pitch and Gate into the slot to
+    play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
+11. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
+12. **Tidy** lines the modules up in signal order.
 
 Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.

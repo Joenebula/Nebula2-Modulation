@@ -384,6 +384,30 @@ int main()
         CHECK (other.save() == rack->save(), "and saves back identically");
     }
 
+    // 21. Notes for a hosted plugin: on when the gate rises, off when it falls, re-played when the pitch moves
+    {
+        NoteTracker t;
+        std::vector<std::pair<int, int>> ev;
+        auto emit = [&ev] (int note, int vel) { ev.push_back ({ note, vel }); };
+        float pitch[4] = { 0.0f, 4.0f / 12.0f, 7.0f / 12.0f, 1.0f };
+        const char two[4] = { 1, 1, 0, 0 };
+        t.step (false, pitch, two, 100, emit);
+        CHECK (ev.empty(), "no gate, no notes");
+        t.step (true, pitch, two, 90, emit);
+        CHECK (ev.size() == 2 && ev[0] == std::make_pair (60, 90) && ev[1] == std::make_pair (64, 90), "gate up starts the plugged-in notes only");
+        t.step (true, pitch, two, 90, emit);
+        CHECK (ev.size() == 2, "a held note isn't sent again");
+        pitch[0] = 2.0f / 12.0f;
+        t.step (true, pitch, two, 90, emit);
+        CHECK (ev.size() == 4 && ev[2] == std::make_pair (60, 0) && ev[3] == std::make_pair (62, 90), "a pitch change ends the old note and starts the new one");
+        t.step (false, pitch, two, 90, emit);
+        CHECK (ev.size() == 6 && ev[4].second == 0 && ev[5].second == 0, "gate down ends every note");
+        int on = 0, off = 0;
+        for (auto& e : ev) (e.second > 0 ? on : off)++;
+        CHECK (on == off, "every note that starts is ended: nothing left hanging");
+        CHECK (NoteTracker::noteOf (-20.0f) == 0 && NoteTracker::noteOf (20.0f) == 127, "notes stay in the playable range");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

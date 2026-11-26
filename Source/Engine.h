@@ -68,7 +68,7 @@ struct Param
     float skew = 1.0f;                       // above 1 gives the low end of the knob more room
     std::vector<const char*> choices {};     // not empty: a switch, not a knob
 };
-enum class Seq { None, Drum, Note, Chord };
+enum class Seq { None, Drum, Note, Chord, Host };   // Host: a slot holding another plugin
 
 struct Info
 {
@@ -164,6 +164,9 @@ struct Module
     virtual ~Module() = default;
     virtual void prepare (double) {}
     virtual void process (int n, const Ctx&) = 0;
+    // Anything more than knobs and patterns that a module needs saved (one line of text, no line breaks)
+    virtual std::string saveExtra() const { return {}; }
+    virtual void loadExtra (const std::string&) {}
 
     void init (const Info& i, int id)
     {
@@ -230,10 +233,21 @@ struct OutputModule : Module
 // ---- Module types: filled in by Modules.h ----
 struct TypeEntry { const Info* info; std::function<std::unique_ptr<Module>()> make; };
 inline const std::vector<TypeEntry>& registry();
+// Module types that need the plugin framework (the plugin slot) add themselves here when the plugin starts
+inline std::vector<TypeEntry>& extraTypes() { static std::vector<TypeEntry> v; return v; }
 inline const TypeEntry* findType (const std::string& type)
 {
     for (auto& e : registry()) if (type == e.info->type) return &e;
+    for (auto& e : extraTypes()) if (type == e.info->type) return &e;
     return nullptr;
+}
+// Every type the Add menu can offer
+inline std::vector<const Info*> allTypes()
+{
+    std::vector<const Info*> v;
+    for (auto& e : registry()) v.push_back (e.info);
+    for (auto& e : extraTypes()) v.push_back (e.info);
+    return v;
 }
 
 // ---- A board: one sound ----
@@ -580,6 +594,8 @@ struct Rack
             o << "mod " << m->uid << ' ' << m->info->type << ' ' << m->x << ' ' << m->y << '\n';
             for (size_t k = 0; k < m->info->params.size(); ++k)
                 o << "p " << m->uid << ' ' << m->info->params[k].id << ' ' << m->params[k].load() << '\n';
+            const auto extra = m->saveExtra();
+            if (! extra.empty()) o << "x " << m->uid << ' ' << clean (extra) << '\n';
             if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note)
                 for (int row = 0; row < 2; ++row)
                 {
@@ -677,6 +693,13 @@ struct Rack
                     const int k = m->paramIndex (id);
                     if (k >= 0) { const auto& p = m->info->params[(size_t) k]; m->params[(size_t) k].store (std::min (p.hi, std::max (p.lo, v))); }
                 }
+            }
+            else if (tag == "x")
+            {
+                int uid = 0; ls >> uid;
+                std::string rest; std::getline (ls, rest);
+                if (! rest.empty() && rest[0] == ' ') rest.erase (0, 1);
+                if (auto* m = b->find (uid)) m->loadExtra (rest);
             }
             else if (tag == "g" || tag == "n")
             {

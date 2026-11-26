@@ -29,8 +29,9 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - `Source/ChordEngine.h`: the chord generator, copied unchanged from Nebula2 Chord. Don't edit it here; change it there and copy it over.
 - `Source/Modules.h`: every module type, and `registry()`, the list the Add menu is drawn from. No JUCE.
 - `Source/Presets.h`: the starting board for each kind of sound, pattern Ideas, in-style Random, Tidy, module sizes. No JUCE.
+- `Source/PluginHost.*`: the Plugin slot (HostedModule): holds another VST3, feeds it notes from cables and the song position, saves its state. Registered through `extraTypes()` because the engine itself has no JUCE.
 - `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
-- `Source/PluginEditor.*`: the screen. TabBar, BoardView, ModuleComp, ParamCell, SeqView, ChordView, MixerStrip, AddPanel.
+- `Source/PluginEditor.*`: the screen. TabBar, BoardView, ModuleComp, ParamCell, SeqView, ChordView, HostView, HostOverlay, MixerStrip, AddPanel.
 - `Source/Look.h`: design tokens and materials (ParaEQ design system, shared with Nebula2 Chord).
 - `tests/EngineTest.cpp`: the engine on its own (plain C++).
 - `tests/OfflineTest.cpp`: the plugin in a fake Cubase.
@@ -65,6 +66,9 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target EngineTest OfflineTest Snapshot -j3
 ./build/EngineTest                                             # "All passed"
 ./build/OfflineTest_artefacts/Release/OfflineTest               # "All passed"
+# with plugin slots tested too: pass a .vst3 that plays with the song, then an instrument
+cmake --build build --target Nebula2Modulation_VST3 -j3
+./build/OfflineTest_artefacts/Release/OfflineTest "build/Nebula2Modulation_artefacts/Release/VST3/Nebula2 Modulation.vst3" "../nebula2-chord/build/Nebula2Chord_artefacts/Release/VST3/Nebula2 Chord.vst3"
 ./build/Snapshot_artefacts/Release/Snapshot /tmp/snap           # ui.png, ui_playing.png, ui_add.png ...
 cp /tmp/snap/ui_playing.png docs/screenshot.png; cp /tmp/snap/ui_pad.png docs/screenshot-chords.png; cp /tmp/snap/ui_add.png docs/screenshot-add-units.png
 ```
@@ -80,12 +84,14 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.2'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.3'
 ```
 
-The latest release is **v0.1.1**. Bump by one each time.
+The latest release is **v0.1.2**. Bump by one each time.
 
 ## What can't be checked here
 
-Loading Nexus, HALion or any other commercial plugin inside this one (Stage 6) can only be tested on Joe's PC in
-Cubase. Everything else is tested here before each release.
+Loading Nexus, HALion or any other commercial plugin inside this one can only be tested on Joe's PC in Cubase.
+Here the Plugin slot is tested by hosting this plugin's own Linux build and Nebula2 Chord's. A hosted plugin's
+window is a native window, so the Snapshot tool shows it as a black box of the right size: whether it draws
+properly inside ours has to be checked on a real machine. Everything else is tested here before each release.

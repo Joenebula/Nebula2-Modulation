@@ -31,7 +31,8 @@ Cubase. Tick things off here as they land.
 - [x] Drum sequencer and Note sequencer with Ideas and Random
 - [x] Starting boards: Kick, Snare, Hi-hat, Percussion, Bass, Lead, Stab, Pad, Empty
 - [x] Multi-oscillator (four notes at once)
-- [ ] Sample player (drop an audio file on it)
+- [x] Sample player (v0.1.9): load or drop an audio file (wav, aiff, flac, ogg). Start, Length, Tune, Forward / Reverse, Once / Loop. A Pitch cable plays it at notes. A "Sample" sound in the + menu. The project remembers where the file is; if it has moved, the unit names the file it wants
+- [ ] Sample player: mp3 isn't read (the framework leaves it off for licensing); copy the file into the project so it travels with it
 - [x] Clap board, with its own clap envelope (v0.1.7)
 - [ ] Stereo cables (today a board is mono until its Output; pan is on the mixer)
 - [x] Undo and redo (v0.1.8): buttons and Ctrl+Z / Ctrl+Y. Covers knobs, patterns, cables, adding, moving and deleting units, tabs, the mixer, links, chords and key. Keeps the last 100 steps. A board is put back in place, so undoing a knob never reloads a plugin in a slot
@@ -87,7 +88,7 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [x] Saved with the project, including the plugin's own preset and settings
 - [x] Joe tested v0.1.2 in Cubase on Windows (26 Nov 2026): loads, plugin loads into a slot, its window opens and Back returns, sound through cables, saves and reopens. All worked.
 - [ ] Still to try: Nexus / HALion in a slot, and dropping a .vst3 on the board inside Cubase
-- [ ] List every installed VST3 in the Add units menu (needs a scan; today the list is the plugins loaded before)
+- [x] A slot's Load menu lists every VST3 in the usual plugin folders by name (v0.1.9). The list is made by looking at the folders only; nothing is loaded to build it
 - [ ] Knobs on the slot for the plugin's own parameters, so cables can move them
 - [ ] Notes out of a hosted plugin (so Nebula2 Chord inside a slot could drive other units)
 - [ ] Latency of hosted plugins isn't compensated yet
@@ -128,8 +129,8 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 ## Screen polish (Joe: "we can work the UI later")
 
 - [x] Drag the board background to move around; the board always has spare room to the right and below (v0.1.4)
-- [ ] Zoom out to see a whole board
-- [ ] Add units menu: show a picture of each unit, so you can see what you're adding
+- [x] Zoom: 50% to 125%, with - and + at the top or Ctrl + wheel; saved with the project (v0.1.9)
+- [x] Add units menu: hovering a row shows a picture of that unit (v0.1.9)
 
 ## Later units
 

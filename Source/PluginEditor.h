@@ -94,6 +94,23 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
+// On a Sample player: the file's name and shape, and Load. An audio file can be dropped straight on it.
+class SampleView : public juce::Component, public juce::FileDragAndDropTarget
+{
+public:
+    SampleView (BoardView&, SampleModule&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void tick();
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int, int) override;
+private:
+    BoardView& owner; SampleModule& module;
+    juce::TextButton load { "Load" };
+    std::unique_ptr<juce::FileChooser> chooser;
+    float shownHead = -1.0f;
+};
+
 // A hosted plugin's own window, shown over the whole screen with a way back
 class HostOverlay : public juce::Component
 {
@@ -130,6 +147,7 @@ public:
     std::unique_ptr<SeqView> seq;
     std::unique_ptr<ChordView> chords;
     std::unique_ptr<HostView> host;
+    std::unique_ptr<SampleView> sample;
 private:
     BoardView& owner; Nebula2ModulationProcessor& proc; Board& board;
     juce::OwnedArray<ParamCell> cells;

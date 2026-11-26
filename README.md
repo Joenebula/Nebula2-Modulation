@@ -30,7 +30,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 1. Add Nebula2 Modulation as an **instrument track** in Cubase and press play. It follows Cubase's tempo.
    **Play** in the plugin runs it on its own when Cubase is stopped.
 2. Each **tab** is one sound. Click a tab to see only that sound's modules.
-3. **+** adds a sound: kick, snare, clap, hi-hat, percussion, bass, lead, arp, stab, pad, strings, or an empty board.
+3. **+** adds a sound: kick, snare, clap, hi-hat, percussion, bass, lead, arp, stab, pad, strings, sample, or an empty board.
    It arrives cabled and playing.
 4. **Add units** opens the menu of modules: sound sources, envelopes, filters, EQ, distortion, reverb, delay, chorus,
    phaser, flanger and more. Tick one or several and they land on the board, unconnected.
@@ -45,7 +45,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
    whole song. A Note sequencer set to **Follow** moves its notes with the chords, so the bass and lead keep up.
 9. **Key** at the top is shared by every tab. Notes and chords are always in key.
 10. **Your own plugins:** add a **Plugin slot** from Add units (under Your plugins), press **Load** and browse to
-    a .vst3, or drop a .vst3 file on the board. Plugins you've loaded before are listed under Load. **Open** shows
+    a .vst3, pick one from **All installed plugins**, or drop a .vst3 file on the board. Plugins you've loaded before are listed first under Load. **Open** shows
     the plugin's own window; **Back** returns to the board. Cable a sequencer's Pitch and Gate into the slot to
     play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
 11. **Links:** to make two sounds move together, link them. On a sequencer, click **LINK** next to its name and pick
@@ -59,7 +59,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 13. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
 14. **Tidy** lines the modules up in signal order.
 
-**Undo** and **Redo** are at the top (also Ctrl+Z and Ctrl+Y). Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
+**Undo** and **Redo** are at the top (also Ctrl+Z and Ctrl+Y). **-** and **+** zoom the board (also Ctrl + mouse wheel). Hover a row in Add units to see a picture of that unit. To use your own sound, add a **Sample player** and load or drop an audio file on it. Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.
 
 ## Build it yourself

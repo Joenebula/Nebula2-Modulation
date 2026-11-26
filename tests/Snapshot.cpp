@@ -97,6 +97,25 @@ int main (int argc, char** argv)
     e->selectTab ((int) p.rack.boards.size() - 1);
     shoot (*ed, dir + "/ui_empty.png");
 
+    // A sample player with a sound in it
+    {
+        const auto wav = juce::File (dir).getChildFile ("snapshot-sound.wav");
+        wav.deleteFile();
+        {
+            juce::AudioBuffer<float> sb (1, 30000);
+            for (int i = 0; i < 30000; ++i) sb.setSample (0, i, 0.8f * std::exp (-(float) i / 7000.0f) * (float) std::sin (0.02 * i + 6.0 * std::exp (-i / 900.0)));
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (new juce::FileOutputStream (wav), 44100, 1, 16, {}, 0));
+            w->writeFromAudioSampleBuffer (sb, 0, 30000);
+        }
+        p.rack.addBoard (n2m::makeBoard ("sample", 48000));
+        for (auto& m : p.rack.boards.back()->modules) if (auto* sm = dynamic_cast<n2m::SampleModule*> (m.get())) { sm->load (wav); sm->set ("length", 0.6f); }
+        e->selectTab ((int) p.rack.boards.size() - 1);
+        shoot (*ed, dir + "/ui_sample.png");
+        p.rack.removeBoard ((int) p.rack.boards.size() - 1);
+        wav.deleteFile();
+        e->selectTab ((int) p.rack.boards.size() - 1);
+    }
+
     // Plugin slots: one empty, and (when a .vst3 path is given) one holding a plugin, then that plugin's window
     {
         auto& eb = *p.rack.boards.back();

@@ -47,7 +47,7 @@ int main()
     // 1. Every kind of board makes sound when the song plays, stays clean, and never clips
     for (auto& t : boardTypes())
     {
-        if (std::string (t.id) == "empty") continue;
+        if (std::string (t.id) == "empty" || std::string (t.id) == "sample") continue;   // a Sample tab is silent until a file is loaded
         std::unique_ptr<Rack> rack (one (t.id));
         auto a = render (*rack, 2);
         CHECK (peakOf (a.l) > 0.02f, t.name);

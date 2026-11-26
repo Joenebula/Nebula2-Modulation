@@ -532,6 +532,72 @@ void HostView::showLoadMenu()
 }
 
 //==============================================================================
+SampleView::SampleView (BoardView& o, SampleModule& m) : owner (o), module (m)
+{
+    addAndMakeVisible (load);
+    load.onClick = [this]
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Choose an audio file", juce::File::getSpecialLocation (juce::File::userMusicDirectory), SampleModule::wildcard());
+        juce::Component::SafePointer<SampleView> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc)
+        {
+            if (safe != nullptr && fc.getResult() != juce::File()) { safe->module.load (fc.getResult()); safe->repaint(); }
+        });
+    };
+    setSize (lay::seqW, lay::sampleSeqH);
+}
+
+void SampleView::resized() { load.setBounds (0, 0, 58, 20); }
+
+bool SampleView::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files) if (SampleModule::canRead (f)) return true;
+    return false;
+}
+
+void SampleView::filesDropped (const juce::StringArray& files, int, int)
+{
+    for (auto& f : files) if (SampleModule::canRead (f)) { module.load (juce::File (f)); repaint(); return; }
+}
+
+void SampleView::paint (juce::Graphics& g)
+{
+    const auto col = boardColour (owner.board != nullptr ? owner.board->colour : 0);
+    const bool failed = module.status.isNotEmpty();
+    g.setFont (font (11.0f, Weight::Medium));
+    g.setColour (failed ? bandOrange : module.hasSample() ? n8 : n7);
+    const juce::String text = failed ? module.status
+                            : module.hasSample() ? module.fileName() + "   " + juce::String (module.seconds(), 2) + " s"
+                            : juce::String ("Load an audio file, or drop one here");
+    g.drawText (text, 66, 0, getWidth() - 66, 20, juce::Justification::centredLeft, true);
+
+    // The shape of the sound, with the part that plays lit and the rest dimmed
+    const auto well = juce::Rectangle<float> (0.0f, 26.0f, (float) getWidth(), (float) getHeight() - 30.0f);
+    sunken (g, well, radiusControl);
+    if (module.peaks.empty()) return;
+    const float start = module.P (0), end = start + module.P (1) * (1.0f - start);
+    const float colW = well.getWidth() / (float) module.peaks.size(), mid = well.getCentreY();
+    for (size_t k = 0; k < module.peaks.size(); ++k)
+    {
+        const float at = ((float) k + 0.5f) / (float) module.peaks.size();
+        const float h = juce::jmax (1.0f, juce::jmin (1.0f, module.peaks[k]) * (well.getHeight() - 8.0f));
+        g.setColour (at >= start && at <= end ? col.withAlpha (0.9f) : n5);
+        g.fillRect (well.getX() + (float) k * colW, mid - h * 0.5f, juce::jmax (1.0f, colW - 0.5f), h);
+    }
+    if (shownHead >= 0.0f)
+    {
+        g.setColour (noteAccent);
+        g.fillRect (well.getX() + shownHead * well.getWidth(), well.getY() + 2.0f, 1.5f, well.getHeight() - 4.0f);
+    }
+}
+
+void SampleView::tick()
+{
+    const float h = module.playhead.load();
+    if (std::abs (h - shownHead) > 0.002f) { shownHead = h; repaint(); }
+}
+
+//==============================================================================
 HostOverlay::HostOverlay()
 {
     addAndMakeVisible (back);
@@ -596,7 +662,16 @@ ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, M
 {
     const auto& info = *m.info;
     setBounds ((int) m.x, (int) m.y, lay::width (info), lay::height (info));
-    if (info.seq == Seq::Host)
+    if (info.seq == Seq::Sample)
+    {
+        if (auto* sm = dynamic_cast<SampleModule*> (&m))
+        {
+            sample = std::make_unique<SampleView> (o, *sm);
+            addAndMakeVisible (*sample);
+            sample->setTopLeftPosition ((getWidth() - lay::seqW) / 2, lay::header);
+        }
+    }
+    else if (info.seq == Seq::Host)
     {
         if (auto* hm = dynamic_cast<HostedModule*> (&m))
         {
@@ -985,7 +1060,7 @@ void BoardView::mouseUp (const juce::MouseEvent&) { setMouseCursor (juce::MouseC
 
 bool BoardView::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (auto& f : files) if (f.endsWithIgnoreCase (".vst3")) return board != nullptr;
+    for (auto& f : files) if (f.endsWithIgnoreCase (".vst3") || SampleModule::canRead (f)) return board != nullptr;
     return false;
 }
 
@@ -995,6 +1070,14 @@ void BoardView::filesDropped (const juce::StringArray& files, int x, int y)
     willChange();
     for (auto& f : files)
     {
+        // An audio file dropped on the board arrives in a new Sample player
+        if (SampleModule::canRead (f))
+        {
+            if (auto* sm = dynamic_cast<SampleModule*> (proc.rack.addModule (*board, "sample", (float) juce::jmax (8, x - 40), (float) juce::jmax (8, y - 20))))
+                sm->load (juce::File (f));
+            x += 40; y += 40;
+            continue;
+        }
         if (! f.endsWithIgnoreCase (".vst3")) continue;
         const auto found = pluginsInFile (f);
         if (found.empty()) continue;
@@ -1011,6 +1094,7 @@ void BoardView::tick()
     {
         if (c->seq != nullptr) c->seq->tick();
         if (c->chords != nullptr) c->chords->tick();
+        if (c->sample != nullptr) c->sample->tick();
     }
 }
 

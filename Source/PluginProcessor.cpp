@@ -14,6 +14,7 @@ Nebula2ModulationProcessor::Nebula2ModulationProcessor()
     : AudioProcessor (makeBuses())
 {
     n2m::registerPluginSlot();
+    n2m::registerSamplePlayer();
     n2m::loadStarter (rack);
 }
 

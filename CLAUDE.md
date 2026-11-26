@@ -31,8 +31,9 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - `Source/Presets.h`: the starting board for each kind of sound, pattern Ideas, in-style Random, Tidy, module sizes. No JUCE.
 - `Source/History.h`: undo and redo. The screen calls `history.before (board)` (or `beforeChords`, `tabAdded`, `tabRemoving`, `tabMoved`) just before a change. No JUCE.
 - `Source/PluginHost.*`: the Plugin slot (HostedModule): holds another VST3, feeds it notes from cables and the song position, saves its state. Registered through `extraTypes()` because the engine itself has no JUCE.
+- `Source/Sampler.*`: the Sample player (SampleModule). Also registered through `extraTypes()`.
 - `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
-- `Source/PluginEditor.*`: the screen. TabBar, BoardView, ModuleComp, ParamCell, SeqView, ChordView, HostView, HostOverlay, MixerStrip, AddPanel.
+- `Source/PluginEditor.*`: the screen. TabBar, BoardView (inside `boardHolder`, which is what makes zoom work), ModuleComp, ParamCell, SeqView, ChordView, HostView, SampleView, HostOverlay, MixerStrip, AddPanel.
 - `Source/Look.h`: design tokens and materials (ParaEQ design system, shared with Nebula2 Chord).
 - `tests/EngineTest.cpp`: the engine on its own (plain C++).
 - `tests/OfflineTest.cpp`: the plugin in a fake Cubase.
@@ -89,10 +90,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.9'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.10'
 ```
 
-The latest release is **v0.1.8**. Bump by one each time.
+The latest release is **v0.1.9**. Bump by one each time.
 
 ## What can't be checked here
 

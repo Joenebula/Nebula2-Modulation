@@ -89,6 +89,109 @@ int main (int argc, char** argv)
     q.setStateInformation (junk, (int) sizeof junk);
     CHECK (q.rack.boards.size() == 6, "bad project data is ignored, not loaded");
 
+    // ---- Sample player ----
+    {
+        // A test sound: a quarter of a second of 440 Hz, mono, at 44.1 kHz (so the player has to convert the rate)
+        const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test");
+        dir.createDirectory();
+        const auto wav = dir.getChildFile ("beep.wav");
+        wav.deleteFile();
+        {
+            juce::AudioBuffer<float> b (1, 11025);
+            for (int i = 0; i < 11025; ++i) b.setSample (0, i, 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 440.0 * i / 44100.0));
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (new juce::FileOutputStream (wav), 44100, 1, 16, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, 11025);
+        }
+        Nebula2ModulationProcessor s;
+        FakeCubase song; s.setPlayHead (&song);
+        s.setRateAndBufferSizeDetails (48000, 256);
+        s.prepareToPlay (48000, 256);
+        while (s.rack.boards.size() > 0) s.rack.removeBoard (0);
+        s.rack.addBoard (n2m::makeBoard ("sample", 48000));
+        auto& b = *s.rack.boards[0];
+        n2m::SampleModule* smp = nullptr;
+        for (auto& m : b.modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) smp = x;
+        CHECK (smp != nullptr && smp->live && ! smp->hasSample(), "a Sample tab arrives with an empty player, already cabled");
+        song.playing = true;
+        CHECK (run (s, song, 0.5) == 0.0f, "an empty sample player is silent");
+        CHECK (n2m::SampleModule::canRead ("kick.wav") && n2m::SampleModule::canRead ("Loop.AIFF") && ! n2m::SampleModule::canRead ("notes.txt") && ! n2m::SampleModule::canRead ("thing.vst3"), "it knows an audio file from other files");
+        CHECK (smp->load (dir.getChildFile ("missing.wav")).isNotEmpty() && smp->status.isNotEmpty() && ! smp->hasSample(), "a missing file says so");
+        CHECK (smp->load (wav).isEmpty() && smp->hasSample() && smp->fileName() == "beep.wav", "the file loads");
+        CHECK (std::abs (smp->seconds() - 0.25) < 0.001 && smp->peaks.size() > 50, "it knows how long the sound is and has its shape to draw");
+
+        // count how often the wave crosses zero in a stretch, to read its pitch
+        auto pitchOf = [&] (double seconds)
+        {
+            std::vector<float> y; song.ppq = 0; song.playing = true;
+            run (s, song, seconds, &y);
+            song.playing = false; run (s, song, 1.0);
+            int n = 0; size_t first = 0, last = 0;
+            for (size_t i = 1; i < y.size(); ++i) if (y[i - 1] <= 0 && y[i] > 0) { if (n++ == 0) first = i; last = i; }
+            return n > 1 ? (double) (n - 1) * 48000.0 / (double) (last - first) : 0.0;
+        };
+        CHECK (std::abs (pitchOf (0.2) - 440.0) < 3.0, "played at its own pitch, whatever rate the file was recorded at");
+        smp->set ("tune", 12);
+        CHECK (std::abs (pitchOf (0.1) - 880.0) < 6.0, "Tune up 12 plays it an octave higher");
+        smp->set ("tune", 0);
+        // a note sequencer's Pitch plays it at different notes
+        auto* ns = s.rack.addModule (b, "noteseq", 0, 0);
+        for (int i = 0; i < n2m::kMaxSteps; ++i) { ns->data[(size_t) i].store (1.0f); ns->data[(size_t) (n2m::kMaxSteps + i)].store (7.0f); }
+        ns->set ("octave", 0);
+        s.rack.setKey (0, 6);                                            // C major: seven steps up is the C above
+        s.rack.connect (b, ns->uid, ns->outIndex ("pitch"), smp->uid, smp->inIndex ("pitch"));
+        CHECK (std::abs (pitchOf (0.1) - 880.0) < 6.0, "a Pitch cable plays the sample at the note it is sent");
+        s.rack.disconnectAll (b, ns->uid);
+
+        // once: it stops at the end. Loop: it keeps going.
+        std::vector<float> once; song.ppq = 0; song.playing = true; run (s, song, 0.45, &once);
+        float tailPeak = 0; for (size_t i = (size_t) (0.30 * 48000); i < once.size(); ++i) tailPeak = juce::jmax (tailPeak, std::abs (once[i]));
+        CHECK (tailPeak == 0.0f, "played once, it stops at the end of the file");
+        song.playing = false; run (s, song, 1.0);
+        smp->set ("loop", 1);
+        std::vector<float> looped; song.ppq = 0; song.playing = true; run (s, song, 0.45, &looped);
+        tailPeak = 0; for (size_t i = (size_t) (0.30 * 48000); i < looped.size(); ++i) tailPeak = juce::jmax (tailPeak, std::abs (looped[i]));
+        CHECK (tailPeak > 0.2f, "looped, it keeps going");
+        song.playing = false; smp->set ("loop", 0); run (s, song, 1.0);
+        // Length: only the first part plays
+        smp->set ("length", 0.2f);
+        std::vector<float> part; song.ppq = 0; song.playing = true; run (s, song, 0.3, &part);
+        float late = 0; for (size_t i = (size_t) (0.08 * 48000); i < part.size(); ++i) late = juce::jmax (late, std::abs (part[i]));
+        CHECK (late == 0.0f && juce::FloatVectorOperations::findMinAndMax (part.data(), 2000).getEnd() > 0.2f, "Length shortens what plays");
+        song.playing = false; smp->set ("length", 1.0f); run (s, song, 1.0);
+        // no click at the very start or end: the first and last samples are near silence
+        std::vector<float> whole; song.ppq = 0; song.playing = true; run (s, song, 0.4, &whole);
+        CHECK (std::abs (whole[0]) < 0.05f, "it starts without a click");
+        song.playing = false; run (s, song, 1.0);
+        // Level at zero is silent
+        smp->set ("level", 0.0f); song.ppq = 0; song.playing = true;
+        CHECK (run (s, song, 0.3) == 0.0f, "Level at 0% is silent");
+        smp->set ("level", 1.0f); song.playing = false; run (s, song, 1.0);
+
+        // Saved with the project (the project remembers where the file is)
+        juce::MemoryBlock saved; s.getStateInformation (saved);
+        Nebula2ModulationProcessor t;
+        t.setRateAndBufferSizeDetails (48000, 256); t.prepareToPlay (48000, 256);
+        t.setStateInformation (saved.getData(), (int) saved.getSize());
+        n2m::SampleModule* back = nullptr;
+        for (auto& m : t.rack.boards[0]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) back = x;
+        CHECK (back != nullptr && back->hasSample() && back->fileName() == "beep.wav", "the sample comes back with the project");
+        // If the file has gone, the player says which file it wants and the rest still loads
+        wav.moveFileTo (dir.getChildFile ("moved.wav"));
+        Nebula2ModulationProcessor u;
+        u.setRateAndBufferSizeDetails (48000, 256); u.prepareToPlay (48000, 256);
+        u.setStateInformation (saved.getData(), (int) saved.getSize());
+        n2m::SampleModule* lost = nullptr;
+        for (auto& m : u.rack.boards[0]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) lost = x;
+        CHECK (lost != nullptr && ! lost->hasSample() && lost->status.contains ("beep.wav") && u.rack.boards[0]->modules.size() == b.modules.size(), "a file that has moved is named, and nothing else is lost");
+        // Undoing a knob keeps the loaded sample
+        s.history.before (b); smp->set ("tune", 7);
+        s.history.undo();
+        n2m::SampleModule* still = nullptr;
+        for (auto& m : b.modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) still = x;
+        CHECK (still == smp && still->hasSample() && still->P (2) == 0.0f, "undoing a knob on a sample player keeps its sample loaded");
+        dir.deleteRecursively();
+    }
+
     // ---- Separate outputs to the host's mixer ----
     {
         Nebula2ModulationProcessor m;

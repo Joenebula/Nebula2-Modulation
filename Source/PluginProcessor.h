@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <atomic>
 #include "PluginHost.h"
+#include "Sampler.h"
 #include "History.h"
 
 // The plugin as Cubase sees it: holds the rack, follows Cubase's tempo and transport, saves with the project.

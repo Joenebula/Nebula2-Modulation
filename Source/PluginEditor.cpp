@@ -494,13 +494,25 @@ void HostView::showLoadMenu()
     int id = 1;
     for (auto& d : recent) menu.addItem (id++, d.name + (d.isInstrument ? "" : "  (effect)"));
     if (! recent.empty()) menu.addSeparator();
+    // Everything in the computer's VST3 folders, by name
+    const auto installed = installedPlugins();
+    if (! installed.empty())
+    {
+        juce::PopupMenu all;
+        int k = 2000;
+        for (auto& p : installed) all.addItem (k++, p.first);
+        menu.addSubMenu ("All installed plugins (" + juce::String ((int) installed.size()) + ")", all);
+    }
+    menu.addItem (1002, "Look for plugins again");
     menu.addItem (1000, "Browse for a .vst3...");
     if (module.hasPlugin()) menu.addItem (1001, "Empty this slot");
     juce::Component::SafePointer<HostView> safe (this);
-    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&load), [safe, recent] (int r)
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&load), [safe, recent, installed] (int r)
     {
         if (safe == nullptr || r <= 0) return;
         if (r == 1001) { safe->module.unload(); safe->refresh(); return; }
+        if (r == 1002) { installedPlugins (true); return; }
+        if (r >= 2000) { if (r - 2000 < (int) installed.size()) safe->loadFile (installed[(size_t) (r - 2000)].second); return; }
         if (r < 1000) { safe->module.load (recent[(size_t) (r - 1)]); safe->refresh(); return; }
         juce::File start;
        #if JUCE_WINDOWS
@@ -825,13 +837,19 @@ void BoardView::fitToContent()
     int w = 0, h = 0;
     for (auto* c : comps) { w = juce::jmax (w, c->getRight()); h = juce::jmax (h, c->getBottom()); }
     w += 500; h += 320;        // always some room to scroll into and put new units
+    const float zoom = juce::jlimit (0.5f, 1.25f, proc.zoom.load());
     if (auto* vp = findParentComponentOfClass<juce::Viewport>())
     {
         // Leave room for the scroll bars, so one appearing doesn't summon the other
-        w = juce::jmax (w, vp->getWidth() - vp->getScrollBarThickness());
-        h = juce::jmax (h, vp->getHeight() - vp->getScrollBarThickness());
+        w = juce::jmax (w, (int) std::ceil ((float) (vp->getWidth() - vp->getScrollBarThickness()) / zoom));
+        h = juce::jmax (h, (int) std::ceil ((float) (vp->getHeight() - vp->getScrollBarThickness()) / zoom));
     }
     setSize (w, h);
+    // Zoom: the board is drawn scaled inside a holder that is the scaled size, so scrolling covers all of it
+    setTransform (juce::AffineTransform::scale (zoom));
+    if (auto* holder = getParentComponent())
+        if (dynamic_cast<juce::Viewport*> (holder) == nullptr && holder->findParentComponentOfClass<juce::Viewport>() != nullptr)
+            holder->setSize (juce::roundToInt ((float) w * zoom), juce::roundToInt ((float) h * zoom));
 }
 
 ModuleComp* BoardView::compFor (int uid) const
@@ -938,6 +956,12 @@ void BoardView::endCable (juce::Point<int> at)
     drag.active = false;
     settled();
     refreshLive();
+}
+
+void BoardView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    if (e.mods.isCommandDown() && onZoomStep) { if (std::abs (w.deltaY) > 0.0f) onZoomStep (w.deltaY > 0 ? 1 : -1); return; }
+    Component::mouseWheelMove (e, w);
 }
 
 void BoardView::mouseDown (const juce::MouseEvent& e)
@@ -1411,7 +1435,7 @@ AddPanel::AddPanel()
     setVisible (false);
 }
 
-void AddPanel::open() { ticked.clear(); add.setEnabled (false); setVisible (true); toFront (true); repaint(); }
+void AddPanel::open() { hovered = nullptr; ticked.clear(); add.setEnabled (false); setVisible (true); toFront (true); repaint(); }
 
 static constexpr int kRowH = 35, kHeadH = 27, kCardW = 1216, kAddCols = 4;
 
@@ -1497,7 +1521,39 @@ void AddPanel::paint (juce::Graphics& g)
         g.setColour (n7);
         g.drawText (r.info->hint, r.r.getX() + 32, r.r.getY() + 18, r.r.getWidth() - 34, 13, juce::Justification::centredLeft, true);
     }
+
+    // The unit under the mouse, pictured beside its row: to the right where there is room, otherwise to the left
+    if (hovered != nullptr && preview)
+        for (auto& r : rows())
+            if (r.info == hovered)
+            {
+                const auto img = preview (*hovered);
+                if (! img.isValid()) break;
+                const float scale = juce::jmin (0.85f, 420.0f / (float) img.getWidth(), 330.0f / (float) img.getHeight());
+                const int w = juce::roundToInt ((float) img.getWidth() * scale), h = juce::roundToInt ((float) img.getHeight() * scale);
+                int x = r.r.getRight() + 6;
+                if (x + w > c.getRight() - 8) x = r.r.getX() - w - 6;
+                const int y = juce::jlimit (c.getY() + 8, juce::jmax (c.getY() + 8, c.getBottom() - h - 8), r.r.getCentreY() - h / 2);
+                const juce::Rectangle<int> box (x, y, w, h);
+                juce::DropShadow (juce::Colours::black.withAlpha (0.7f), 24, { 0, 6 }).drawForRectangle (g, box);
+                g.setColour (windowBottom);
+                g.fillRoundedRectangle (box.toFloat().expanded (6.0f), radiusCard);
+                g.setColour (accent.withAlpha (0.35f));
+                g.drawRoundedRectangle (box.toFloat().expanded (6.0f), radiusCard, 1.0f);
+                g.setOpacity (1.0f);
+                g.drawImage (img, box.toFloat());
+                break;
+            }
 }
+
+void AddPanel::mouseMove (const juce::MouseEvent& e)
+{
+    const Info* now = nullptr;
+    for (auto& r : rows()) if (r.info != nullptr && r.r.contains (e.getPosition())) now = r.info;
+    if (now != hovered) { hovered = now; repaint(); }
+}
+
+void AddPanel::mouseExit (const juce::MouseEvent&) { if (hovered != nullptr) { hovered = nullptr; repaint(); } }
 
 void AddPanel::mouseDown (const juce::MouseEvent& e)
 {
@@ -1544,7 +1600,13 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     tabs.onChanged = [this] { tabs.repaint(); mixer.repaint(); };
 
     addAndMakeVisible (viewport);
-    viewport.setViewedComponent (&boardView, false);
+    boardHolder.addAndMakeVisible (boardView);
+    viewport.setViewedComponent (&boardHolder, false);
+    boardView.onZoomStep = [this] (int d) { stepZoom (d); };
+    for (auto* b : { &zoomOut, &zoomIn }) addAndMakeVisible (b);
+    zoomOut.onClick = [this] { stepZoom (-1); };
+    zoomIn.onClick = [this] { stepZoom (1); };
+    addPanel.preview = [this] (const Info& i) { return previewOf (i); };
     viewport.setScrollBarThickness (10);
 
     addAndMakeVisible (mixer);
@@ -1557,6 +1619,7 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addPanel.onAdd = [this] (const std::vector<std::string>& types) { addUnits (types); };
 
     setSize (windowW, windowH);
+    stepZoom (0);
     timerCallback();
     startTimerHz (30);
 }
@@ -1565,6 +1628,7 @@ Nebula2ModulationEditor::~Nebula2ModulationEditor()
 {
     stopTimer();
     viewport.setViewedComponent (nullptr, false);
+    previews.clear();
     setLookAndFeel (nullptr);
 }
 
@@ -1581,6 +1645,46 @@ void Nebula2ModulationEditor::selectTab (int index)
     boardView.setBoard (current());
     viewport.setViewPosition (0, 0);
     tabs.repaint(); mixer.repaint();
+}
+
+// Zoom steps: small enough to see a whole busy board, up to a little larger than life
+void Nebula2ModulationEditor::stepZoom (int direction)
+{
+    static const float levels[5] = { 0.5f, 0.67f, 0.8f, 1.0f, 1.25f };
+    int at = 3;
+    for (int i = 0; i < 5; ++i) if (std::abs (levels[i] - proc.zoom.load()) < 0.02f) at = i;
+    at = juce::jlimit (0, 4, at + direction);
+    // Keep the same spot of the board at the top left while the size changes
+    const float before = proc.zoom.load();
+    const auto pos = viewport.getViewPosition();
+    proc.zoom.store (levels[at]);
+    boardView.fitToContent();
+    viewport.setViewPosition (juce::roundToInt ((float) pos.x / before * levels[at]), juce::roundToInt ((float) pos.y / before * levels[at]));
+    zoomOut.setEnabled (at > 0); zoomIn.setEnabled (at < 4);
+    repaint (0, 0, getWidth(), topbarH);
+}
+
+// A picture of a unit as it will look on a board, for the Add units menu. Made once per kind and kept.
+juce::Image Nebula2ModulationEditor::previewOf (const Info& info)
+{
+    auto it = previews.find (info.type);
+    if (it != previews.end()) return it->second;
+    Board temp;
+    temp.colour = current() != nullptr ? current()->colour : 0;
+    temp.type = current() != nullptr ? current()->type : "empty";
+    juce::Image img;
+    if (auto* m = temp.add (info.type, 0, 0, proc.rack.sr))
+    {
+        m->live = true;
+        if (info.seq == Seq::Drum) setDrum (*m, drumIdeas (std::string (info.type) == "gate" ? "gate" : "kick")[0].pat);
+        if (info.seq == Seq::Note) setNotes (*m, noteIdeas ("lead")[0].gates, noteIdeas ("lead")[0].deg);
+        if (info.seq == Seq::Value) setValues (*m, valueIdeas()[2].v);
+        ModuleComp comp (boardView, proc, temp, *m);
+        comp.setAlpha (1.0f);
+        img = comp.createComponentSnapshot (comp.getLocalBounds(), true, 1.0f);
+    }
+    previews[info.type] = img;
+    return img;
 }
 
 // Undo or redo one step, then redraw from what the rack now holds
@@ -1615,7 +1719,7 @@ void Nebula2ModulationEditor::addUnits (const std::vector<std::string>& types)
         if (auto* m = proc.rack.addModule (*b, t, (float) x, (float) y))
             x += lay::width (*m->info) + 20;
     boardView.rebuild();
-    viewport.setViewPosition (0, juce::jmax (0, y - 60));
+    viewport.setViewPosition (0, juce::jmax (0, juce::roundToInt ((float) (y - 60) * proc.zoom.load())));
 }
 
 void Nebula2ModulationEditor::timerCallback()
@@ -1628,6 +1732,7 @@ void Nebula2ModulationEditor::timerCallback()
         keyBox.setSelectedId (proc.rack.root.load() + 1, juce::dontSendNotification);
         scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
         selectTab (proc.selectedTab.load());
+        stepZoom (0);                    // a loaded project brings its zoom with it
         tabs.showSelected();
         repaint();
     }
@@ -1672,6 +1777,9 @@ void Nebula2ModulationEditor::paint (juce::Graphics& g)
     g.setColour (n8);
     g.drawText (juce::String (proc.bpm.load(), 1), 380, 0, 60, topbarH, juce::Justification::centredLeft, false);
     caption (g, "Key", { 452, 0, 30, topbarH });
+    g.setFont (controlFont());
+    g.setColour (n7);
+    g.drawText (juce::String (juce::roundToInt (proc.zoom.load() * 100.0f)) + "%", zoomOut.getRight(), 0, zoomIn.getX() - zoomOut.getRight(), topbarH, juce::Justification::centred, false);
     dividerH (g, 0, getWidth(), topbarH - 2);
 }
 
@@ -1679,6 +1787,8 @@ void Nebula2ModulationEditor::resized()
 {
     const int cy = (topbarH - 28) / 2;
     play.setBounds (236, cy, 84, 28);
+    zoomOut.setBounds (896, cy, 28, 28);
+    zoomIn.setBounds (972, cy, 28, 28);
     undoButton.setBounds (744, cy, 64, 28);
     redoButton.setBounds (812, cy, 64, 28);
     keyBox.setBounds (484, cy, 68, 28);

@@ -11,6 +11,10 @@ juce::AudioPluginFormatManager& pluginFormats();
 // Plugins loaded before, remembered between sessions so they can be picked from a list
 std::vector<juce::PluginDescription> recentPlugins();
 void rememberPlugin (const juce::PluginDescription&);
+// Every VST3 found in the computer's usual plugin folders, as (name, path), A to Z. Found by looking at the
+// folders only: no plugin is loaded to make this list, so one bad plugin can't hurt it. Kept after the first look;
+// pass true to look again.
+std::vector<std::pair<juce::String, juce::String>> installedPlugins (bool lookAgain = false);
 // What a .vst3 file holds (one file can hold several plugins)
 std::vector<juce::PluginDescription> pluginsInFile (const juce::String& path);
 

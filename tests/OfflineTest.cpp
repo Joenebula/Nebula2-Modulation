@@ -199,6 +199,48 @@ int main (int argc, char** argv)
         CHECK (vp->getViewPositionX() == 200 && vp->getViewPositionY() == 120, "it scrolls left to right and up and down");
         vp->setViewPosition (0, 0);
 
+        // Zoom: the board is drawn smaller, still scrolls over all of itself, and cabling still works
+        {
+            const int fullW = view.getWidth();
+            ed->stepZoom (-1); ed->stepZoom (-1);
+            CHECK (std::abs (r.zoom.load() - 0.67f) < 0.01f, "two steps out is 67%");
+            auto* holder = view.getParentComponent();
+            CHECK (holder != nullptr && std::abs (holder->getWidth() - juce::roundToInt ((float) view.getWidth() * 0.67f)) <= 1, "the scroll area is the size the board is drawn at");
+            CHECK (view.getWidth() >= fullW, "zoomed out, the board is at least as wide as before (more of it fits)");
+            const size_t n0 = kick.cables.size();
+            auto* c1 = view.compFor (filter->uid); auto* c2 = view.compFor (drive->uid);
+            view.beginCable (*c1, false, 1, c1->getPosition() + c1->jackCentre (false, 1));
+            view.endCable (c2->getPosition() + c2->jackCentre (true, 0));
+            CHECK (kick.cables.size() == n0 + 1, "cables can be made while zoomed out");
+            ed->stepHistory (false);
+            for (int k = 0; k < 6; ++k) ed->stepZoom (1);
+            CHECK (std::abs (r.zoom.load() - 1.25f) < 0.01f, "zoom stops at 125%");
+            ed->stepZoom (-1);
+            CHECK (r.zoom.load() == 1.0f, "and steps back to 100%");
+            // zoom is kept with the project
+            ed->stepZoom (-1);
+            juce::MemoryBlock z; r.getStateInformation (z);
+            Nebula2ModulationProcessor other; other.setStateInformation (z.getData(), (int) z.getSize());
+            CHECK (std::abs (other.zoom.load() - 0.8f) < 0.01f, "the zoom is saved with the project");
+            ed->stepZoom (1);
+        }
+
+        // Every unit has a picture for the Add units menu
+        {
+            int made = 0;
+            for (auto* t : n2m::allTypes()) { const auto img = ed->addPanel.preview (*t); if (img.isValid() && img.getWidth() == n2m::lay::width (*t) && img.getHeight() == n2m::lay::height (*t)) ++made; }
+            CHECK (made == (int) n2m::allTypes().size() && made >= 50, "a preview picture for every unit in the menu");
+        }
+
+        // The list of installed plugins never includes this plugin itself
+        {
+            const auto list = n2m::installedPlugins (true);
+            bool self = false, sorted = true;
+            for (size_t k = 0; k < list.size(); ++k) { self = self || list[k].first == "Nebula2 Modulation"; if (k > 0) sorted = sorted && list[k - 1].first.compareIgnoreCase (list[k].first) <= 0; }
+            CHECK (! self && sorted, "installed plugins: A to Z, without this plugin itself");
+            std::printf ("installed plugins found here: %d%s\n", (int) list.size(), list.empty() ? "" : (" (first: " + list[0].first + ")").toRawUTF8());
+        }
+
         // Switching tabs shows only that sound
         ed->selectTab (2);
         CHECK (view.board == r.rack.boards[2].get(), "another tab shows another board");

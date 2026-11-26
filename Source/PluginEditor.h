@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <map>
 #include "PluginProcessor.h"
 #include "Look.h"
 
@@ -150,7 +151,9 @@ public:
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void tick();
-    // Drag the empty background to move around the board
+    // Drag the empty background to move around the board; Ctrl + wheel zooms
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    std::function<void (int)> onZoomStep;        // +1 bigger, -1 smaller
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
@@ -234,9 +237,14 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
     void open();
+    void hover (const Info* info) { hovered = info; repaint(); }      // for the snapshot tool
     std::function<void (const std::vector<std::string>&)> onAdd;
+    std::function<juce::Image (const Info&)> preview;     // a picture of a unit, shown beside the row the mouse is on
 private:
+    const Info* hovered = nullptr;
     struct Row { juce::Rectangle<int> r; const Info* info; };
     juce::Rectangle<int> card() const;
     std::vector<Row> rows() const;
@@ -258,6 +266,7 @@ public:
     n2m::HostOverlay hostOverlay;
     n2m::BoardView& board() { return boardView; }   // for the tests
     void stepHistory (bool redo);                   // Undo (false) or Redo (true)
+    void stepZoom (int direction);                  // +1 bigger, -1 smaller, 0 just apply
     void addUnits (const std::vector<std::string>& types);
 private:
     void timerCallback() override;
@@ -266,6 +275,10 @@ private:
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
     juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" };
+    juce::Component boardHolder;                 // the board sits in this so it can be drawn bigger or smaller
+    std::map<std::string, juce::Image> previews;
+    juce::Image previewOf (const n2m::Info&);
     juce::ComboBox keyBox, scaleBox;
     n2m::TabBar tabs;
     juce::Viewport viewport;

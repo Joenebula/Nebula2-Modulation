@@ -40,6 +40,26 @@ void rememberPlugin (const juce::PluginDescription& d)
     root.writeTo (recentFile());
 }
 
+std::vector<std::pair<juce::String, juce::String>> installedPlugins (bool lookAgain)
+{
+    static std::vector<std::pair<juce::String, juce::String>> list;
+    static bool looked = false;
+    if (looked && ! lookAgain) return list;
+    looked = true;
+    list.clear();
+    juce::VST3PluginFormat format;
+    for (auto& path : format.searchPathsForPlugins (format.getDefaultLocationsToSearch(), true, false))
+    {
+        const auto name = juce::File (path).getFileNameWithoutExtension();
+        if (name == "Nebula2 Modulation") continue;                  // not inside itself
+        bool have = false;
+        for (auto& e : list) have = have || e.first == name;
+        if (! have) list.push_back ({ name, path });
+    }
+    std::sort (list.begin(), list.end(), [] (const auto& a, const auto& b) { return a.first.compareIgnoreCase (b.first) < 0; });
+    return list;
+}
+
 std::vector<juce::PluginDescription> pluginsInFile (const juce::String& path)
 {
     std::vector<juce::PluginDescription> out;

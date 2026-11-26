@@ -75,10 +75,17 @@ int main (int argc, char** argv)
     e->selectTab (0);
     e->addPanel.open();
     shoot (*ed, dir + "/ui_add.png");
+    for (auto* t : n2m::allTypes()) if (std::string (t->type) == "tape") e->addPanel.hover (t);
+    shoot (*ed, dir + "/ui_add_preview.png");                 // the picture shown beside the row the mouse is on
+    e->addPanel.hover (nullptr);
     e->addPanel.onAdd ({ "filter", "lfo" });
     e->addPanel.setVisible (false);
     juce::ignoreUnused (b);
     shoot (*ed, dir + "/ui_added.png");
+
+    e->stepZoom (-1); e->stepZoom (-1);
+    shoot (*ed, dir + "/ui_zoomed_out.png");                  // 67%: the whole kick board in view
+    e->stepZoom (1); e->stepZoom (1);
 
     // many tabs: the tab row and the mixer scroll
     for (int i = 0; i < 12; ++i) { auto nb = n2m::makeBoard (i % 2 ? "perc" : "hat", 48000); nb->name += " " + std::to_string (i + 2); p.rack.addBoard (std::move (nb)); }

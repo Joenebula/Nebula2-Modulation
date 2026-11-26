@@ -9,6 +9,8 @@ it, and a mixing desk underneath.
 
 ![The Add units menu](docs/screenshot-add-units.png)
 
+![The song page](docs/screenshot-song.png)
+
 This is an early build: the rack, the sound modules, effects, chords, plugin slots and the first set of sounds. What's planned next is in
 [docs/BUILD-PLAN.md](docs/BUILD-PLAN.md); the full design is in [docs/SPEC.md](docs/SPEC.md).
 
@@ -42,13 +44,15 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
    buttons to move between bars.
 8. **Chords:** the **Chord generator** (on the Pad and Stab tabs) holds the song's chords. Pick a **Mood**, press
    **Generate**, and choose the song length and how long each chord lasts. Click any chord to change its colour,
-   bass note or length, swap it for another chord of the key, or lock it so Generate leaves it alone. There is one set of chords for the
+   bass note or length, swap it for another chord of the key, or lock it so Generate leaves it alone. **More** has a key change that lifts the last part of the song. There is one set of chords for the
    whole song. A Note sequencer set to **Follow** moves its notes with the chords, so the bass and lead keep up.
 9. **Key** at the top is shared by every tab. Notes and chords are always in key.
 10. **Your own plugins:** add a **Plugin slot** from Add units (under Your plugins), press **Load** and browse to
     a .vst3, pick one from **All installed plugins**, or drop a .vst3 file on the board. Plugins you've loaded before are listed first under Load. **Open** shows
     the plugin's own window; **Back** returns to the board. Cable a sequencer's Pitch and Gate into the slot to
     play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
+    **Knobs** points the slot's Knob 1 to 4 at the plugin's own controls; cable an LFO or any mover into Mod 1 to 4
+    to move them.
 11. **Links:** to make two sounds move together, link them. On a sequencer, click **LINK** next to its name and pick
     a group. Do the same on another sequencer, on any tab. The second one **follows** the first: it keeps its own
     pattern and moves up and down, in key, as the first one's notes change. The same menu can instead make them
@@ -59,8 +63,10 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 13. **Separate outputs:** to mix a sound in Cubase's own mixer, click the **MAIN** label on its channel in the mixing
     desk and pick **Out 2** to **Out 16**. In Cubase, switch that output on from the instrument's Activate Outputs
     list. If the label is orange, the output isn't switched on yet and the sound is still in the main mix.
-14. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-15. **Tidy** lines the modules up in signal order.
+14. **Song:** the **Song** button opens a grid of your sounds against the sections of the song. Switch it on, then
+    click squares to choose which sounds play where. **Build up** brings one more sound in each section.
+15. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
+16. **Tidy** lines the modules up in signal order.
 
 **Undo** and **Redo** are at the top (also Ctrl+Z and Ctrl+Y). **-** and **+** zoom the board (also Ctrl + mouse wheel). Hover a row in Add units to see a picture of that unit. To use your own sound, add a **Sample player** and load or drop an audio file on it. Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.

@@ -1264,6 +1264,90 @@ int main()
         CHECK (allFinite (render (rack, 1).l), "editing a chord that isn't there does nothing");
     }
 
+    // 47. The pitch shifter holds a steady note: over a long stretch the shifted note is as strong as in a short one
+    {
+        const auto a220 = sine (220, 96000, 0.4f);
+        Fx up ("harmoniser"); up.m->set ("v1", 5); up.m->set ("mix", 1.0f);
+        const auto y = up.run (a220);
+        float lo = 9, hi = 0;
+        for (size_t at = 48000; at + 960 <= 96000; at += 480) { const float v = tone (y, 440, at, at + 960); lo = std::min (lo, v); hi = std::max (hi, v); }
+        CHECK (tone (y, 440, 48000, 96000) > 0.9f * hi, "an octave up is one steady note, not grains drifting against each other");
+        CHECK (lo > 0.85f * hi && hi > 0.15f, "and its level doesn't wobble");
+        Fx down ("harmoniser"); down.m->set ("v1", 6); down.m->set ("mix", 1.0f);
+        const auto z = down.run (sine (329.6, 96000, 0.4f));
+        CHECK (tone (z, 164.8, 48000, 96000) > 0.36f, "the same going down, on a note that doesn't fit the sample rate neatly");
+        // a sound with no pitch (noise) still comes through, finite and no louder
+        std::vector<float> noise (48000); uint32_t s = 7; for (auto& v : noise) { s = s * 1664525u + 1013904223u; v = ((float) (s >> 8) / 8388608.0f - 1.0f) * 0.3f; }
+        Fx n ("harmoniser"); n.m->set ("v1", 5); n.m->set ("mix", 1.0f);
+        const auto w = n.run (noise);
+        CHECK (allFinite (w) && rms (w, 24000, 48000) > 0.05f && peakOf (w) < 1.5f, "noise goes through the shifter without trouble");
+    }
+
+    // 48. Key change: the last part of the chords goes up, and is saved
+    {
+        Rack rack; rack.prepare (48000);
+        rack.harmony.lenBars = 16; rack.harmony.chordBars = 2; rack.harmony.lift = 2;
+        rack.generateChords (11);
+        const auto& sl = rack.timeline.slots;
+        CHECK (sl.size() == 8 && sl.front().tr == 0 && sl.back().tr == 2, "with a key change of 2 the song starts in the key and ends 2 semitones up");
+        int changes = 0; bool inKey = true;
+        const auto t = rack.theory();
+        for (size_t i = 0; i < sl.size(); ++i)
+        {
+            if (i > 0 && sl[i].tr != sl[i - 1].tr) ++changes;
+            for (int k = 0; k < 4; ++k) inKey = inKey && t.inScale (n2c::mod12 ((int) std::lround (sl[i].voice[k] * 12.0f) + 60 - sl[i].tr));
+        }
+        CHECK (changes == 1, "it goes up once and stays up");
+        CHECK (inKey, "every note is in the key, or in the raised key after the change");
+        Rack back; back.prepare (48000);
+        CHECK (back.load (rack.save()) && back.harmony.lift == 2 && back.timeline.slots.back().tr == 2 && back.save() == rack.save(), "the key change is saved with the project");
+        rack.harmony.lift = 0; rack.generateChords (11);
+        bool flat = true; for (auto& q : rack.timeline.slots) flat = flat && q.tr == 0;
+        CHECK (flat, "set back to none, nothing is raised");
+        Rack old; old.prepare (48000);
+        CHECK (old.load ("N2M 1\nkey 2 0\nharmony deep 5 8 2 35 50\nchord 0 2 0 0 m7\nend\n") && old.harmony.lift == 0, "a project from before key changes loads with none");
+    }
+
+    // 49. The song page: a tab plays only in its sections, on the bar, whatever the block size
+    {
+        auto make = [] { auto* r = one ("kick"); r->song.sections.store (4); r->song.bars.store (1); r->boards[0]->plays.store (0b0101u); return r; };
+        const size_t bar = (size_t) (4.0 * 60.0 / 124.0 * 48000.0);
+        std::unique_ptr<Rack> off (make());
+        const auto all = render (*off, 4);
+        CHECK (peakOf (all.l, bar, bar + 4000) > 0.2f && peakOf (all.l, 3 * bar, 3 * bar + 4000) > 0.2f, "with the song page off a tab plays all the time");
+        std::unique_ptr<Rack> a (make()); a->song.on.store (true);
+        const auto x = render (*a, 8, true, 64);
+        CHECK (a->song.now.load() == 3, "the screen is told which section is playing");
+        bool same = true; for (size_t i = 0; i < bar; ++i) same = same && x.l[i] == all.l[i];
+        CHECK (same, "in a section it plays in, it sounds exactly as it does with the page off");
+        CHECK (peakOf (x.l, 0, 4000) > 0.2f && peakOf (x.l, 2 * bar, 2 * bar + 4000) > 0.2f, "it plays in sections 1 and 3");
+        CHECK (peakOf (x.l, bar + 12000, 2 * bar) < 1.0e-3f && peakOf (x.l, 3 * bar + 12000, 4 * bar) < 1.0e-3f, "and is quiet in sections 2 and 4");
+        CHECK (peakOf (x.l, bar, bar + 4000) < 0.5f * peakOf (x.l, 0, 4000), "no new hit lands at the start of a section it sits out");
+        CHECK (peakOf (x.l, 4 * bar, 4 * bar + 4000) > 0.2f && peakOf (x.l, 5 * bar + 12000, 6 * bar) < 1.0e-3f, "after the last section the song goes round again");
+        std::unique_ptr<Rack> b (make()); b->song.on.store (true);
+        const auto y = render (*b, 8, true, 441);
+        float diff = 0; for (size_t i = 0; i < x.l.size(); ++i) diff = std::max (diff, std::abs (x.l[i] - y.l[i]));
+        CHECK (diff < 1.0e-4f, "block size does not change where the sections fall");
+        // longer sections
+        std::unique_ptr<Rack> c (make()); c->song.on.store (true); c->song.bars.store (2); c->boards[0]->plays.store (0b10u);
+        const auto z = render (*c, 4);
+        CHECK (peakOf (z.l, 0, 2 * bar) < 1.0e-3f && peakOf (z.l, 2 * bar, 2 * bar + 4000) > 0.2f && peakOf (z.l, 3 * bar, 3 * bar + 4000) > 0.2f, "sections can be more than one bar long");
+        // saved, and old projects load with it off
+        Rack back; back.prepare (48000);
+        CHECK (back.load (c->save()) && back.song.on.load() && back.song.sections.load() == 4 && back.song.bars.load() == 2 && back.boards[0]->plays.load() == 0b10u && back.save() == c->save(), "the song page is saved with the project");
+        Rack old; old.prepare (48000);
+        CHECK (old.load ("N2M 1\nkey 2 0\nboard kick|Kick|0|0.8|0|0|0|0\nend\n") && ! old.song.on.load() && old.boards[0]->plays.load() == 0xffffffffu, "a project from before the song page loads with it off and every tab playing everywhere");
+        // undo
+        History hist (*c);
+        hist.beforeSong();
+        c->song.on.store (false); c->song.sections.store (6); c->boards[0]->plays.store (1u);
+        CHECK (hist.undo() && c->song.on.load() && c->song.sections.load() == 4 && c->boards[0]->plays.load() == 0b10u, "undo puts the song page back");
+        CHECK (hist.redo() && ! c->song.on.load() && c->song.sections.load() == 6 && c->boards[0]->plays.load() == 1u, "and redo does it again");
+        // a copy of a tab plays in the same sections
+        auto twin = c->copyBoard (*c->boards[0]);
+        CHECK (twin != nullptr && twin->plays.load() == 1u, "a duplicated tab keeps its sections");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

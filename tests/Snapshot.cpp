@@ -90,6 +90,14 @@ int main (int argc, char** argv)
     juce::ignoreUnused (b);
     shoot (*ed, dir + "/ui_added.png");
 
+    // the song page: off, then built up
+    e->songPanel.open();
+    shoot (*ed, dir + "/ui_song_off.png");
+    e->songPanel.fill (1);
+    e->songPanel.setCell (0, 4, false); e->songPanel.setCell (1, 4, false); e->songPanel.setCell (2, 4, false);
+    shoot (*ed, dir + "/ui_song.png");
+    e->songPanel.setVisible (false);
+
     e->stepZoom (-1); e->stepZoom (-1);
     shoot (*ed, dir + "/ui_zoomed_out.png");                  // 67%: the whole kick board in view
     e->stepZoom (1); e->stepZoom (1);
@@ -99,6 +107,10 @@ int main (int argc, char** argv)
     e->selectTab (9);
     e->resized();
     shoot (*ed, dir + "/ui_many.png");
+    e->songPanel.setSections (16);
+    e->songPanel.open();
+    shoot (*ed, dir + "/ui_song_many.png");
+    e->songPanel.setVisible (false);
 
     p.rack.addBoard (n2m::makeBoard ("empty", 48000));
     e->selectTab ((int) p.rack.boards.size() - 1);
@@ -132,6 +144,7 @@ int main (int argc, char** argv)
         {
             const auto found = n2m::pluginsInFile (argv[2]);
             if (! found.empty()) slot->load (found[0]);
+            slot->assignKnob (0, 0); slot->assignKnob (1, 1);          // two knobs pointed at the plugin's own controls
         }
         e->board().rebuild();
         shoot (*ed, dir + "/ui_slots.png");

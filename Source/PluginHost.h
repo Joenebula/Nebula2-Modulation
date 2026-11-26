@@ -18,7 +18,7 @@ std::vector<std::pair<juce::String, juce::String>> installedPlugins (bool lookAg
 // What a .vst3 file holds (one file can hold several plugins)
 std::vector<juce::PluginDescription> pluginsInFile (const juce::String& path);
 
-class HostedModule : public Module, private juce::AudioPlayHead
+class HostedModule : public Module, private juce::AudioPlayHead, private juce::AudioProcessorParameter::Listener
 {
 public:
     HostedModule();
@@ -31,7 +31,8 @@ public:
     void loadExtra (const std::string&) override;
 
     // Message thread. Returns an empty string when it worked, otherwise why it didn't.
-    juce::String load (const juce::PluginDescription&, const juce::MemoryBlock* state = nullptr);
+    // keepKnobs: a project being opened keeps what its knobs pointed at; loading a different plugin by hand clears them.
+    juce::String load (const juce::PluginDescription&, const juce::MemoryBlock* state = nullptr, bool keepKnobs = false);
     void unload();
 
     bool hasPlugin() const { return plugin != nullptr; }
@@ -40,8 +41,21 @@ public:
     std::atomic<int> notesSent { 0 };                  // notes started in the plugin so far
     juce::AudioPluginInstance* instance() const { return plugin.get(); }   // message thread only, for opening its window
 
+    // Knobs 1 to 4 on the slot can each be pointed at one of the plugin's own controls. A cable into the matching
+    // Mod input then moves that control too. Message thread.
+    static constexpr int kKnobs = 4;
+    int numControls() const;
+    juce::String controlName (int index) const;
+    float controlValue (int index) const;              // 0..1
+    void assignKnob (int knob, int index);             // -1 = not set. The knob takes the control's position, so nothing jumps
+    int knobTarget (int knob) const { return knob >= 0 && knob < kKnobs ? target[knob].load() : -1; }
+    int lastTouched() const { return touched.load(); } // the control last moved in the plugin's own window, or -1
+
 private:
     juce::Optional<PositionInfo> getPosition() const override;
+    void parameterValueChanged (int index, float) override { touched.store (index); }
+    void parameterGestureChanged (int, bool) override {}
+    juce::String controlId (int index) const;
 
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     juce::PluginDescription description;
@@ -54,6 +68,9 @@ private:
     double posBpm = 120, posPpq = 0;
     bool posPlaying = false;
     std::shared_ptr<bool> alive;
+    std::atomic<int> target[kKnobs], touched { -1 };
+    float sent[kKnobs] { -1, -1, -1, -1 };             // what each knob last told the plugin (-1 = nothing yet)
+    juce::StringArray knobIds;                         // the plugin's own ids for those controls: what is saved
 };
 
 // A screen showing a hosted plugin's window asks to be told before that plugin goes away, so it can close the window first

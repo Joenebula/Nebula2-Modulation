@@ -370,12 +370,17 @@ ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), modu
         for (int v : { 0, 25, 50, 75, 100 }) variation.addItem (2000 + v, juce::String (v) + "%", true, proc.rack.harmony.variation == v);
         menu.addSubMenu ("Strange: rarer chords, richer notes (" + juce::String (proc.rack.harmony.strange) + "%)", strange);
         menu.addSubMenu ("Variation: how much the repeats change (" + juce::String (proc.rack.harmony.variation) + "%)", variation);
+        juce::PopupMenu lift;
+        const char* liftNames[4] = { "None", "Up 1 semitone", "Up 2 semitones", "Up 3 semitones" };
+        for (int v = 0; v < 4; ++v) lift.addItem (3000 + v, liftNames[v], true, proc.rack.harmony.lift == v);
+        menu.addSubMenu (juce::String ("Key change for the last part of the song (") + liftNames[juce::jlimit (0, 3, proc.rack.harmony.lift)] + ")", lift);
         juce::Component::SafePointer<ChordView> safe (this);
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&more), [safe, changed] (int r)
         {
             if (safe == nullptr || r <= 0) return;
             safe->proc.history.beforeChords();
-            if (r >= 2000) safe->proc.rack.harmony.variation = r - 2000; else safe->proc.rack.harmony.strange = r - 1000;
+            if (r >= 3000) safe->proc.rack.harmony.lift = r - 3000;
+            else if (r >= 2000) safe->proc.rack.harmony.variation = r - 2000; else safe->proc.rack.harmony.strange = r - 1000;
             safe->proc.rack.generateChords (safe->proc.rack.harmony.seed);
             changed();
         });
@@ -591,26 +596,72 @@ void ScopeView::tick()
 //==============================================================================
 HostView::HostView (BoardView& o, HostedModule& m) : owner (o), module (m)
 {
-    addAndMakeVisible (load); addAndMakeVisible (open);
+    addAndMakeVisible (load); addAndMakeVisible (open); addAndMakeVisible (knobs);
     load.onClick = [this] { showLoadMenu(); };
+    knobs.onClick = [this] { showKnobMenu(); };
     open.onClick = [this] { if (module.hasPlugin() && owner.onOpenPlugin) owner.onOpenPlugin (module); };
     setSize (lay::hostW, lay::hostSeqH);
     refresh();
 }
 
-void HostView::refresh() { open.setEnabled (module.hasPlugin()); repaint(); }
-void HostView::resized() { load.setBounds (0, 30, 80, 24); open.setBounds (86, 30, 80, 24); }
+void HostView::refresh() { open.setEnabled (module.hasPlugin()); knobs.setEnabled (module.hasPlugin() && module.numControls() > 0); repaint(); }
+void HostView::resized() { load.setBounds (0, 30, 72, 24); open.setBounds (78, 30, 72, 24); knobs.setBounds (156, 30, 72, 24); }
 
 void HostView::paint (juce::Graphics& g)
 {
     const bool failed = module.status.isNotEmpty();
     g.setFont (font (13.0f, Weight::SemiBold));
     g.setColour (module.hasPlugin() ? juce::Colours::white : n7);
-    g.drawText (module.hasPlugin() ? module.pluginName() : "Empty", 0, 2, getWidth(), 18, juce::Justification::centredLeft, true);
+    g.drawText (module.hasPlugin() ? module.pluginName() : "Empty", 0, 2, 190, 18, juce::Justification::centredLeft, true);
     g.setFont (helpFont());
+    // What the slot's four knobs are pointed at
+    juce::String pointed;
+    for (int k = 0; k < HostedModule::kKnobs; ++k)
+        if (module.knobTarget (k) >= 0) pointed << (pointed.isEmpty() ? "" : "   ") << (k + 1) << ": " << module.controlName (module.knobTarget (k));
+    g.setColour (n8);
+    g.drawText (pointed, 196, 2, getWidth() - 196, 18, juce::Justification::centredRight, true);
     g.setColour (failed ? bandOrange : n7);
-    g.drawFittedText (failed ? module.status : module.hasPlugin() ? "Open shows its own window" : "Load a plugin, or drop a .vst3 file on the board",
-                      172, 30, getWidth() - 172, 24, juce::Justification::centredLeft, 2, 0.8f);
+    g.drawFittedText (failed ? module.status : module.hasPlugin() ? "Open shows its own window. Knobs points Knob 1 to 4 at its controls" : "Load a plugin, or drop a .vst3 file on the board",
+                      236, 30, getWidth() - 236, 24, juce::Justification::centredLeft, 2, 0.8f);
+}
+
+// Knobs: point each of the slot's four knobs at one of the plugin's own controls
+void HostView::showKnobMenu()
+{
+    if (! module.hasPlugin()) return;
+    const int count = module.numControls(), touched = module.lastTouched();
+    juce::PopupMenu menu;
+    menu.addSectionHeader ("Point a knob at one of " + module.pluginName() + "'s controls");
+    for (int k = 0; k < HostedModule::kKnobs; ++k)
+    {
+        const int base = (k + 1) * 100000, now = module.knobTarget (k);
+        juce::PopupMenu sub;
+        sub.addItem (base, "Nothing", true, now < 0);
+        if (touched >= 0) sub.addItem (base + 1 + touched, "The control I last moved in its window: " + module.controlName (touched));
+        sub.addSeparator();
+        // Big plugins have hundreds of controls: list them in pages
+        const int page = 40;
+        if (count <= page) for (int i = 0; i < count; ++i) sub.addItem (base + 1 + i, module.controlName (i), true, now == i);
+        else
+            for (int from = 0; from < count && from < 4000; from += page)
+            {
+                juce::PopupMenu part;
+                const int to = juce::jmin (count, from + page);
+                for (int i = from; i < to; ++i) part.addItem (base + 1 + i, module.controlName (i), true, now == i);
+                sub.addSubMenu (module.controlName (from) + "  ...  " + module.controlName (to - 1), part, true, nullptr, now >= from && now < to);
+            }
+        menu.addSubMenu ("Knob " + juce::String (k + 1) + ": " + (now >= 0 ? module.controlName (now) : juce::String ("nothing")), sub);
+    }
+    juce::Component::SafePointer<HostView> safe (this);
+    BoardView* board = &owner;
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&knobs), [safe, board] (int r)
+    {
+        if (safe == nullptr || r < 100000) return;
+        board->willChange();                         // the knob's own position changes, so Undo knows
+        safe->module.assignKnob (r / 100000 - 1, r % 100000 - 1);
+        board->settled();
+        board->repaintAll();
+    });
 }
 
 void HostView::loadFile (const juce::String& path)
@@ -1804,8 +1855,200 @@ void AddPanel::mouseDown (const juce::MouseEvent& e)
 using namespace n2m;
 using namespace n2m::look;
 
+//==============================================================================
+// The song page
+SongPanel::SongPanel (Nebula2ModulationProcessor& p) : proc (p)
+{
+    for (auto* b : { &onOff, &fewer, &more, &barsButton, &allOn, &buildUp, &close }) addAndMakeVisible (b);
+    close.onClick = [this] { setVisible (false); };
+    onOff.onClick = [this] { setOn (! proc.rack.song.on.load()); };
+    fewer.onClick = [this] { setSections (proc.rack.song.sections.load() - 1); };
+    more.onClick = [this] { setSections (proc.rack.song.sections.load() + 1); };
+    allOn.onClick = [this] { fill (0); };
+    buildUp.onClick = [this] { fill (1); };
+    barsButton.onClick = [this]
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("How long each section is");
+        for (int v : { 1, 2, 4, 8, 16 }) menu.addItem (v, juce::String (v) + (v == 1 ? " bar" : " bars"), true, proc.rack.song.bars.load() == v);
+        juce::Component::SafePointer<SongPanel> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&barsButton), [safe] (int r) { if (safe != nullptr && r > 0) safe->setBars (r); });
+    };
+    setVisible (false);
+}
+
+void SongPanel::open() { sync(); setVisible (true); toFront (true); resized(); repaint(); }
+void SongPanel::sync()
+{
+    const bool on = proc.rack.song.on.load();
+    onOff.setButtonText (on ? "Song page: on" : "Song page: off");
+    onOff.setToggleState (on, juce::dontSendNotification);
+    const int bars = proc.rack.song.bars.load();
+    barsButton.setButtonText (juce::String (bars) + (bars == 1 ? " bar each" : " bars each"));
+    fewer.setEnabled (proc.rack.song.sections.load() > 2);
+    more.setEnabled (proc.rack.song.sections.load() < kSongSections);
+    repaint();
+}
+void SongPanel::setOn (bool on) { proc.history.beforeSong(); proc.rack.song.on.store (on); sync(); }
+void SongPanel::setBars (int n) { proc.history.beforeSong(); proc.rack.song.bars.store (juce::jlimit (1, 16, n)); sync(); }
+void SongPanel::setSections (int n)
+{
+    n = juce::jlimit (2, kSongSections, n);
+    if (n == proc.rack.song.sections.load()) return;
+    proc.history.beforeSong();
+    proc.rack.song.sections.store (n);
+    sync();
+}
+void SongPanel::setCell (int tab, int section, bool on)
+{
+    if (tab < 0 || tab >= (int) proc.rack.boards.size() || section < 0 || section >= kSongSections) return;
+    auto& plays = proc.rack.boards[(size_t) tab]->plays;
+    const uint32_t bit = 1u << section, now = plays.load();
+    plays.store (on ? (now | bit) : (now & ~bit));
+    repaint();
+}
+void SongPanel::fill (int kind)
+{
+    proc.history.beforeSong();
+    const int sections = proc.rack.song.sections.load(), count = (int) proc.rack.boards.size();
+    for (int t = 0; t < count; ++t)
+    {
+        // Build up: the first sound plays from the start and one more joins each section; all play by the last
+        const int from = kind == 1 ? juce::jmin (t, sections - 1) : 0;
+        uint32_t bits = 0;
+        for (int s = from; s < kSongSections; ++s) bits |= 1u << s;
+        proc.rack.boards[(size_t) t]->plays.store (bits);
+    }
+    if (kind == 1 && ! proc.rack.song.on.load()) proc.rack.song.on.store (true);
+    sync();
+}
+
+int SongPanel::rowH() const
+{
+    const int rows = juce::jmax (1, (int) proc.rack.boards.size());
+    return juce::jlimit (12, 30, (getHeight() - 24 - 196) / rows);
+}
+juce::Rectangle<int> SongPanel::card() const
+{
+    const int rows = juce::jmax (1, (int) proc.rack.boards.size());
+    return juce::Rectangle<int> (1000, 196 + rows * rowH()).withCentre (getLocalBounds().getCentre());
+}
+juce::Rectangle<int> SongPanel::cell (int tab, int section) const
+{
+    const auto c = card();
+    const int sections = proc.rack.song.sections.load();
+    const int left = c.getX() + 20 + 150, w = (c.getWidth() - 40 - 150) / juce::jmax (1, sections);
+    return { left + section * w, c.getY() + 136 + tab * rowH(), w, rowH() };
+}
+bool SongPanel::hit (juce::Point<int> p, int& tab, int& section) const
+{
+    const int sections = proc.rack.song.sections.load();
+    for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
+        for (int s = 0; s < sections; ++s)
+            if (cell (t, s).contains (p)) { tab = t; section = s; return true; }
+    return false;
+}
+void SongPanel::resized()
+{
+    const auto c = card();
+    const int y = c.getY() + 64;
+    onOff.setBounds (c.getX() + 20, y, 124, 28);
+    fewer.setBounds (c.getX() + 232, y, 28, 28);
+    more.setBounds (c.getX() + 296, y, 28, 28);
+    barsButton.setBounds (c.getX() + 340, y, 104, 28);
+    buildUp.setBounds (c.getRight() - 20 - 90, y, 90, 28);
+    allOn.setBounds (buildUp.getX() - 8 - 76, y, 76, 28);
+    close.setBounds (c.getRight() - 20 - 84, c.getBottom() - 16 - 28, 84, 28);
+}
+void SongPanel::mouseDown (const juce::MouseEvent& e)
+{
+    if (! card().contains (e.getPosition())) { setVisible (false); return; }
+    int t = 0, s = 0;
+    if (! hit (e.getPosition(), t, s)) return;
+    proc.history.beforeSong();
+    paintTo = ((proc.rack.boards[(size_t) t]->plays.load() >> s) & 1u) == 0;
+    setCell (t, s, paintTo);
+}
+void SongPanel::mouseDrag (const juce::MouseEvent& e)
+{
+    int t = 0, s = 0;
+    if (hit (e.getPosition(), t, s)) setCell (t, s, paintTo);
+}
+void SongPanel::tick()
+{
+    if (! isVisible()) return;
+    const int now = proc.rack.song.on.load() && proc.isPlaying() ? proc.rack.song.now.load() : -1;
+    if (now != shownSection) { shownSection = now; repaint(); }
+}
+void SongPanel::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::black.withAlpha (0.55f));
+    const auto c = card();
+    raised (g, c.toFloat(), radiusPanel);
+    const bool on = proc.rack.song.on.load();
+    const int sections = proc.rack.song.sections.load(), bars = proc.rack.song.bars.load();
+    g.setFont (titleFont());
+    g.setColour (juce::Colours::white);
+    g.drawText ("Song", c.getX() + 20, c.getY() + 14, 300, 20, juce::Justification::centredLeft, false);
+    g.setFont (helpFont());
+    g.setColour (n7);
+    g.drawText (on ? "A filled square means that sound plays in that section. Click or drag across squares to change them. After the last section the song goes round again."
+                   : "Off: every sound plays all the time. Switch it on to choose which sounds play in which part of the song.",
+                c.getX() + 20, c.getY() + 34, c.getWidth() - 40, 16, juce::Justification::centredLeft, true);
+    caption (g, "Sections", { c.getX() + 160, c.getY() + 64, 68, 28 });
+    g.setFont (controlFont());
+    g.setColour (n8);
+    g.drawText (juce::String (sections), fewer.getRight(), fewer.getY(), more.getX() - fewer.getRight(), 28, juce::Justification::centred, false);
+    g.setFont (helpFont());
+    g.setColour (n7);
+    g.drawText ("The whole song: " + juce::String (sections * bars) + " bars", barsButton.getRight() + 14, barsButton.getY(), 200, 28, juce::Justification::centredLeft, false);
+
+    // Section numbers along the top, with the bar each one starts on
+    for (int s = 0; s < sections; ++s)
+    {
+        const auto r = cell (0, s).withY (c.getY() + 108).withHeight (24);
+        const bool playing = s == shownSection;
+        g.setFont (controlFont());
+        g.setColour (playing ? noteAccent : n8);
+        g.drawText (juce::String (s + 1), r.withHeight (13), juce::Justification::centred, false);
+        g.setFont (font (9.0f));
+        g.setColour (playing ? noteAccent : n7);
+        g.drawText ("bar " + juce::String (s * bars + 1), r.withTrimmedTop (12), juce::Justification::centred, false);
+    }
+    const int h = rowH();
+    for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
+    {
+        auto& b = *proc.rack.boards[(size_t) t];
+        const auto col = boardColour (b.colour);
+        const auto first = cell (t, 0);
+        g.setColour (col);
+        g.fillEllipse ((float) c.getX() + 22.0f, (float) first.getCentreY() - 4.0f, 8.0f, 8.0f);
+        g.setFont (controlFont());
+        g.setColour (n8);
+        g.drawText (b.name, c.getX() + 38, first.getY(), 126, h, juce::Justification::centredLeft, true);
+        const uint32_t plays = b.plays.load();
+        for (int s = 0; s < sections; ++s)
+        {
+            const auto r = cell (t, s).toFloat().reduced (2.0f, h > 18 ? 3.0f : 1.0f);
+            if (((plays >> s) & 1u) != 0)
+            {
+                g.setColour (col.withAlpha (on ? (s == shownSection ? 1.0f : 0.78f) : 0.28f));
+                g.fillRoundedRectangle (r, radiusChip);
+            }
+            else sunken (g, r, radiusChip);
+        }
+    }
+    // The section playing now
+    if (shownSection >= 0 && shownSection < sections && ! proc.rack.boards.empty())
+    {
+        const auto top = cell (0, shownSection), bottom = cell ((int) proc.rack.boards.size() - 1, shownSection);
+        g.setColour (noteAccent.withAlpha (0.8f));
+        g.drawRoundedRectangle (top.getUnion (bottom).toFloat().reduced (0.5f), radiusChip, 1.0f);
+    }
+}
+
 Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
-    : AudioProcessorEditor (p), proc (p), tabs (p), boardView (p), mixer (p)
+    : AudioProcessorEditor (p), songPanel (p), proc (p), tabs (p), boardView (p), mixer (p)
 {
     setLookAndFeel (&lookAndFeel);
     setWantsKeyboardFocus (true);
@@ -1837,6 +2080,8 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     zoomIn.onClick = [this] { stepZoom (1); };
     addPanel.preview = [this] (const Info& i) { return previewOf (i); };
     viewport.setScrollBarThickness (10);
+    addAndMakeVisible (songButton);
+    songButton.onClick = [this] { songPanel.open(); };
 
     addAndMakeVisible (mixer);
     mixer.onSelect = [this] (int i) { selectTab (i); tabs.showSelected(); };
@@ -1844,6 +2089,7 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addChildComponent (hostOverlay);
     boardView.onOpenPlugin = [this] (HostedModule& m) { if (auto* b = current()) hostOverlay.open (m, b->name); };
 
+    addChildComponent (songPanel);
     addChildComponent (addPanel);
     addPanel.onAdd = [this] (const std::vector<std::string>& types) { addUnits (types); };
 
@@ -1932,6 +2178,7 @@ void Nebula2ModulationEditor::stepHistory (bool redo)
     proc.chordsVersion.fetch_add (1);
     tabs.showSelected();
     tabs.repaint(); mixer.repaint(); repaint();
+    if (songPanel.isVisible()) songPanel.open();
 }
 
 void Nebula2ModulationEditor::addUnits (const std::vector<std::string>& types)
@@ -1978,6 +2225,8 @@ void Nebula2ModulationEditor::timerCallback()
     if (play.getButtonText() != text || play.getToggleState() != on) { play.setButtonText (text); play.setToggleState (on, juce::dontSendNotification); }
     boardView.tick();
     mixer.tick();
+    songPanel.tick();
+    if (songButton.getToggleState() != proc.rack.song.on.load()) songButton.setToggleState (proc.rack.song.on.load(), juce::dontSendNotification);
     static int shownBpm = 0;
     const int b = (int) std::lround (proc.bpm.load() * 10.0);
     if (b != shownBpm) { shownBpm = b; repaint (0, 0, getWidth(), topbarH); }
@@ -1989,6 +2238,7 @@ bool Nebula2ModulationEditor::keyPressed (const juce::KeyPress& k)
     if (k == juce::KeyPress ('y', juce::ModifierKeys::commandModifier, 0)
         || k == juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) { stepHistory (true); return true; }
     if (k == juce::KeyPress::spaceKey && ! proc.hostPlaying.load()) { proc.preview.store (! proc.preview.load()); return true; }
+    if (k == juce::KeyPress::escapeKey && songPanel.isVisible()) { songPanel.setVisible (false); return true; }
     if (k == juce::KeyPress::escapeKey && addPanel.isVisible()) { addPanel.setVisible (false); return true; }
     if (k == juce::KeyPress::escapeKey && hostOverlay.isVisible()) { hostOverlay.close(); return true; }
     return false;
@@ -2016,18 +2266,20 @@ void Nebula2ModulationEditor::resized()
 {
     const int cy = (topbarH - 28) / 2;
     play.setBounds (236, cy, 84, 28);
-    zoomOut.setBounds (896, cy, 28, 28);
-    zoomIn.setBounds (972, cy, 28, 28);
-    undoButton.setBounds (744, cy, 64, 28);
-    redoButton.setBounds (812, cy, 64, 28);
+    zoomOut.setBounds (856, cy, 28, 28);
+    zoomIn.setBounds (926, cy, 28, 28);
+    songButton.setBounds (966, cy, 66, 28);
+    undoButton.setBounds (722, cy, 60, 28);
+    redoButton.setBounds (786, cy, 60, 28);
     keyBox.setBounds (484, cy, 68, 28);
-    scaleBox.setBounds (558, cy, 170, 28);
+    scaleBox.setBounds (558, cy, 154, 28);
     tidyButton.setBounds (getWidth() - space4 - 70, cy, 70, 28);
     addUnitsButton.setBounds (tidyButton.getX() - 8 - 104, cy, 104, 28);
     tabs.setBounds (0, topbarH, getWidth(), kTabsH);
     mixer.setBounds (0, getHeight() - kMixerH, getWidth(), kMixerH);
     viewport.setBounds (0, topbarH + kTabsH, getWidth(), getHeight() - topbarH - kTabsH - kMixerH);
     addPanel.setBounds (getLocalBounds());
+    songPanel.setBounds (getLocalBounds());
     hostOverlay.setBounds (getLocalBounds());
     boardView.fitToContent();
 }

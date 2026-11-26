@@ -103,9 +103,10 @@ public:
     void loadFile (const juce::String& path);
 private:
     void showLoadMenu();
+    void showKnobMenu();
     void refresh();
     BoardView& owner; HostedModule& module;
-    juce::TextButton load { "Load" }, open { "Open" };
+    juce::TextButton load { "Load" }, open { "Open" }, knobs { "Knobs" };
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
@@ -285,6 +286,33 @@ private:
     std::vector<std::string> ticked;
     juce::TextButton add { "Add to board" }, cancel { "Cancel" };
 };
+
+// The song page: a grid of tabs down the side and sections along the top. A filled square = that sound plays there.
+class SongPanel : public juce::Component
+{
+public:
+    explicit SongPanel (Nebula2ModulationProcessor&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void open();
+    void tick();
+    void fill (int kind);                 // 0 = every sound everywhere, 1 = build up: one more sound each section
+    void setCell (int tab, int section, bool on);
+    void setSections (int n);
+    void setBars (int n);
+    void setOn (bool on);
+private:
+    juce::Rectangle<int> card() const;
+    juce::Rectangle<int> cell (int tab, int section) const;
+    int rowH() const;
+    bool hit (juce::Point<int>, int& tab, int& section) const;
+    void sync();
+    Nebula2ModulationProcessor& proc;
+    juce::TextButton onOff, fewer { "-" }, more { "+" }, barsButton, allOn { "All on" }, buildUp { "Build up" }, close { "Close" };
+    bool paintTo = false; int shownSection = -2;
+};
 } // namespace n2m
 
 class Nebula2ModulationEditor : public juce::AudioProcessorEditor, private juce::Timer
@@ -297,6 +325,7 @@ public:
     bool keyPressed (const juce::KeyPress&) override;
     void selectTab (int index);
     n2m::AddPanel addPanel;      // public so the snapshot test can open it
+    n2m::SongPanel songPanel;
     n2m::HostOverlay hostOverlay;
     n2m::BoardView& board() { return boardView; }   // for the tests
     void stepHistory (bool redo);                   // Undo (false) or Redo (true)
@@ -309,7 +338,7 @@ private:
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
     juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
-    juce::TextButton zoomOut { "-" }, zoomIn { "+" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" };
     juce::Component boardHolder;                 // the board sits in this so it can be drawn bigger or smaller
     std::map<std::string, juce::Image> previews;
     juce::Image previewOf (const n2m::Info&);

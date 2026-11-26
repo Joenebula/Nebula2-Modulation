@@ -479,6 +479,123 @@ int main (int argc, char** argv)
         song.playing = false;
         run (r, song, 10.0);
         CHECK (run (r, song, 0.5) < 0.002f, "the notes end when the song stops: nothing left hanging");
+
+        // Knobs on the slot move the plugin's own controls
+        CHECK (slot->numControls() > 1 && slot->controlName (0).isNotEmpty(), "the slot can list the plugin's own controls");
+        int ctl = -1;       // a smooth control (not a switch): one that takes 0.37 and gives it back
+        for (int i = 0; i < slot->numControls() && ctl < 0; ++i)
+            if (slot->instance()->getParameters()[i]->getNumSteps() > 50) ctl = i;
+        CHECK (ctl >= 0, "the instrument has a smooth control to try");
+        if (ctl >= 0)
+        {
+            auto value = [&] { return slot->controlValue (ctl); };
+            slot->instance()->getParameters()[ctl]->setValue (0.2f);
+            run (r, song, 0.2);
+            CHECK (slot->knobTarget (0) == -1, "knobs start pointed at nothing");
+            slot->set ("k1", 0.9f); run (r, song, 0.2);
+            CHECK (std::abs (value() - 0.2f) < 0.02f, "a knob pointed at nothing moves nothing");
+            slot->assignKnob (0, ctl);
+            CHECK (slot->knobTarget (0) == ctl && std::abs (slot->P (slot->paramIndex ("k1")) - 0.2f) < 0.02f, "pointing a knob at a control sets the knob to where the control is");
+            run (r, song, 0.2);
+            CHECK (std::abs (value() - 0.2f) < 0.02f, "so nothing jumps");
+            slot->set ("k1", 0.8f); run (r, song, 0.2);
+            std::printf ("knob 1 -> %s: control now at %.2f\n", slot->controlName (ctl).toRawUTF8(), (double) value());
+            CHECK (std::abs (value() - 0.8f) < 0.02f, "turning the knob moves the plugin's control");
+            // a change made inside the plugin's own window is left alone until the knob moves again
+            slot->instance()->getParameters()[ctl]->setValueNotifyingHost (0.5f);
+            run (r, song, 0.2);
+            CHECK (std::abs (value() - 0.5f) < 0.02f && slot->lastTouched() == ctl, "a change in the plugin's own window stays, and the slot knows which control it was");
+            // a cable into Mod 1 moves it too
+            auto* macro = r.rack.addModule (b, "macro", 0, 0);
+            macro->set ("value", 0.15f);
+            r.rack.connect (b, macro->uid, 0, slot->uid, slot->inIndex ("m1"));
+            slot->set ("k1", 0.3f); run (r, song, 0.5);
+            CHECK (std::abs (value() - 0.45f) < 0.02f, "a cable into Mod 1 adds to the knob");
+            macro->set ("value", 1.0f); run (r, song, 0.5);
+            CHECK (std::abs (value() - 1.0f) < 0.02f, "and never pushes the control past its end");
+            r.rack.disconnectAll (b, macro->uid);
+            slot->set ("k1", 0.6f); run (r, song, 0.2);
+
+            // saved with the project
+            juce::MemoryBlock saved;
+            r.getStateInformation (saved);
+            Nebula2ModulationProcessor q2;
+            FakeCubase song2; q2.setPlayHead (&song2);
+            q2.setRateAndBufferSizeDetails (48000, 256);
+            q2.prepareToPlay (48000, 256);
+            q2.setStateInformation (saved.getData(), (int) saved.getSize());
+            n2m::HostedModule* back = nullptr;
+            for (auto& m : q2.rack.boards[0]->modules) if (auto* hm = dynamic_cast<n2m::HostedModule*> (m.get())) back = hm;
+            CHECK (back != nullptr && back->knobTarget (0) == ctl && back->knobTarget (1) == -1, "which control a knob points at is saved with the project");
+            if (back != nullptr)
+            {
+                run (q2, song2, 0.2);
+                CHECK (std::abs (back->controlValue (ctl) - 0.6f) < 0.02f, "and the control comes back where it was");
+                back->set ("k1", 0.1f); run (q2, song2, 0.2);
+                CHECK (std::abs (back->controlValue (ctl) - 0.1f) < 0.02f, "and the knob still moves it");
+            }
+            // a slot saved before knobs existed (two pieces of text, not three) still loads
+            const auto extra = juce::StringArray::fromTokens (juce::String (slot->saveExtra()), " ", "");
+            CHECK (extra.size() == 3, "a slot saves its plugin, the plugin's settings and its knobs");
+            auto* older = dynamic_cast<n2m::HostedModule*> (r.rack.addModule (b, "plugin", 0, 0));
+            older->loadExtra ((extra[0] + " " + extra[1]).toStdString());
+            CHECK (older->hasPlugin() && older->knobTarget (0) == -1, "a slot saved before knobs existed still loads");
+            // loading a different plugin by hand clears the knobs; so does emptying the slot
+            slot->load (found[0]);
+            CHECK (slot->knobTarget (0) == -1, "loading another plugin into the slot clears its knobs");
+            slot->assignKnob (2, ctl); slot->assignKnob (9, ctl); slot->assignKnob (1, 99999);
+            CHECK (slot->knobTarget (2) == ctl && slot->knobTarget (1) == -1, "a knob or control that isn't there is ignored");
+            slot->unload();
+            CHECK (slot->knobTarget (2) == -1 && slot->numControls() == 0, "emptying the slot clears them too");
+            run (r, song, 0.2);
+        }
+    }
+
+    {
+        // The song page, through the screen: squares, build up, undo, and saved with the project
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        const int tabsNow = (int) r.rack.boards.size();
+        CHECK (tabsNow >= 3 && ! r.rack.song.on.load(), "a new project starts with the song page off");
+        ed->songPanel.open();
+        CHECK (ed->songPanel.isVisible(), "the Song button opens the song page");
+        ed->songPanel.fill (1);
+        CHECK (r.rack.song.on.load() && (r.rack.boards[0]->plays.load() & 1u) != 0 && (r.rack.boards[2]->plays.load() & 3u) == 0 && (r.rack.boards[2]->plays.load() & 4u) != 0, "Build up switches it on and brings one more sound in each section");
+        ed->songPanel.setSections (4); ed->songPanel.setBars (1);
+        r.rack.song.sections.store (4);
+        ed->songPanel.setCell (0, 1, false);
+        // the kick alone: heard in section 1, not in section 2
+        for (auto& b : r.rack.boards) b->mute.store (true);
+        r.rack.boards[0]->mute.store (false);
+        song.playing = true; song.ppq = 0;
+        std::vector<float> heard;
+        run (r, song, 4.0 * 60.0 / 124.0 * 2.0, &heard);
+        const size_t bar = (size_t) (4.0 * 60.0 / 124.0 * 48000.0);
+        float first = 0, second = 0;
+        for (size_t i = 0; i < bar && i < heard.size(); ++i) first = juce::jmax (first, std::abs (heard[i]));
+        for (size_t i = bar + 14000; i < 2 * bar - 512 && i < heard.size(); ++i) second = juce::jmax (second, std::abs (heard[i]));
+        CHECK (first > 0.1f && second < 0.002f, "in Cubase the kick plays in its section and rests in the next");
+        song.playing = false;
+        juce::MemoryBlock saved;
+        r.getStateInformation (saved);
+        Nebula2ModulationProcessor q;
+        q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        q.setStateInformation (saved.getData(), (int) saved.getSize());
+        CHECK (q.rack.song.on.load() && q.rack.song.sections.load() == 4 && q.rack.song.bars.load() == 1 && q.rack.boards[0]->plays.load() == r.rack.boards[0]->plays.load(), "the song page comes back with the project");
+        ed->stepHistory (false);
+        CHECK (r.rack.song.bars.load() == 4, "Undo steps back through song page changes");
+        while (r.history.canUndo()) ed->stepHistory (false);
+        CHECK (! r.rack.song.on.load() && r.rack.boards[2]->plays.load() == 0xffffffffu, "all the way back to off, every sound everywhere");
+        // key change from the chord unit's menu is one generate with the setting changed
+        r.history.beforeChords();
+        r.rack.harmony.lift = 2; r.rack.generateChords (r.rack.harmony.seed);
+        CHECK (r.rack.timeline.slots.back().tr == 2, "a key change raises the last part");
+        ed->stepHistory (false);
+        CHECK (r.rack.harmony.lift == 0 && r.rack.timeline.slots.back().tr == 0, "and Undo takes it away again");
     }
 
     if (failures == 0) std::printf ("All passed\n");

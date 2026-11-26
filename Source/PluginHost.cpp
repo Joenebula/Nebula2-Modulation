@@ -91,13 +91,20 @@ static void tellClosing (HostedModule* m)
 const Info& HostedModule::desc()
 {
     static const Info i { "plugin", "Plugin slot", "Your plugins", "Holds one of your VST3 plugins",
-        { { "p1", "Note 1" }, { "p2", "Note 2" }, { "p3", "Note 3" }, { "p4", "Note 4" }, { "gate", "Gate" }, { "vel", "Vel" }, { "inl", "In L" }, { "inr", "In R" } },
+        { { "p1", "Note 1" }, { "p2", "Note 2" }, { "p3", "Note 3" }, { "p4", "Note 4" }, { "gate", "Gate" }, { "vel", "Vel" }, { "inl", "In L" }, { "inr", "In R" },
+          { "m1", "Mod 1" }, { "m2", "Mod 2" }, { "m3", "Mod 3" }, { "m4", "Mod 4" } },
         { { "outl", "Out L" }, { "outr", "Out R" } },
-        { { "level", "Level", 0, 1.5f, 1.0f, Fmt::Percent } }, Seq::Host };
+        { { "level", "Level", 0, 1.5f, 1.0f, Fmt::Percent },
+          { "k1", "Knob 1", 0, 1, 0.5f, Fmt::Percent }, { "k2", "Knob 2", 0, 1, 0.5f, Fmt::Percent }, { "k3", "Knob 3", 0, 1, 0.5f, Fmt::Percent }, { "k4", "Knob 4", 0, 1, 0.5f, Fmt::Percent } }, Seq::Host };
     return i;
 }
 
-HostedModule::HostedModule() : alive (std::make_shared<bool> (true)) { buffer.setSize (2, kBlock); }
+HostedModule::HostedModule() : alive (std::make_shared<bool> (true))
+{
+    buffer.setSize (2, kBlock);
+    for (auto& t : target) t.store (-1);
+    for (int k = 0; k < kKnobs; ++k) knobIds.add ({});
+}
 HostedModule::~HostedModule() { *alive = false; unload(); }
 
 void HostedModule::prepare (double sampleRate)
@@ -110,7 +117,7 @@ void HostedModule::prepare (double sampleRate)
     plugin->prepareToPlay (sr, kBlock);
 }
 
-juce::String HostedModule::load (const juce::PluginDescription& d, const juce::MemoryBlock* state)
+juce::String HostedModule::load (const juce::PluginDescription& d, const juce::MemoryBlock* state, bool keepKnobs)
 {
     juce::String error;
     auto fresh = pluginFormats().createPluginInstance (d, sr, kBlock, error);
@@ -128,13 +135,27 @@ juce::String HostedModule::load (const juce::PluginDescription& d, const juce::M
     juce::AudioBuffer<float> room (juce::jmax (2, fresh->getTotalNumInputChannels(), fresh->getTotalNumOutputChannels()), kBlock);
     room.clear();
     tellClosing (this);
+    // Which of the new plugin's controls the knobs point at: the saved ones when a project opens, none otherwise
+    int found[kKnobs];
+    for (int k = 0; k < kKnobs; ++k)
+    {
+        found[k] = -1;
+        if (! keepKnobs) knobIds.set (k, {});
+        else if (knobIds[k].isNotEmpty())
+            for (int i = 0; i < fresh->getParameters().size() && found[k] < 0; ++i)
+                if (auto* hp = dynamic_cast<juce::HostedAudioProcessorParameter*> (fresh->getParameters().getUnchecked (i)))
+                    if (hp->getParameterID() == knobIds[k]) found[k] = i;
+    }
+    for (auto* p : fresh->getParameters()) p->addListener (this);
     {
         Hold h (guard);
         plugin.swap (fresh);
         buffer = std::move (room);
         numIn = in; numOut = out;
         notes = NoteTracker();
+        for (int k = 0; k < kKnobs; ++k) { target[k].store (found[k]); sent[k] = -1; }
     }
+    touched.store (-1);
     description = d;
     status.clear();
     rememberPlugin (d);
@@ -146,7 +167,33 @@ void HostedModule::unload()
     if (plugin == nullptr) return;
     tellClosing (this);
     std::unique_ptr<juce::AudioPluginInstance> gone;
-    { Hold h (guard); gone.swap (plugin); }
+    { Hold h (guard); gone.swap (plugin); for (auto& t : target) t.store (-1); }
+    for (int k = 0; k < kKnobs; ++k) knobIds.set (k, {});
+    touched.store (-1);
+}
+
+int HostedModule::numControls() const { return plugin != nullptr ? plugin->getParameters().size() : 0; }
+juce::String HostedModule::controlName (int index) const
+{
+    if (index < 0 || index >= numControls()) return {};
+    const auto name = plugin->getParameters().getUnchecked (index)->getName (40);
+    return name.isNotEmpty() ? name : "Control " + juce::String (index + 1);
+}
+float HostedModule::controlValue (int index) const { return index >= 0 && index < numControls() ? plugin->getParameters().getUnchecked (index)->getValue() : 0.0f; }
+juce::String HostedModule::controlId (int index) const
+{
+    if (index < 0 || index >= numControls()) return {};
+    if (auto* hp = dynamic_cast<juce::HostedAudioProcessorParameter*> (plugin->getParameters().getUnchecked (index))) return hp->getParameterID();
+    return {};
+}
+void HostedModule::assignKnob (int knob, int index)
+{
+    if (knob < 0 || knob >= kKnobs) return;
+    if (index < 0 || index >= numControls()) index = -1;
+    if (index >= 0) params[(size_t) (1 + knob)].store (juce::jlimit (0.0f, 1.0f, controlValue (index)));
+    knobIds.set (knob, controlId (index));
+    Hold h (guard);
+    target[knob].store (index); sent[knob] = -1;
 }
 
 juce::Optional<juce::AudioPlayHead::PositionInfo> HostedModule::getPosition() const
@@ -193,6 +240,17 @@ void HostedModule::process (int n, const Ctx& c)
         });
     }
 
+    // Knobs pointed at the plugin's own controls. A control is only told when its knob (plus anything cabled into
+    // its Mod input) has moved, so changes made in the plugin's own window are left alone until then.
+    for (int k = 0; k < kKnobs; ++k)
+    {
+        const int t = target[k].load (std::memory_order_relaxed);
+        if (t < 0 || t >= plugin->getParameters().size()) continue;
+        const float v = juce::jlimit (0.0f, 1.0f, P (1 + k) + (inOn[(size_t) (8 + k)] ? in[(size_t) (8 + k)][0] : 0.0f));
+        if (sent[k] < 0) sent[k] = v;
+        else if (std::abs (v - sent[k]) > 1.0e-4f) { plugin->getParameters().getUnchecked (t)->setValue (v); sent[k] = v; }
+    }
+
     plugin->processBlock (view, midi);
 
     const float level = P (0);
@@ -214,7 +272,8 @@ std::string HostedModule::saveExtra() const
     juce::MemoryBlock state;
     if (plugin != nullptr) plugin->getStateInformation (state);
     const auto xml = description.createXml()->toString (juce::XmlElement::TextFormat().singleLine().withoutHeader());
-    return (juce::Base64::toBase64 (xml) + " " + juce::Base64::toBase64 (state.getData(), state.getSize())).toStdString();
+    const auto stateText = state.getSize() > 0 ? juce::Base64::toBase64 (state.getData(), state.getSize()) : juce::String ("-");
+    return (juce::Base64::toBase64 (xml) + " " + stateText + " " + juce::Base64::toBase64 (knobIds.joinIntoString ("\n"))).toStdString();
 }
 
 void HostedModule::loadExtra (const std::string& text)
@@ -223,16 +282,25 @@ void HostedModule::loadExtra (const std::string& text)
     if (parts.isEmpty()) return;
     juce::MemoryOutputStream xmlBytes, stateBytes;
     if (! juce::Base64::convertFromBase64 (xmlBytes, parts[0])) return;
-    if (parts.size() > 1) juce::Base64::convertFromBase64 (stateBytes, parts[1]);
+    if (parts.size() > 1 && parts[1] != "-") juce::Base64::convertFromBase64 (stateBytes, parts[1]);
+    if (parts.size() > 2)                             // saves from before v0.1.11 have no knobs
+    {
+        juce::MemoryOutputStream ids;
+        if (juce::Base64::convertFromBase64 (ids, parts[2]))
+        {
+            auto list = juce::StringArray::fromLines (ids.toString());
+            for (int k = 0; k < kKnobs; ++k) knobIds.set (k, k < list.size() ? list[k] : juce::String());
+        }
+    }
     juce::PluginDescription d;
     if (auto xml = juce::parseXML (xmlBytes.toString())) { if (! d.loadFromXml (*xml)) return; } else return;
     juce::MemoryBlock state (stateBytes.getData(), stateBytes.getDataSize());
 
     // Plugins must be created on the message thread. If the project is being loaded from another thread, do it shortly after.
-    if (juce::MessageManager::existsAndIsCurrentThread()) { load (d, &state); return; }
+    if (juce::MessageManager::existsAndIsCurrentThread()) { load (d, &state, true); return; }
     description = d;
     status = "Loading " + d.name;
-    juce::MessageManager::callAsync ([this, d, state, flag = alive] { if (*flag) load (d, &state); });
+    juce::MessageManager::callAsync ([this, d, state, flag = alive] { if (*flag) load (d, &state, true); });
 }
 
 void registerPluginSlot()

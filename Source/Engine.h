@@ -273,6 +273,7 @@ struct Board
     std::atomic<float> level { 0.8f }, pan { 0.0f }, peak { 0.0f };
     std::atomic<bool> mute { false }, solo { false };
     std::atomic<int> out { 0 };       // which output this sound goes to: 0 = the main mix, 1.. = Out 2, Out 3 ...
+    std::atomic<uint32_t> plays { 0xffffffffu };   // the song page: one bit per section, set = this sound plays in it
     std::vector<std::unique_ptr<Module>> modules;
     std::vector<Cable> cables;
     int nextUid = 1;
@@ -447,8 +448,19 @@ struct Harmony
     std::string mood = "deep";
     uint32_t seed = 362668;
     int lenBars = 16, chordBars = 2, strange = 35, variation = 50;
+    int lift = 0;                     // key change: the last section goes up this many semitones (0 = none)
     std::vector<n2c::Chord> seq;
     std::vector<std::string> names;   // "Dm7", "Bbmaj9" ... one per chord, for the screen
+};
+
+// The song page: the song is cut into sections of so many bars, and each tab plays in the sections ticked for it.
+// After the last section it goes round again. Off = every tab plays all the time.
+constexpr int kSongSections = 16;
+struct Song
+{
+    std::atomic<bool> on { false };
+    std::atomic<int> sections { 8 }, bars { 4 };
+    std::atomic<int> now { -1 };      // the section playing, for the screen (-1 = none)
 };
 
 // The separate outputs, for one call to process. A null pair means the host hasn't switched that output on.
@@ -464,6 +476,7 @@ struct Rack
     std::atomic<int> outsOn { 1 };      // which outputs the host has switched on, one bit each (bit 0 = main)
     TryLock lock;
     Harmony harmony;
+    Song song;
     Timeline timeline;            // swapped in whole, under the lock
     Buses buses;                  // audio thread only
 
@@ -518,7 +531,7 @@ struct Rack
     {
         harmony.seed = newSeed;
         n2c::Theory::GenSettings g;
-        g.lenBars = harmony.lenBars; g.chordBars = harmony.chordBars; g.strange = harmony.strange; g.variation = harmony.variation;
+        g.lenBars = harmony.lenBars; g.chordBars = harmony.chordBars; g.strange = harmony.strange; g.variation = harmony.variation; g.lift = harmony.lift;
         auto seq = theory().generate (newSeed, g);
         if (! seq.empty() && seq[0].intro) seq.erase (seq.begin());   // no glide intro here: the song starts on chord 1
         // Locked chords stay where they are through a Generate
@@ -678,10 +691,30 @@ struct Rack
                     c.leaders[m->patternLink] = m.get();
         bool anySolo = false;
         for (auto& b : boards) anySolo = anySolo || b->solo.load();
-        for (int pos = 0; pos < n; pos += kBlock)
+        // The song page. A tab that sits out a section is run as if the song were stopped: its sequencers go quiet
+        // and whatever was sounding rings out. Chunks are cut at section edges so the sample it happens on never
+        // depends on the host's block size.
+        const bool songOn = playing && song.on.load();
+        const int nSec = std::min (kSongSections, std::max (1, song.sections.load())), secBars = std::max (1, song.bars.load());
+        auto sectionAt = [nSec, secBars] (double q)
         {
-            const int len = std::min (kBlock, n - pos);
+            const long bar = std::max (0L, (long) std::floor (q * 4.0 + 1.0e-9)) / 16;
+            return (int) ((bar / secBars) % nSec);
+        };
+        Ctx resting = c; resting.playing = false;
+        int sec = -1;
+        for (int pos = 0, len = 0; pos < n; pos += len)
+        {
+            len = std::min (kBlock, n - pos);
             c.ppq = ppq + pos * c.ppqPerSample;
+            resting.ppq = c.ppq;
+            if (songOn)
+            {
+                sec = sectionAt (c.ppq);
+                int k = 1;
+                while (k < len && sectionAt (c.ppq + k * c.ppqPerSample) == sec) ++k;
+                len = k;
+            }
             for (int k = 0; k < 2; ++k) { std::fill (buses.l[k].begin(), buses.l[k].begin() + len, 0.0f); std::fill (buses.r[k].begin(), buses.r[k].begin() + len, 0.0f); }
             // Tabs that play a send bus run after the tabs that feed it, wherever they sit in the tab row
             for (int pass = 0; pass < 2; ++pass)
@@ -690,10 +723,12 @@ struct Rack
                     if (b->hasReturn != (pass == 1)) continue;
                     const int k = b->out.load();
                     const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
-                    b->process (len, c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
+                    const bool sitsOut = songOn && ((b->plays.load() >> sec) & 1u) == 0;
+                    b->process (len, sitsOut ? resting : c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
                 }
         }
         lock.unlock();
+        song.now.store (sec);
         // Separate outputs skip the master fader (the host's own channel fader does that job) but keep the safety limiter
         for (int k = 1; k < kOuts; ++k)
             if ((on & (1 << k)) != 0)
@@ -748,7 +783,7 @@ struct Rack
     static void writeBoard (std::ostringstream& o, const Board& b, const std::function<bool (int uid)>* wantExtra = nullptr)
     {
         o << "board " << b.type << '|' << clean (b.name) << '|' << b.colour << '|' << b.level.load() << '|' << b.pan.load()
-          << '|' << (b.mute.load() ? 1 : 0) << '|' << (b.solo.load() ? 1 : 0) << '|' << b.out.load() << '\n';
+          << '|' << (b.mute.load() ? 1 : 0) << '|' << (b.solo.load() ? 1 : 0) << '|' << b.out.load() << '|' << b.plays.load() << '\n';
         for (auto& m : b.modules)
         {
             o << "mod " << m->uid << ' ' << m->info->type << ' ' << m->x << ' ' << m->y << '\n';
@@ -783,7 +818,8 @@ struct Rack
     {
         std::ostringstream o;
         o << "N2M 1\n" << "key " << root.load() << ' ' << scale.load() << '\n' << "master " << master.load() << '\n';
-        o << "harmony " << harmony.mood << ' ' << harmony.seed << ' ' << harmony.lenBars << ' ' << harmony.chordBars << ' ' << harmony.strange << ' ' << harmony.variation << '\n';
+        o << "song " << (song.on.load() ? 1 : 0) << ' ' << song.sections.load() << ' ' << song.bars.load() << '\n';
+        o << "harmony " << harmony.mood << ' ' << harmony.seed << ' ' << harmony.lenBars << ' ' << harmony.chordBars << ' ' << harmony.strange << ' ' << harmony.variation << ' ' << harmony.lift << '\n';
         for (auto& c : harmony.seq)
             o << "chord " << c.deg << ' ' << c.bars << ' ' << c.tr << ' ' << c.inv << ' ' << (c.t.empty() ? "-" : c.t) << ' ' << (c.locked ? 1 : 0) << '\n';
         for (auto& b : boards) writeBoard (o, *b);
@@ -792,7 +828,7 @@ struct Rack
     }
 
     // Reads boards from saved text. Unknown module types and lines are skipped, not fatal.
-    static std::vector<std::unique_ptr<Board>> readBoards (const std::string& text, double sampleRate, int* rootOut = nullptr, int* scaleOut = nullptr, float* masterOut = nullptr, Harmony* harmonyOut = nullptr)
+    static std::vector<std::unique_ptr<Board>> readBoards (const std::string& text, double sampleRate, int* rootOut = nullptr, int* scaleOut = nullptr, float* masterOut = nullptr, Harmony* harmonyOut = nullptr, int* songOut = nullptr)
     {
         bool sawHarmony = false;
         std::vector<std::unique_ptr<Board>> made;
@@ -805,11 +841,13 @@ struct Rack
             std::string tag; ls >> tag;
             if (tag == "key") { int r = 2, s = 0; ls >> r >> s; if (rootOut) *rootOut = ((r % 12) + 12) % 12; if (scaleOut) *scaleOut = std::min ((int) scales().size() - 1, std::max (0, s)); }
             else if (tag == "master") { float m = 0.8f; ls >> m; if (masterOut) *masterOut = m; }
+            else if (tag == "song") { if (songOut) ls >> songOut[0] >> songOut[1] >> songOut[2]; }
             else if (tag == "harmony")
             {
                 if (harmonyOut == nullptr) continue;
                 Harmony hm; std::string mood;
                 ls >> mood >> hm.seed >> hm.lenBars >> hm.chordBars >> hm.strange >> hm.variation;
+                int lift = 0; if (ls >> lift) hm.lift = std::min (3, std::max (0, lift));   // saves from before v0.1.11 have none
                 hm.mood = n2c::moods()[(size_t) n2c::moodIndex (mood)].id;
                 *harmonyOut = hm; sawHarmony = true;
             }
@@ -839,6 +877,7 @@ struct Rack
                 if (f.size() > 5) b->mute.store (f[5] == "1");
                 if (f.size() > 6) b->solo.store (f[6] == "1");
                 if (f.size() > 7) b->out.store (std::min (kOuts - 1, std::max (0, std::atoi (f[7].c_str()))));
+                if (f.size() > 8) b->plays.store ((uint32_t) std::strtoul (f[8].c_str(), nullptr, 10));
             }
             else if (b == nullptr) continue;
             else if (tag == "mod")
@@ -919,10 +958,12 @@ struct Rack
         if (text.compare (0, 4, "N2M ") != 0) return false;
         int r = root.load(), s = scale.load(); float m = master.load();
         Harmony hm;
-        auto made = readBoards (text, sr, &r, &s, &m, &hm);
+        int sg[3] = { 0, 8, 4 };                                  // a save from before the song page: off
+        auto made = readBoards (text, sr, &r, &s, &m, &hm, sg);
         std::vector<std::unique_ptr<Board>> old;
         { Hold h (lock); old.swap (boards); boards.swap (made); }
         root.store (r); scale.store (s); master.store (m);
+        song.on.store (sg[0] != 0); song.sections.store (std::min (kSongSections, std::max (1, sg[1]))); song.bars.store (std::min (16, std::max (1, sg[2])));
         harmony = hm;
         if (harmony.seq.empty()) generateChords (harmony.seed);   // a save from before chords existed
         else rebuildChords();
@@ -980,7 +1021,7 @@ struct Rack
             dst.nextUid = std::max (dst.nextUid, src.nextUid);
             dst.type = src.type; dst.name = src.name; dst.colour = src.colour;
             dst.level.store (src.level.load()); dst.pan.store (src.pan.load());
-            dst.mute.store (src.mute.load()); dst.solo.store (src.solo.load()); dst.out.store (src.out.load());
+            dst.mute.store (src.mute.load()); dst.solo.store (src.solo.load()); dst.out.store (src.out.load()); dst.plays.store (src.plays.load());
             dst.rebuild();
         }
     }

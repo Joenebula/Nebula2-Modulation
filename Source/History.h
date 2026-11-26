@@ -45,6 +45,8 @@ public:
 
     // Before changing the chords or the key
     void beforeChords() { push (chordsNow()); }
+    // Before changing the song page: on or off, its sections, which tabs play where
+    void beforeSong() { push (songNow()); }
 
     // After a tab has been added at this position
     void tabAdded (int index) { Entry e; e.kind = Kind::TabAdded; e.a = index; push (std::move (e)); }
@@ -80,7 +82,7 @@ public:
     int showTab = -1;          // after an undo or redo: the tab it happened on, for the screen to show
 
 private:
-    enum class Kind { Boards, Chords, TabAdded, TabRemoved, TabMoved };
+    enum class Kind { Boards, Chords, TabAdded, TabRemoved, TabMoved, Song };
     struct Entry
     {
         Kind kind = Kind::Boards;
@@ -88,8 +90,16 @@ private:
         int a = 0, b = 0;
         std::string text;
         Harmony harmony; int root = 0, scale = 0;
+        bool songOn = false; int sections = 8, bars = 4; std::vector<uint32_t> plays;
     };
 
+    Entry songNow() const
+    {
+        Entry e; e.kind = Kind::Song;
+        e.songOn = rack.song.on.load(); e.sections = rack.song.sections.load(); e.bars = rack.song.bars.load();
+        for (auto& b : rack.boards) e.plays.push_back (b->plays.load());
+        return e;
+    }
     Entry chordsNow() const { Entry e; e.kind = Kind::Chords; e.harmony = rack.harmony; e.root = rack.root.load(); e.scale = rack.scale.load(); return e; }
 
     void push (Entry e)
@@ -147,6 +157,11 @@ private:
                 showTab = std::min (e.a, (int) rack.boards.size() - 1);
                 break;
             }
+            case Kind::Song:
+                back = songNow();
+                rack.song.on.store (e.songOn); rack.song.sections.store (e.sections); rack.song.bars.store (e.bars);
+                for (size_t i = 0; i < e.plays.size() && i < rack.boards.size(); ++i) rack.boards[i]->plays.store (e.plays[i]);
+                break;
             case Kind::TabMoved:
                 back.kind = Kind::TabMoved; back.a = e.b; back.b = e.a;
                 rack.moveBoard (e.b, e.a);

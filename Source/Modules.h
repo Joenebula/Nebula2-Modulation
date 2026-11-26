@@ -1148,17 +1148,45 @@ struct TransientShaper : Module
 // Shifts the pitch of any sound (an oscillator, a sample, another plugin) without changing its speed
 struct Shifter
 {
-    void size (double sr) { buf.size ((int) (sr * 0.13) + 16); win = (float) (sr * 0.045); pos = 0; }
+    void size (double sr)
+    {
+        buf.size ((int) (sr * 0.13) + 16); base = (float) (sr * 0.045); win = base; pos = 0;
+        minP = (float) (sr / 2000.0); maxP = (float) (sr * 0.04);
+        lp = 0; lastLp = 0; sinceCross = 0; period = 0; lastP = 0;
+    }
     float run (float x, float ratio)
     {
         buf.push (x);
+        // How long one cycle of the sound is: the time between upward zero crossings of a smoothed copy.
+        // Two cycles in a row must agree before it is believed, so noise and drums leave it alone.
+        lp += 0.12f * (x - lp);
+        sinceCross += 1.0f;
+        if (lastLp <= 0.0f && lp > 0.0f)
+        {
+            const float p = sinceCross - lp / (lp - lastLp);       // to a fraction of a sample
+            sinceCross = lp / (lp - lastLp);
+            if (p >= minP && p <= maxP) { if (std::abs (p - lastP) < 0.03f * p) period = 0.5f * (p + lastP); lastP = p; }
+            else { lastP = 0; if (p > maxP) period = 0; }
+        }
+        if (sinceCross > maxP) { period = 0; lastP = 0; }
+        lastLp = lp;
         pos += 1.0 - (double) ratio;
-        pos -= std::floor (pos / win) * win;
+        if (pos >= win || pos < 0)
+        {
+            // A grain boundary: the two grains are half a window apart, so a window that is a whole number of
+            // double-cycles puts them exactly in step and they join without a wobble.
+            pos -= std::floor (pos / win) * win;
+            const float frac = (float) (pos / win);
+            float next = base;
+            if (period > 0) { const float two = 2.0f * period; next = two * std::max (1.0f, std::round (base / two)); }
+            if (next != win) { win = next; pos = (double) frac * win; }
+        }
         const float d1 = (float) pos; float d2 = d1 + win * 0.5f; if (d2 >= win) d2 -= win;
         const float g1 = std::sin ((float) kPi * d1 / win), g2 = std::sin ((float) kPi * d2 / win);
         return buf.tap (d1 + 2.0f) * g1 * g1 + buf.tap (d2 + 2.0f) * g2 * g2;
     }
-    DelayBuf buf; float win = 2000; double pos = 0;
+    DelayBuf buf; float win = 2000, base = 2000, minP = 24, maxP = 1920; double pos = 0;
+    float lp = 0, lastLp = 0, sinceCross = 0, period = 0, lastP = 0;
 };
 
 // Tripler: one sound becomes three. A copy tuned slightly down on the left, one slightly up on the right,

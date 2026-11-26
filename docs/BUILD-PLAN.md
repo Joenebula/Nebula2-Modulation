@@ -47,7 +47,7 @@ Cubase. Tick things off here as they land.
 - [x] Note sequencer can follow the chords (bass and lead do by default)
 - [x] Stab and Pad boards
 - [x] Edit single chords (v0.1.10): click a chord tile for Colour, Bass note, Change to, Length and Lock. Locked chords stay through a Generate. The More button has Strange and Variation
-- [ ] Key change (lifting the last section), from Nebula2 Chord
+- [x] Key change (v0.1.11): the chord unit's More button can raise the last part of the song by 1, 2 or 3 semitones. Sequencers that follow the chords go up with it
 - [x] Euclidean rhythm (Hits and Turn have inputs), Clock, Divider, Chance (v0.1.7)
 - [x] Ratchet and Swing units (v0.1.10)
 - [x] Longer patterns: 1, 2, 4 or 8 bars, with a button per bar. Ideas fill every bar; Random varies the bars and adds fills
@@ -65,7 +65,7 @@ Cubase. Tick things off here as they land.
 - [x] Add units menu widened to three columns to hold them
 - [x] Dynamics (v0.1.7): compressor with sidechain, transient shaper, ducker. With nothing in its Trig the ducker dips on every beat, so a bass or pad can pump against the kick without a cable between tabs
 - [x] Tripler, Harmoniser, stereo width, pan (v0.1.7). The Harmoniser stays in key when the note's Pitch is plugged in
-- [ ] The pitch shifter behind the Harmoniser is the simple kind: it warbles a little on long held notes. A cleaner one is a later job
+- [x] Cleaner pitch shifter (v0.1.11): it now measures the note's cycle and cuts its grains to fit, so a held note is steady instead of warbling. Sounds with no clear pitch (noise, drums) and full chords are shifted the old way
 - [x] Send effects (v0.1.10): a Send unit on any tab feeds bus A or B; a Return unit plays the bus. "Effects (send)" in the + menu is a tab with a Return into a hall reverb. The effects tab always runs after the tabs feeding it, so tab order doesn't matter
 
 Every effect is held to two rules by tests: at 0% it passes the sound through exactly, and silence in gives
@@ -90,7 +90,8 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [x] Joe tested v0.1.2 in Cubase on Windows (26 Nov 2026): loads, plugin loads into a slot, its window opens and Back returns, sound through cables, saves and reopens. All worked.
 - [ ] Still to try: Nexus / HALion in a slot, and dropping a .vst3 on the board inside Cubase
 - [x] A slot's Load menu lists every VST3 in the usual plugin folders by name (v0.1.9). The list is made by looking at the folders only; nothing is loaded to build it
-- [ ] Knobs on the slot for the plugin's own parameters, so cables can move them
+- [x] Knobs on the slot (v0.1.11): Knob 1 to 4, each pointed at one of the plugin's own controls from the Knobs button (pick from the list, or "the control I last moved in its window"). Mod 1 to 4 inputs let cables move them. Saved with the project
+- [ ] Pointing a knob isn't undoable, and Nexus / HALion controls can only be tried on Joe's PC
 - [ ] Notes out of a hosted plugin (so Nebula2 Chord inside a slot could drive other units)
 - [ ] Latency of hosted plugins isn't compensated yet
 - [ ] Per-tab load meter
@@ -123,7 +124,8 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 
 ## Stage 7: the song
 
-- [ ] Song page: which tabs play when
+- [x] Song page (v0.1.11): the Song button opens a grid, sounds down the side and sections along the top. A filled square means the sound plays there. 2 to 16 sections of 1 to 16 bars; All on and Build up; the playing section is lit. A sound that sits out stops its patterns and lets its tail ring. Off by default; saved and undoable
+- [ ] Song page: sections all the same length; no names for sections; no copy of a section
 - [ ] Drag MIDI / audio out to Cubase
 - [ ] Sound presets: save and load a whole tab; a preset browser
 

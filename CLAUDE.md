@@ -33,7 +33,7 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - `Source/PluginHost.*`: the Plugin slot (HostedModule): holds another VST3, feeds it notes from cables and the song position, saves its state. Registered through `extraTypes()` because the engine itself has no JUCE.
 - `Source/Sampler.*`: the Sample player (SampleModule). Also registered through `extraTypes()`.
 - `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
-- `Source/PluginEditor.*`: the screen. TabBar, BoardView (inside `boardHolder`, which is what makes zoom work), ModuleComp, ParamCell, SeqView, ChordView, HostView, SampleView, HostOverlay, MixerStrip, AddPanel.
+- `Source/PluginEditor.*`: the screen. TabBar, BoardView (inside `boardHolder`, which is what makes zoom work), ModuleComp, ParamCell, SeqView, ChordView, HostView, SampleView, ScopeView, HostOverlay, MixerStrip, AddPanel.
 - `Source/Look.h`: design tokens and materials (ParaEQ design system, shared with Nebula2 Chord).
 - `tests/EngineTest.cpp`: the engine on its own (plain C++).
 - `tests/OfflineTest.cpp`: the plugin in a fake Cubase.
@@ -58,6 +58,7 @@ Rules that tests hold in place:
 - The chords are one progression for the whole song, like the key. Every chord note is in the key.
 - Patterns are up to 8 bars (`kMaxSteps`). A sequencer's data is two rows: hits or note on/off, then which note.
 - Projects saved by v0.1.0 (the `d` line, one bar) must keep loading.
+- Sends: `Send` units add to `Rack::buses` (A, B); a board with a `Return` (`Board::hasReturn`) is processed after the others. A Send counts as heard with nothing cabled to its outputs.
 - Outputs: `Board::out` (0 = main mix, 1.. = Out 2 ...). A sound whose output the host hasn't switched on must stay in the main mix, never vanish.
 - Anything "random" (Random, Chance, the arpeggiator's Random pattern) is worked out from the song position by `hashUnit()`, so the same bar always sounds the same.
 - Anything the screen changes must call a History "before" first, or Undo will skip it. `BoardView::willChange()` is the usual way; `settled()` drops the step if nothing changed.
@@ -90,14 +91,15 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.10'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.11'
 ```
 
-The latest release is **v0.1.9**. Bump by one each time.
+The latest release is **v0.1.10**. Bump by one each time.
 
 ## What can't be checked here
 
 Loading Nexus, HALion or any other commercial plugin inside this one can only be tested on Joe's PC in Cubase.
+Popup menus can't be opened in the tests either (no screen): test what a menu item does, not the menu.
 Here the Plugin slot is tested by hosting this plugin's own Linux build and Nebula2 Chord's. A hosted plugin's
 window is a native window, so the Snapshot tool shows it as a black box of the right size: whether it draws
 properly inside ours has to be checked on a real machine. Everything else is tested here before each release.

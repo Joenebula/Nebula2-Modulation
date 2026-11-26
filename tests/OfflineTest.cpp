@@ -328,6 +328,17 @@ int main (int argc, char** argv)
             ed->stepZoom (1);
         }
 
+        // The chord unit's tiles line up eight to a row, and its menu can be opened for any chord
+        {
+            CHECK (n2m::ChordView::tile (0).getX() < n2m::ChordView::tile (1).getX() && n2m::ChordView::tile (8).getY() > n2m::ChordView::tile (0).getY() && n2m::ChordView::tile (8).getX() == n2m::ChordView::tile (0).getX(), "chord tiles run eight to a row");
+            ed->selectTab (4);                                           // the Pad tab holds the chord unit
+            n2m::ChordView* cv = nullptr;
+            for (auto& m : r.rack.boards[4]->modules) if (auto* c = view.compFor (m->uid)) if (c->chords != nullptr) cv = c->chords.get();
+            CHECK (cv != nullptr, "the Pad tab shows the chord unit");
+            // (the menu itself can't be opened here: this machine has no screen. Its actions are tested in the engine test.)
+            ed->selectTab (0);
+        }
+
         // Every unit has a picture for the Add units menu
         {
             int made = 0;

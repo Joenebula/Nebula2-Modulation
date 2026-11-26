@@ -68,15 +68,30 @@ public:
     ChordView (Nebula2ModulationProcessor&, Module&);
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;
     void tick();
+    void chordMenu (int index);      // public so the tests can reach it
+    static juce::Rectangle<int> tile (int index);
 private:
     void refreshLabels();
     Nebula2ModulationProcessor& proc; Module& module;
-    juce::TextButton mood, generate { "Generate" }, length, each;
+    juce::TextButton mood, generate { "Generate" }, length, each, more { "More" };
     int shown = -1, seenVersion = -1;
 };
 
 class BoardView;
+
+// On a Scope: the wave passing through, the note it is playing and how far off it is
+class ScopeView : public juce::Component
+{
+public:
+    ScopeView (BoardView&, Scope&);
+    void paint (juce::Graphics&) override;
+    void tick();
+private:
+    BoardView& owner; Scope& module;
+    bool wasQuiet = true;
+};
 
 // On a Plugin slot: which plugin is in it, Load and Open
 class HostView : public juce::Component
@@ -148,6 +163,7 @@ public:
     std::unique_ptr<ChordView> chords;
     std::unique_ptr<HostView> host;
     std::unique_ptr<SampleView> sample;
+    std::unique_ptr<ScopeView> scope;
 private:
     BoardView& owner; Nebula2ModulationProcessor& proc; Board& board;
     juce::OwnedArray<ParamCell> cells;

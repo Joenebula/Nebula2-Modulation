@@ -46,9 +46,10 @@ Cubase. Tick things off here as they land.
 - [x] Chord generator: the Nebula2 Chord engine (`Source/ChordEngine.h`, copied unchanged). One progression shared by every tab: mood, Generate, song length, bars per chord
 - [x] Note sequencer can follow the chords (bass and lead do by default)
 - [x] Stab and Pad boards
-- [ ] Edit single chords (colour, bass note, length, lock), and the Strange / Variation / Key change knobs from Nebula2 Chord
+- [x] Edit single chords (v0.1.10): click a chord tile for Colour, Bass note, Change to, Length and Lock. Locked chords stay through a Generate. The More button has Strange and Variation
+- [ ] Key change (lifting the last section), from Nebula2 Chord
 - [x] Euclidean rhythm (Hits and Turn have inputs), Clock, Divider, Chance (v0.1.7)
-- [ ] Ratchet, swing
+- [x] Ratchet and Swing units (v0.1.10)
 - [x] Longer patterns: 1, 2, 4 or 8 bars, with a button per bar. Ideas fill every bar; Random varies the bars and adds fills
 - [ ] Pattern chaining
 - [ ] Bigger Ideas libraries per sound
@@ -65,7 +66,7 @@ Cubase. Tick things off here as they land.
 - [x] Dynamics (v0.1.7): compressor with sidechain, transient shaper, ducker. With nothing in its Trig the ducker dips on every beat, so a bass or pad can pump against the kick without a cable between tabs
 - [x] Tripler, Harmoniser, stereo width, pan (v0.1.7). The Harmoniser stays in key when the note's Pitch is plugged in
 - [ ] The pitch shifter behind the Harmoniser is the simple kind: it warbles a little on long held notes. A cleaner one is a later job
-- [ ] Send effects on the mixing desk
+- [x] Send effects (v0.1.10): a Send unit on any tab feeds bus A or B; a Return unit plays the bus. "Effects (send)" in the + menu is a tab with a Return into a hall reverb. The effects tab always runs after the tabs feeding it, so tab order doesn't matter
 
 Every effect is held to two rules by tests: at 0% it passes the sound through exactly, and silence in gives
 silence out.
@@ -74,7 +75,7 @@ silence out.
 
 - [x] Trance gate, step modulator, random, macro knob, envelope follower (v0.1.7)
 - [x] Crossfader, switch, slew, logic (v0.1.7)
-- [ ] Scope and meter, tuner (these need their own screens)
+- [x] Scope and tuner, in one unit (v0.1.10): the wave, the note name, how many cents off, the frequency
 - Not doing: a Splitter. Any output already feeds as many inputs as you cable from it.
 
 ## Stage 6: other plugins inside

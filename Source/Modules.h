@@ -1743,6 +1743,179 @@ struct Switch : Module
     bool last = false; int offset = 0;
 };
 
+// ================================================================ Sends, ratchet, swing, scope
+// Send: passes its sound through untouched and also feeds a copy to a shared bus, A or B.
+// A Return on any tab (usually an effects tab) plays everything sent to that bus.
+struct Send : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "send", "Send", "Utilities", "Feeds a copy of this sound to a shared bus, for an effect on another tab",
+            { { "inl", "In L" }, { "inr", "In R" } }, { { "outl", "Out L" }, { "outr", "Out R" } },
+            { { "amount", "Amount", 0, 1, 0.3f, Fmt::Percent }, { "bus", "Bus", 0, 1, 0, Fmt::Int, 1, { "A", "B" } } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const float amount = P (0);
+        const int bus = P (1) > 0.5f ? 1 : 0;
+        for (int i = 0; i < n; ++i)
+        {
+            const float l = in[0][(size_t) i], r = inOn[1] ? in[1][(size_t) i] : l;
+            out[0][(size_t) i] = l; out[1][(size_t) i] = r;
+            if (c.buses != nullptr && amount > 0.0f) { c.buses->l[bus][(size_t) i] += l * amount; c.buses->r[bus][(size_t) i] += r * amount; }
+        }
+    }
+};
+
+struct Return : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "return", "Return", "Sources", "Plays everything the Send units on other tabs feed to a bus",
+            {}, { { "outl", "Out L" }, { "outr", "Out R" } },
+            { { "bus", "Bus", 0, 1, 0, Fmt::Int, 1, { "A", "B" } }, { "level", "Level", 0, 1.5f, 1, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const int bus = P (0) > 0.5f ? 1 : 0;
+        const float level = P (1);
+        for (int i = 0; i < n; ++i)
+        {
+            out[0][(size_t) i] = c.buses != nullptr ? c.buses->l[bus][(size_t) i] * level : 0.0f;
+            out[1][(size_t) i] = c.buses != nullptr ? c.buses->r[bus][(size_t) i] * level : 0.0f;
+        }
+    }
+};
+
+// Ratchet: turns each hit into a fast burst of two, three or four within one 1/16 step
+struct Ratchet : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "ratchet", "Ratchet", "Notes and rhythm", "Turns each hit into a fast burst",
+            { { "trig", "Trig" }, { "vel", "Vel" } }, { { "trig", "Trig" }, { "vel", "Vel" } },
+            { { "count", "Hits", 0, 3, 1, Fmt::Int, 1, { "1", "2", "3", "4" } }, { "fade", "Fade", 0, 1, 0.3f, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const int count = 1 + std::min (3, std::max (0, (int) std::lround (P (0))));
+        const float fade = P (1);
+        const int stepLen = std::max (16, (int) (0.25 / std::max (1.0e-9, c.ppqPerSample)));
+        const int gap = stepLen / count;
+        for (int i = 0; i < n; ++i)
+        {
+            const bool g = in[0][(size_t) i] > 0.5f;
+            if (g && ! last) { since = 0; baseVel = inOn[1] ? in[1][(size_t) i] : 0.72f; }
+            last = g;
+            float gate = 0.0f;
+            if (since >= 0)
+            {
+                const int k = since / gap;                       // which hit of the burst
+                if (k < count)
+                {
+                    gate = since - k * gap < gap / 2 ? 1.0f : 0.0f;
+                    vel = baseVel * (1.0f - fade * (float) k / (float) std::max (1, count));
+                    ++since;
+                }
+                else since = -1;
+            }
+            out[0][(size_t) i] = count == 1 ? in[0][(size_t) i] : gate;      // one hit: straight through
+            out[1][(size_t) i] = count == 1 ? (inOn[1] ? in[1][(size_t) i] : 0.72f) : vel;
+        }
+    }
+    bool last = false; int since = -1; float baseVel = 0.72f, vel = 0.72f;
+};
+
+// Swing: holds back every other 1/16 hit, for a shuffled feel
+struct Swing : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "swing", "Swing", "Notes and rhythm", "Holds back every other 1/16 hit, for a shuffle",
+            { { "trig", "Trig" } }, { { "trig", "Trig" } }, { { "amount", "Swing", 0, 0.75f, 0.3f, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const float amount = P (0);
+        const int stepLen = std::max (16, (int) (0.25 / std::max (1.0e-9, c.ppqPerSample)));
+        for (int i = 0; i < n; ++i)
+        {
+            const bool g = in[0][(size_t) i] > 0.5f;
+            if (amount <= 0.0f) { out[0][(size_t) i] = in[0][(size_t) i]; last = g; wait = -1; left = 0; continue; }   // no swing: untouched
+            if (g && ! last)
+            {
+                const bool offBeat = (stepAt (c.ppq + i * c.ppqPerSample) & 1) != 0;
+                wait = offBeat ? (int) (amount * (float) stepLen * 0.5f) : 0;
+            }
+            last = g;
+            if (wait == 0) { left = stepLen / 4; wait = -1; }
+            else if (wait > 0) --wait;
+            out[0][(size_t) i] = left > 0 ? 1.0f : 0.0f;
+            if (left > 0) --left;
+        }
+    }
+    bool last = false; int wait = -1, left = 0;
+};
+
+// Scope and tuner: passes the sound through and shows it. The screen reads the picture, the note and the level.
+struct Scope : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "scope", "Scope and tuner", "Utilities", "Shows the sound passing through, and the note it is playing",
+            { { "in", "In" } }, { { "out", "Out" } }, {}, Seq::Scope };
+        return i;
+    }
+    static constexpr int size = 1024;
+    void process (int n, const Ctx& c) override
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            const float x = in[0][(size_t) i];
+            out[0][(size_t) i] = x;
+            if ((count++ & 1) == 0) { ring[(size_t) write] = x; write = (write + 1) % size; }    // about 43 ms across the picture
+            peak = std::max (peak * 0.9995f, std::abs (x));
+            // The note: time between upward crossings, with a dead band so hiss doesn't count as a crossing
+            const float band = std::max (0.01f, peak * 0.2f);
+            if (x < -band) armed = true;
+            if (armed && x > band)
+            {
+                armed = false;
+                if (sinceCross > 0)
+                {
+                    const float hzNow = (float) c.sr / (float) sinceCross;
+                    if (hzNow > 20.0f && hzNow < 5000.0f) smooth = smooth <= 0.0f || std::abs (hzNow - smooth) > smooth * 0.2f ? hzNow : smooth + 0.15f * (hzNow - smooth);
+                }
+                sinceCross = 0;
+            }
+            ++sinceCross;
+            if (sinceCross > (int) c.sr / 10) smooth = 0.0f;       // nothing crossing: no note
+        }
+        hz.store (peak > 0.003f ? smooth : 0.0f);
+        level.store (peak);
+        head.store (write);
+    }
+    std::array<float, size> ring {};
+    std::atomic<int> head { 0 };
+    std::atomic<float> hz { 0.0f }, level { 0.0f };
+    int write = 0, sinceCross = 0; unsigned count = 0;
+    float peak = 0, smooth = 0; bool armed = false;
+};
+
+// A frequency as a note name and how far off it is, for the tuner
+inline std::string noteText (float hz, int* centsOut = nullptr)
+{
+    if (hz <= 0.0f) return "";
+    const double midi = 69.0 + 12.0 * std::log2 ((double) hz / 440.0);
+    const int nearest = (int) std::lround (midi);
+    if (centsOut) *centsOut = (int) std::lround ((midi - nearest) * 100.0);
+    return std::string (kNoteNames[((nearest % 12) + 12) % 12]) + std::to_string (nearest / 12 - 1);
+}
+
 // Turns a gate and up to four pitch signals into note-on and note-off events, for playing another plugin.
 // A note starts when the gate goes up, ends when it drops, and re-plays if its pitch changes while held.
 struct NoteTracker
@@ -1773,7 +1946,7 @@ template <typename T> TypeEntry entry() { return { &T::desc(), [] { return std::
 inline const std::vector<TypeEntry>& registry()
 {
     static const std::vector<TypeEntry> r {
-        entry<Oscillator>(), entry<MultiOsc>(), entry<Noise>(),
+        entry<Oscillator>(), entry<MultiOsc>(), entry<Noise>(), entry<Return>(),
         entry<HitEnv>(), entry<Adsr>(), entry<ClapEnv>(),
         entry<Filter>(),
         entry<Drive>(), entry<HardClip>(), entry<Bitcrusher>(),
@@ -1784,9 +1957,9 @@ inline const std::vector<TypeEntry>& registry()
         entry<Compressor>(), entry<Ducker>(), entry<TransientShaper>(),
         entry<Tripler>(), entry<Harmoniser>(), entry<StereoWidth>(), entry<Pan>(),
         entry<Lfo>(), entry<TranceGate>(), entry<StepMod>(), entry<RandomMod>(), entry<Macro>(), entry<EnvFollower>(),
-        entry<DrumSeq>(), entry<NoteSeq>(), entry<ChordGen>(), entry<Arpeggiator>(), entry<Euclid>(),
+        entry<DrumSeq>(), entry<NoteSeq>(), entry<ChordGen>(), entry<Arpeggiator>(), entry<Euclid>(), entry<Ratchet>(), entry<Swing>(),
         entry<Vca>(), entry<Mixer4>(), entry<Atten>(), entry<Crossfader>(), entry<Switch>(), entry<Slew>(),
-        entry<Clock>(), entry<Divider>(), entry<Logic>(), entry<Chance>(), entry<OutputModule>() };
+        entry<Clock>(), entry<Divider>(), entry<Logic>(), entry<Chance>(), entry<Send>(), entry<Scope>(), entry<OutputModule>() };
     return r;
 }
 

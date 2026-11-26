@@ -47,7 +47,7 @@ int main()
     // 1. Every kind of board makes sound when the song plays, stays clean, and never clips
     for (auto& t : boardTypes())
     {
-        if (std::string (t.id) == "empty" || std::string (t.id) == "sample") continue;   // a Sample tab is silent until a file is loaded
+        if (std::string (t.id) == "empty" || std::string (t.id) == "sample" || std::string (t.id) == "fx") continue;   // silent until a file is loaded / something is sent
         std::unique_ptr<Rack> rack (one (t.id));
         auto a = render (*rack, 2);
         CHECK (peakOf (a.l) > 0.02f, t.name);
@@ -1120,6 +1120,148 @@ int main()
         for (int k = 0; k < 150; ++k) { hist.before (kick); drive->set ("drive", (float) (k % 10) / 10.0f); }
         int undone = 0; while (hist.undo()) ++undone;
         CHECK (undone == 100 && allFinite (render (rack, 1).l), "the undo list holds the last 100 changes");
+    }
+
+    // ================= Sends, ratchet, swing, scope, chord editing =================
+    // 43. Sends: a copy of one tab's sound reaches an effects tab, wherever that tab sits in the row
+    {
+        for (int fxFirst = 0; fxFirst < 2; ++fxFirst)
+        {
+            Rack rack; rack.prepare (48000);
+            if (fxFirst) rack.addBoard (makeBoard ("fx", 48000));
+            rack.addBoard (makeBoard ("kick", 48000));
+            if (! fxFirst) rack.addBoard (makeBoard ("fx", 48000));
+            auto& kick = *rack.boards[(size_t) (fxFirst ? 1 : 0)]; auto& fx = *rack.boards[(size_t) (fxFirst ? 0 : 1)];
+            CHECK (fx.hasReturn && ! kick.hasReturn, "the effects tab is known to play a bus");
+            kick.mute.store (true);                                  // listen to the effects tab alone
+            CHECK (peakOf (render (rack, 1).l) == 0.0f, "nothing sent yet: the effects tab is silent");
+            // put a Send between the kick's drive and its Output
+            auto* drive = firstOf (kick, "drive"); auto* out = firstOf (kick, "output");
+            auto* send = rack.addModule (kick, "send", 0, 0);
+            CHECK (send->live, "a Send counts as heard even with nothing cabled to its outputs");
+            rack.connect (kick, drive->uid, 0, send->uid, 0);
+            kick.mute.store (false); kick.solo.store (false); fx.solo.store (true);
+            const auto wet = render (rack, 2);
+            CHECK (peakOf (wet.l) > 0.01f && wet.l != wet.r && allFinite (wet.l), "the kick reaches the reverb on the effects tab");
+            Rack ref; ref.prepare (48000); ref.addBoard (makeBoard ("kick", 48000));
+            send->set ("amount", 0.0f);
+            render (rack, 8);                                        // let the reverb's tail from before die away
+            CHECK (peakOf (render (rack, 2).l) < 0.0005f, "Send at 0% sends nothing");
+            send->set ("amount", 0.3f); send->set ("bus", 1);
+            render (rack, 8);
+            CHECK (peakOf (render (rack, 2).l) < 0.0005f, "bus B doesn't reach a Return listening to bus A");
+            firstOf (fx, "return")->set ("bus", 1);
+            CHECK (peakOf (render (rack, 2).l) > 0.01f, "until the Return is switched to B");
+            // the kick's own sound is unchanged by the Send in its path
+            fx.solo.store (false); fx.mute.store (true);
+            rack.connect (kick, send->uid, 0, out->uid, 0);
+            rack.disconnect (kick, drive->uid, 0, out->uid, 0);
+            const auto through = render (rack, 1);
+            const auto plain = render (ref, 1);
+            float diff = 0; for (size_t i = 24000; i < through.l.size(); ++i) diff = std::max (diff, std::abs (through.l[i] - plain.l[i]));
+            CHECK (diff < 1.0e-5f, "a Send passes the sound through untouched");
+        }
+        // both orders give the same result: tab order doesn't change the sound
+        auto build = [] (bool fxFirst)
+        {
+            auto rack = std::make_unique<Rack>(); rack->prepare (48000);
+            if (fxFirst) rack->addBoard (makeBoard ("fx", 48000));
+            rack->addBoard (makeBoard ("kick", 48000));
+            if (! fxFirst) rack->addBoard (makeBoard ("fx", 48000));
+            auto& kick = *rack->boards[(size_t) (fxFirst ? 1 : 0)];
+            auto* send = rack->addModule (kick, "send", 0, 0);
+            rack->connect (kick, firstOf (kick, "drive")->uid, 0, send->uid, 0);
+            return rack;
+        };
+        auto a = build (false), b = build (true);
+        CHECK (render (*a, 2).l == render (*b, 2).l, "the effects tab sounds the same whether it is before or after the tabs that feed it");
+    }
+
+    // 44. Ratchet and swing
+    {
+        std::vector<float> pulses (48000, 0.0f);                 // a hit on every 1/16 (6000 samples at 120 BPM)
+        for (size_t k = 0; k < 8; ++k) for (size_t i = 0; i < 1500; ++i) pulses[k * 6000 + i] = 1.0f;
+        auto rises = [] (const std::vector<float>& y, size_t from, size_t to) { int n = from == 0 && y[0] > 0.5f ? 1 : 0; for (size_t i = std::max<size_t> (1, from); i < to; ++i) n += y[i] > 0.5f && y[i - 1] <= 0.5f ? 1 : 0; return n; };
+        Fx one ("ratchet"); one.m->set ("count", 0);
+        CHECK (one.run (pulses) == pulses, "Ratchet set to 1 passes hits straight through");
+        Fx three ("ratchet"); three.m->set ("count", 2);
+        const auto y = three.run (pulses);
+        CHECK (rises (y, 0, 6000) == 3 && rises (y, 0, 48000) == 24, "set to 3, each hit becomes three inside its step");
+        Fx four ("ratchet"); four.m->set ("count", 3); four.m->set ("fade", 1.0f);
+        const auto v = four.run (pulses, 1);
+        CHECK (v[100] > v[1600] && v[1600] > v[3100] && v[3100] > v[4600], "Fade makes each hit of the burst quieter than the last");
+
+        Fx none ("swing"); none.m->set ("amount", 0.0f);
+        CHECK (none.run (pulses) == pulses, "Swing at 0% leaves the timing alone");
+        Fx sw ("swing"); sw.m->set ("amount", 0.5f);
+        const auto s = sw.run (pulses);
+        auto firstRise = [&] (size_t from) { for (size_t i = std::max<size_t> (1, from); i < s.size(); ++i) if (s[i] > 0.5f && s[i - 1] <= 0.5f) return i; return (size_t) 0; };
+        CHECK (s[0] > 0.5f && firstRise (11000) == 12000 && firstRise (23000) == 24000, "hits on the beat stay where they are");
+        CHECK (firstRise (5000) == 6000 + 1500 && firstRise (17000) == 18000 + 1500, "every other 1/16 is held back by half the Swing amount of a step");
+        CHECK (rises (s, 0, 48000) == 8, "no hits are lost or added");
+    }
+
+    // 45. Scope and tuner: the sound passes through, and it names the note
+    {
+        Fx sc ("scope");
+        const auto a = sine (440, 48000, 0.5f);
+        CHECK (sc.run (a) == a, "the scope passes the sound through untouched");
+        auto* scope = dynamic_cast<Scope*> (sc.m.get());
+        int cents = 99;
+        CHECK (std::abs (scope->hz.load() - 440.0f) < 2.0f && noteText (scope->hz.load(), &cents) == "A4" && std::abs (cents) <= 6, "440 Hz reads as A4, in tune");
+        CHECK (std::abs (scope->level.load() - 0.5f) < 0.02f, "and it shows the level");
+        Fx low ("scope"); low.run (sine (55, 48000, 0.3f));
+        CHECK (noteText (dynamic_cast<Scope*> (low.m.get())->hz.load()) == "A1", "a low bass note reads right too");
+        Fx sharp ("scope"); sharp.run (sine (452, 48000, 0.5f));
+        noteText (dynamic_cast<Scope*> (sharp.m.get())->hz.load(), &cents);
+        CHECK (cents > 35 && cents < 60, "a note that is sharp shows how far");
+        Fx quiet ("scope"); quiet.run (silenceSig);
+        CHECK (dynamic_cast<Scope*> (quiet.m.get())->hz.load() == 0.0f && noteText (0.0f).empty(), "silence shows no note");
+        bool moved = false; for (float x : scope->ring) moved = moved || std::abs (x) > 0.3f;
+        CHECK (moved, "the picture holds the wave");
+    }
+
+    // 46. Editing one chord, and locking chords through a Generate
+    {
+        Rack rack; rack.prepare (48000);
+        rack.generateChords (5);
+        const auto t = rack.theory();
+        const auto before = rack.harmony.names;
+        const int deg = rack.harmony.seq[1].deg;
+        const auto colours = t.sortedColours (deg);
+        CHECK (colours.size() >= 2, "a chord has other colours to choose from");
+        std::string other; for (auto& c : colours) if (c.s != rack.harmony.seq[1].t) { other = c.s; break; }
+        rack.setChordColour (1, other);
+        CHECK (rack.harmony.names[1] != before[1] && rack.harmony.names[0] == before[0], "changing one chord's colour renames only that chord");
+        bool inKey = true;
+        for (int k = 0; k < 4; ++k) inKey = inKey && t.inScale (n2c::mod12 ((int) std::lround (rack.timeline.slots[1].voice[k] * 12.0f) + 60));
+        CHECK (inKey, "and it is still in the key");
+        const float bassBefore = rack.timeline.slots[1].bass;
+        rack.setChordBass (1, 1);
+        CHECK (rack.timeline.slots[1].bass != bassBefore && rack.harmony.names[1].find ('/') != std::string::npos, "a new bass note moves the bass and shows as a slash chord");
+        const int total = rack.timeline.total;
+        rack.setChordBars (1, 4);
+        CHECK (rack.timeline.total == total + 32 && rack.timeline.slots[2].start == rack.timeline.slots[1].start + 64, "a longer chord pushes the rest later");
+        rack.setChordBars (1, 2); rack.setChordBass (1, 0);
+        rack.setChordDegree (1, (deg + 3) % 7);
+        CHECK (rack.harmony.seq[1].deg == (deg + 3) % 7 && ! rack.harmony.names[1].empty(), "a chord can be moved to another step of the key");
+        // lock two chords, then Generate: they stay, the rest change
+        rack.toggleChordLock (1); rack.toggleChordLock (3);
+        const auto locked = rack.harmony.names;
+        bool othersChanged = false;
+        for (uint32_t seed = 100; seed < 110; ++seed)
+        {
+            rack.generateChords (seed);
+            CHECK (rack.harmony.names[1] == locked[1] && rack.harmony.names[3] == locked[3], "locked chords stay through a Generate");
+            othersChanged = othersChanged || rack.harmony.names[0] != locked[0] || rack.harmony.names[2] != locked[2];
+        }
+        CHECK (othersChanged, "and the others change");
+        Rack other2; other2.prepare (48000);
+        CHECK (other2.load (rack.save()) && other2.harmony.seq[1].locked && ! other2.harmony.seq[0].locked && other2.save() == rack.save(), "locks are saved with the project");
+        Rack old; old.prepare (48000);
+        CHECK (old.load ("N2M 1\nkey 2 0\nharmony deep 5 8 2 35 50\nchord 0 2 0 0 m7\nchord 5 2 0 0 maj7\nend\n") && old.harmony.seq.size() == 2 && ! old.harmony.seq[0].locked, "a project saved before locks existed still loads");
+        rack.setChordColour (99, "m7"); rack.setChordBars (-1, 2); rack.toggleChordLock (500);
+        CHECK (allFinite (render (rack, 1).l), "editing a chord that isn't there does nothing");
     }
 
     if (failures == 0) std::printf ("All passed\n");

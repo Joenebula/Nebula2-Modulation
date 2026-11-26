@@ -70,7 +70,7 @@ struct Param
     float skew = 1.0f;                       // above 1 gives the low end of the knob more room
     std::vector<const char*> choices {};     // not empty: a switch, not a knob
 };
-enum class Seq { None, Drum, Note, Chord, Host, Value, Sample };   // Host: a slot holding another plugin. Value: a row of amounts, not notes
+enum class Seq { None, Drum, Note, Chord, Host, Value, Sample, Scope };   // Host: a slot holding another plugin. Value: a row of amounts, not notes
 
 struct Info
 {
@@ -148,6 +148,9 @@ struct Timeline
     }
 };
 
+// Two shared buses, A and B: Send units on any tab add to them, Return units play them
+struct Buses { std::array<float, kBlock> l[2] {}, r[2] {}; };
+
 // What every module is told about the moment it is playing
 struct Ctx
 {
@@ -158,6 +161,7 @@ struct Ctx
     int root = 2;                // key note, 0 = C
     const int* scale = nullptr;  // 7 intervals
     const Timeline* chords = nullptr;
+    Buses* buses = nullptr;
     // Per link group: the note sequencer the others follow (nullptr if the group has none)
     const struct Module* leaders[kLinkGroups + 1] {};
 };
@@ -362,8 +366,15 @@ struct Board
         std::vector<char> heard (n, 0);
         std::vector<int> stack;
         outputs.clear();
+        hasReturn = false;
         for (size_t i = 0; i < n; ++i)
+        {
+            const std::string t = modules[i]->info->type;
+            hasReturn = hasReturn || t == "return";
+            // A Send is heard through its bus even with nothing cabled to its outputs
+            if (t == "send") { heard[i] = 1; stack.push_back ((int) i); }
             if (auto* o = dynamic_cast<OutputModule*> (modules[i].get())) { outputs.push_back (o); heard[i] = 1; stack.push_back ((int) i); }
+        }
         while (! stack.empty())
         {
             const int i = stack.back(); stack.pop_back();
@@ -404,6 +415,7 @@ struct Board
     std::vector<std::vector<Route>> routes;
     std::vector<int> order;
     std::vector<OutputModule*> outputs;
+    bool hasReturn = false;      // this board plays a send bus, so it must run after the boards that feed it
 };
 
 // A lock the audio thread never waits on: if the screen is changing the rack, audio skips one chunk
@@ -453,6 +465,7 @@ struct Rack
     TryLock lock;
     Harmony harmony;
     Timeline timeline;            // swapped in whole, under the lock
+    Buses buses;                  // audio thread only
 
     Rack() { generateChords (harmony.seed); }
 
@@ -508,9 +521,20 @@ struct Rack
         g.lenBars = harmony.lenBars; g.chordBars = harmony.chordBars; g.strange = harmony.strange; g.variation = harmony.variation;
         auto seq = theory().generate (newSeed, g);
         if (! seq.empty() && seq[0].intro) seq.erase (seq.begin());   // no glide intro here: the song starts on chord 1
+        // Locked chords stay where they are through a Generate
+        for (size_t i = 0; i < seq.size() && i < harmony.seq.size(); ++i)
+            if (harmony.seq[i].locked) seq[i] = harmony.seq[i];
         harmony.seq = seq;
         rebuildChords();
     }
+
+    // ---- Editing one chord (i counts from 0) ----
+    bool validChord (int i) const { return i >= 0 && i < (int) harmony.seq.size(); }
+    void setChordColour (int i, const std::string& t) { if (validChord (i)) { harmony.seq[(size_t) i].t = t; rebuildChords(); } }
+    void setChordBass (int i, int inv) { if (validChord (i)) { harmony.seq[(size_t) i].inv = std::min (2, std::max (0, inv)); rebuildChords(); } }
+    void setChordBars (int i, int bars) { if (validChord (i)) { harmony.seq[(size_t) i].bars = std::min (8, std::max (1, bars)); rebuildChords(); } }
+    void setChordDegree (int i, int deg) { if (validChord (i)) { auto& c = harmony.seq[(size_t) i]; c.deg = ((deg % 7) + 7) % 7; c.t = theory().colourOf (c).s; c.inv = 0; rebuildChords(); } }
+    void toggleChordLock (int i) { if (validChord (i)) harmony.seq[(size_t) i].locked = ! harmony.seq[(size_t) i].locked; }
 
     // Choosing a mood also moves to that mood's scale, as in Nebula2 Chord. The key note stays.
     void setMood (const std::string& id)
@@ -646,6 +670,7 @@ struct Rack
         c.root = root.load();
         c.scale = scales()[(size_t) std::min ((int) scales().size() - 1, std::max (0, scale.load()))].iv;
         c.chords = &timeline;
+        c.buses = &buses;
         // A group's leader is its first note sequencer that isn't itself following
         for (auto& b : boards)
             for (auto& m : b->modules)
@@ -657,12 +682,16 @@ struct Rack
         {
             const int len = std::min (kBlock, n - pos);
             c.ppq = ppq + pos * c.ppqPerSample;
-            for (auto& b : boards)
-            {
-                const int k = b->out.load();
-                const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
-                b->process (len, c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
-            }
+            for (int k = 0; k < 2; ++k) { std::fill (buses.l[k].begin(), buses.l[k].begin() + len, 0.0f); std::fill (buses.r[k].begin(), buses.r[k].begin() + len, 0.0f); }
+            // Tabs that play a send bus run after the tabs that feed it, wherever they sit in the tab row
+            for (int pass = 0; pass < 2; ++pass)
+                for (auto& b : boards)
+                {
+                    if (b->hasReturn != (pass == 1)) continue;
+                    const int k = b->out.load();
+                    const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
+                    b->process (len, c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
+                }
         }
         lock.unlock();
         // Separate outputs skip the master fader (the host's own channel fader does that job) but keep the safety limiter
@@ -756,7 +785,7 @@ struct Rack
         o << "N2M 1\n" << "key " << root.load() << ' ' << scale.load() << '\n' << "master " << master.load() << '\n';
         o << "harmony " << harmony.mood << ' ' << harmony.seed << ' ' << harmony.lenBars << ' ' << harmony.chordBars << ' ' << harmony.strange << ' ' << harmony.variation << '\n';
         for (auto& c : harmony.seq)
-            o << "chord " << c.deg << ' ' << c.bars << ' ' << c.tr << ' ' << c.inv << ' ' << (c.t.empty() ? "-" : c.t) << '\n';
+            o << "chord " << c.deg << ' ' << c.bars << ' ' << c.tr << ' ' << c.inv << ' ' << (c.t.empty() ? "-" : c.t) << ' ' << (c.locked ? 1 : 0) << '\n';
         for (auto& b : boards) writeBoard (o, *b);
         o << "end\n";
         return o.str();
@@ -789,6 +818,7 @@ struct Rack
                 if (harmonyOut == nullptr || ! sawHarmony) continue;
                 n2c::Chord c; std::string t;
                 ls >> c.deg >> c.bars >> c.tr >> c.inv >> t;
+                int locked = 0; if (ls >> locked) c.locked = locked != 0;       // saves from before v0.1.10 have no lock
                 c.deg = ((c.deg % 7) + 7) % 7; c.bars = std::min (8, std::max (1, c.bars)); c.inv = std::min (2, std::max (0, c.inv));
                 c.t = t == "-" ? "" : t;
                 if (harmonyOut->seq.size() < 64) harmonyOut->seq.push_back (c);

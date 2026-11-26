@@ -360,8 +360,26 @@ void SeqView::tick()
 //==============================================================================
 ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), module (m)
 {
-    for (auto* b : { &mood, &generate, &length, &each }) addAndMakeVisible (b);
+    for (auto* b : { &mood, &generate, &length, &each, &more }) addAndMakeVisible (b);
     auto changed = [this] { proc.chordsVersion.fetch_add (1); };
+    // More: how adventurous the chords are, and how much the repeats differ
+    more.onClick = [this, changed]
+    {
+        juce::PopupMenu strange, variation, menu;
+        for (int v : { 0, 20, 35, 50, 70, 100 }) strange.addItem (1000 + v, juce::String (v) + "%", true, proc.rack.harmony.strange == v);
+        for (int v : { 0, 25, 50, 75, 100 }) variation.addItem (2000 + v, juce::String (v) + "%", true, proc.rack.harmony.variation == v);
+        menu.addSubMenu ("Strange: rarer chords, richer notes (" + juce::String (proc.rack.harmony.strange) + "%)", strange);
+        menu.addSubMenu ("Variation: how much the repeats change (" + juce::String (proc.rack.harmony.variation) + "%)", variation);
+        juce::Component::SafePointer<ChordView> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&more), [safe, changed] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            safe->proc.history.beforeChords();
+            if (r >= 2000) safe->proc.rack.harmony.variation = r - 2000; else safe->proc.rack.harmony.strange = r - 1000;
+            safe->proc.rack.generateChords (safe->proc.rack.harmony.seed);
+            changed();
+        });
+    };
     generate.onClick = [this, changed] { proc.history.beforeChords(); proc.rack.generateChords (proc.nextSeed()); changed(); };
     mood.onClick = [this, changed]
     {
@@ -422,10 +440,11 @@ void ChordView::refreshLabels()
 
 void ChordView::resized()
 {
-    mood.setBounds (0, 0, 150, 22);
-    generate.setBounds (154, 0, 88, 22);
-    length.setBounds (246, 0, 76, 22);
-    each.setBounds (326, 0, 100, 22);
+    mood.setBounds (0, 0, 138, 22);
+    generate.setBounds (142, 0, 82, 22);
+    length.setBounds (228, 0, 70, 22);
+    each.setBounds (302, 0, 96, 22);
+    more.setBounds (402, 0, 76, 22);
 }
 
 void ChordView::paint (juce::Graphics& g)
@@ -433,7 +452,7 @@ void ChordView::paint (juce::Graphics& g)
     const auto& h = proc.rack.harmony;
     for (int i = 0; i < (int) h.names.size() && i < 32; ++i)
     {
-        const auto r = juce::Rectangle<float> ((float) ((i % 8) * 60 + 1), (float) (28 + (i / 8) * lay::chordTileH), 58.0f, (float) lay::chordTileH - 2.0f);
+        const auto r = tile (i).toFloat();
         const auto col = degreeColour (h.seq[(size_t) i].deg);
         const bool now = i == shown;
         g.setColour (col.withAlpha (now ? 0.95f : 0.16f));
@@ -443,7 +462,69 @@ void ChordView::paint (juce::Graphics& g)
         g.setFont (font (10.0f, Weight::Medium));
         g.setColour (now ? n0 : n8);
         g.drawFittedText (h.names[(size_t) i], r.toNearestInt().reduced (3, 0), juce::Justification::centred, 1, 0.7f);
+        if (h.seq[(size_t) i].locked)        // a locked chord wears a small padlock-coloured dot
+        {
+            g.setColour (now ? n0 : noteAccent);
+            g.fillEllipse (r.getRight() - 8.0f, r.getBottom() - 8.0f, 4.5f, 4.5f);
+        }
     }
+}
+
+juce::Rectangle<int> ChordView::tile (int i) { return { (i % 8) * 60 + 1, 28 + (i / 8) * lay::chordTileH, 58, lay::chordTileH - 2 }; }
+
+void ChordView::mouseDown (const juce::MouseEvent& e)
+{
+    const int n = juce::jmin (32, (int) proc.rack.harmony.seq.size());
+    for (int i = 0; i < n; ++i) if (tile (i).contains (e.getPosition())) { chordMenu (i); return; }
+}
+
+// Click a chord: change its colour, its bass note, which chord of the key it is, how long it lasts, or lock it
+void ChordView::chordMenu (int index)
+{
+    auto& rack = proc.rack;
+    if (! rack.validChord (index)) return;
+    const auto t = rack.theory();
+    const auto chord = rack.harmony.seq[(size_t) index];
+    juce::PopupMenu menu, colour, bass, which, len;
+    menu.addSectionHeader ("Chord " + juce::String (index + 1) + ": " + juce::String (rack.harmony.names[(size_t) index]));
+    const auto colours = t.sortedColours (chord.deg);
+    for (size_t k = 0; k < colours.size(); ++k)
+    {
+        auto c = chord; c.t = colours[k].s; c.inv = 0;
+        colour.addItem (100 + (int) k, juce::String (t.chordName (c)) + "   " + n2c::colourLevelName (colours[k].lv), true, colours[k].s == t.colourOf (chord).s);
+    }
+    const int notes = (int) t.colourOf (chord).iv.size();
+    for (int inv = 0; inv < juce::jmin (3, notes); ++inv)
+    {
+        auto c = chord; c.inv = inv;
+        bass.addItem (200 + inv, inv == 0 ? juce::String ("Root: ") + t.chordName (c) : juce::String (t.chordName (c)), true, chord.inv == inv);
+    }
+    for (int d = 0; d < 7; ++d)
+    {
+        n2c::Chord c; c.deg = d; c.t = t.colourOf (c).s;
+        which.addItem (300 + d, t.chordName (c), true, d == chord.deg);
+    }
+    for (int b : { 1, 2, 4, 8 }) len.addItem (400 + b, b == 1 ? "1 bar" : juce::String (b) + " bars", true, chord.bars == b);
+    menu.addSubMenu ("Colour", colour);
+    menu.addSubMenu ("Bass note", bass);
+    menu.addSubMenu ("Change to", which);
+    menu.addSubMenu ("Length", len);
+    menu.addSeparator();
+    menu.addItem (1, "Lock (keep through Generate)", true, chord.locked);
+    juce::Component::SafePointer<ChordView> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (tile (index))), [safe, index, colours] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        auto& rk = safe->proc.rack;
+        safe->proc.history.beforeChords();
+        if (r == 1) rk.toggleChordLock (index);
+        else if (r >= 400) rk.setChordBars (index, r - 400);
+        else if (r >= 300) rk.setChordDegree (index, r - 300);
+        else if (r >= 200) rk.setChordBass (index, r - 200);
+        else if (r >= 100 && r - 100 < (int) colours.size()) rk.setChordColour (index, colours[(size_t) (r - 100)].s);
+        safe->proc.chordsVersion.fetch_add (1);
+        safe->repaint();
+    });
 }
 
 void ChordView::tick()
@@ -451,6 +532,60 @@ void ChordView::tick()
     const int v = proc.chordsVersion.load(), s = module.playStep.load();
     if (v != seenVersion) { seenVersion = v; refreshLabels(); repaint(); }
     if (s != shown) { shown = s; repaint(); }
+}
+
+//==============================================================================
+ScopeView::ScopeView (BoardView& o, Scope& m) : owner (o), module (m) { setSize (lay::seqW, lay::scopeSeqH); }
+
+void ScopeView::paint (juce::Graphics& g)
+{
+    const auto col = boardColour (owner.board != nullptr ? owner.board->colour : 0);
+    const auto well = juce::Rectangle<float> (0.0f, 22.0f, (float) getWidth(), (float) getHeight() - 26.0f);
+    sunken (g, well, radiusControl);
+    g.setColour (juce::Colours::white.withAlpha (0.06f));
+    g.fillRect (well.getX() + 4.0f, well.getCentreY(), well.getWidth() - 8.0f, 1.0f);
+
+    // The note, how far off it is, and the frequency
+    const float hz = module.hz.load();
+    int cents = 0;
+    const auto name = noteText (hz, &cents);
+    g.setFont (font (13.0f, Weight::SemiBold));
+    g.setColour (name.empty() ? n6 : std::abs (cents) <= 5 ? bandGreen : n8);
+    g.drawText (name.empty() ? juce::String ("no note") : juce::String (name), 0, 0, 70, 20, juce::Justification::centredLeft, false);
+    if (! name.empty())
+    {
+        g.setFont (font (11.0f));
+        g.setColour (n7);
+        g.drawText ((cents == 0 ? juce::String ("in tune") : minus (juce::String (cents > 0 ? "+" : "") + juce::String (cents) + " cents")) + "     " + juce::String (hz, 1) + " Hz",
+                    70, 0, getWidth() - 70, 20, juce::Justification::centredLeft, false);
+    }
+
+    // The wave, started from an upward crossing so it holds still instead of sliding about
+    const int n = Scope::size, head = module.head.load();
+    int start = (head + 1) % n;
+    for (int k = 1; k < n / 2; ++k)
+    {
+        const float a = module.ring[(size_t) ((head + k) % n)], b = module.ring[(size_t) ((head + k + 1) % n)];
+        if (a <= 0.0f && b > 0.0f) { start = (head + k + 1) % n; break; }
+    }
+    const int shown = n / 2;
+    juce::Path p;
+    for (int k = 0; k < shown; ++k)
+    {
+        const float v = juce::jlimit (-1.0f, 1.0f, module.ring[(size_t) ((start + k) % n)]);
+        const float x = well.getX() + 4.0f + (well.getWidth() - 8.0f) * (float) k / (float) (shown - 1);
+        const float y = well.getCentreY() - v * (well.getHeight() * 0.5f - 5.0f);
+        if (k == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+    }
+    g.setColour (col.withAlpha (0.95f));
+    g.strokePath (p, juce::PathStrokeType (1.4f));
+}
+
+void ScopeView::tick()
+{
+    const bool quiet = module.level.load() < 0.0005f;
+    if (! quiet || ! wasQuiet) repaint();        // redraw while there is sound, and once more as it stops
+    wasQuiet = quiet;
 }
 
 //==============================================================================
@@ -662,7 +797,16 @@ ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, M
 {
     const auto& info = *m.info;
     setBounds ((int) m.x, (int) m.y, lay::width (info), lay::height (info));
-    if (info.seq == Seq::Sample)
+    if (info.seq == Seq::Scope)
+    {
+        if (auto* sm = dynamic_cast<Scope*> (&m))
+        {
+            scope = std::make_unique<ScopeView> (o, *sm);
+            addAndMakeVisible (*scope);
+            scope->setTopLeftPosition ((getWidth() - lay::seqW) / 2, lay::header);
+        }
+    }
+    else if (info.seq == Seq::Sample)
     {
         if (auto* sm = dynamic_cast<SampleModule*> (&m))
         {
@@ -1095,6 +1239,7 @@ void BoardView::tick()
         if (c->seq != nullptr) c->seq->tick();
         if (c->chords != nullptr) c->chords->tick();
         if (c->sample != nullptr) c->sample->tick();
+        if (c->scope != nullptr) c->scope->tick();
     }
 }
 

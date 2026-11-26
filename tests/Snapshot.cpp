@@ -36,8 +36,10 @@ int main (int argc, char** argv)
     e->selectTab (3); shoot (*ed, dir + "/ui_bass.png");
 
     e->selectTab (4);
+    p.rack.toggleChordLock (2); p.rack.toggleChordLock (5);
     p.preview.store (true); run (p, 5.0);
-    shoot (*ed, dir + "/ui_pad.png");                   // the chord unit, with the playing chord lit
+    shoot (*ed, dir + "/ui_pad.png");                   // the chord unit, with the playing chord lit and two chords locked
+    p.rack.toggleChordLock (2); p.rack.toggleChordLock (5);
     p.preview.store (false); run (p, 0.1);
 
     // links: the bass pattern in group A, sharing rhythm and notes; two knobs in group B
@@ -57,7 +59,12 @@ int main (int argc, char** argv)
     e->selectTab (6); shoot (*ed, dir + "/ui_arp.png");
     {   // a few of the newer units on one board, to see how they draw
         auto eb = n2m::makeBoard ("empty", 48000);
-        for (const char* t : { "gate", "stepmod", "comp", "parameq", "tripler", "euclid" }) eb->add (t, 0, 0, 48000);
+        for (const char* t : { "gate", "stepmod", "scope", "parameq", "send", "ratchet" }) eb->add (t, 0, 0, 48000);
+        if (auto* sc = dynamic_cast<n2m::Scope*> (eb->modules[3].get()))      // give the scope a wave and a note to show
+        {
+            for (int i = 0; i < n2m::Scope::size; ++i) sc->ring[(size_t) i] = 0.7f * std::sin (0.0575f * (float) i) + 0.2f * std::sin (0.23f * (float) i);
+            sc->hz.store (220.0f); sc->level.store (0.7f);
+        }
         n2m::setValues (*eb->modules[2], n2m::valueIdeas()[2].v);
         n2m::setDrum (*eb->modules[1], n2m::drumIdeas ("gate")[0].pat);
         int x = 24, y = 170;

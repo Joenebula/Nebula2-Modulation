@@ -11,9 +11,9 @@ namespace lay
 constexpr int cell = 54, cellH = 62, header = 26, jackW = 40, jackH = 44, pad = 8;
 constexpr int drumSeqH = 62, noteSeqH = 118, seqW = 16 * 20;
 constexpr int chordW = 8 * 60, chordTileH = 28, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
-constexpr int hostW = 360, hostSeqH = 58, sampleSeqH = 86;
-inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note || i.seq == Seq::Value ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : i.seq == Seq::Sample ? sampleSeqH : 0; }
-inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq == Seq::Sample ? seqW : i.seq != Seq::None ? seqW : 0; }
+constexpr int hostW = 360, hostSeqH = 58, sampleSeqH = 86, scopeSeqH = 112;
+inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note || i.seq == Seq::Value ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : i.seq == Seq::Sample ? sampleSeqH : i.seq == Seq::Scope ? scopeSeqH : 0; }
+inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq != Seq::None ? seqW : 0; }
 constexpr int perRow = 5;
 inline int rowLen (const Info& i) { return i.perRow > 0 ? i.perRow : perRow; }
 inline int cols (const Info& i) { return (int) std::min<size_t> ((size_t) rowLen (i), i.params.size()); }
@@ -315,7 +315,7 @@ inline const std::vector<BoardType>& boardTypes()
     static const std::vector<BoardType> t {
         { "kick", "Kick", 0 }, { "snare", "Snare", 3 }, { "clap", "Clap", 7 }, { "hat", "Hi-hat", 5 }, { "perc", "Percussion", 4 },
         { "bass", "Bass", 2 }, { "lead", "Lead", 1 }, { "arp", "Arp", 5 }, { "stab", "Stab", 7 }, { "pad", "Pad", 6 }, { "strings", "Strings", 4 },
-        { "sample", "Sample", 3 }, { "empty", "Empty board", 0 } };
+        { "sample", "Sample", 3 }, { "fx", "Effects (send)", 1 }, { "empty", "Empty board", 0 } };
     return t;
 }
 
@@ -481,6 +481,14 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
             cable (seq, "trig", smp, "trig"); cable (seq, "vel", smp, "vel");
             cable (smp, "outl", out, "left"); cable (smp, "outr", out, "right");
         }
+    }
+    else if (b->type == "fx")
+    {
+        // A shared reverb: everything the Send units on other tabs feed to bus A, through a hall, all wet
+        auto* ret = add ("return");
+        auto* hall = add ("hall"); hall->set ("mix", 1.0f); hall->set ("decay", 0.6f);
+        cable (ret, "outl", hall, "inl"); cable (ret, "outr", hall, "inr");
+        cable (hall, "outl", out, "left"); cable (hall, "outr", out, "right");
     }
     else if (b->type == "stab")
     {

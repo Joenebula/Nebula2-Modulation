@@ -40,7 +40,7 @@ int main()
     p.setRateAndBufferSizeDetails (48000, 256);
     p.prepareToPlay (48000, 256);
 
-    CHECK (p.rack.boards.size() == 4, "a new project opens with a starter set of sounds");
+    CHECK (p.rack.boards.size() == 5, "a new project opens with a starter set of sounds");
     CHECK (run (p, host, 1.0) == 0.0f, "silent while Cubase is stopped");
 
     host.playing = true;
@@ -71,22 +71,23 @@ int main()
     CHECK (diff < 0.001f, "the kick sounds the same every time round");
 
     // Saving with the Cubase project
-    p.rack.root.store (7); p.rack.boards[0]->name = "Big kick"; p.rack.boards[2]->mute.store (true);
+    p.rack.setKey (7, p.rack.scale.load()); p.rack.generateChords (99); p.rack.boards[0]->name = "Big kick"; p.rack.boards[2]->mute.store (true);
     p.rack.addBoard (n2m::makeBoard ("lead", 48000));
-    p.selectedTab.store (4);
+    p.selectedTab.store (5);
     juce::MemoryBlock saved;
     p.getStateInformation (saved);
     Nebula2ModulationProcessor q;
     q.setRateAndBufferSizeDetails (48000, 256);
     q.prepareToPlay (48000, 256);
     q.setStateInformation (saved.getData(), (int) saved.getSize());
-    CHECK (q.rack.boards.size() == 5 && q.rack.root.load() == 7, "sounds and key come back with the project");
+    CHECK (q.rack.boards.size() == 6 && q.rack.root.load() == 7, "sounds and key come back with the project");
+    CHECK (q.rack.harmony.names == p.rack.harmony.names && ! q.rack.harmony.names.empty(), "the chords come back with the project");
     CHECK (q.rack.boards[0]->name == "Big kick" && q.rack.boards[2]->mute.load(), "names and mutes come back");
-    CHECK (q.selectedTab.load() == 4, "reopens on the tab you were on");
+    CHECK (q.selectedTab.load() == 5, "reopens on the tab you were on");
     CHECK (q.rack.save() == p.rack.save(), "the reloaded project is identical");
     const char junk[] = "not a project";
     q.setStateInformation (junk, (int) sizeof junk);
-    CHECK (q.rack.boards.size() == 5, "bad project data is ignored, not loaded");
+    CHECK (q.rack.boards.size() == 6, "bad project data is ignored, not loaded");
 
     // ---- The screen: cabling by dragging, the way the mouse does it ----
     {

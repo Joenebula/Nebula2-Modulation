@@ -29,20 +29,25 @@ Cubase. Tick things off here as they land.
 
 - [x] Oscillator, Noise, Hit envelope, Envelope, Filter, Soft saturation, VCA, Mixer, Attenuator, Output, LFO
 - [x] Drum sequencer and Note sequencer with Ideas and Random
-- [x] Starting boards: Kick, Snare, Hi-hat, Percussion, Bass, Lead, Empty
+- [x] Starting boards: Kick, Snare, Hi-hat, Percussion, Bass, Lead, Stab, Pad, Empty
+- [x] Multi-oscillator (four notes at once)
 - [ ] Sample player (drop an audio file on it)
 - [ ] Clap board (needs the multi-hit envelope)
 - [ ] Stereo cables (today a board is mono until its Output; pan is on the mixer)
 - [ ] Undo and redo
 - [ ] Play boards from a MIDI keyboard / Cubase MIDI track
 
-## Stage 3: rhythm and notes
+## Stage 3: rhythm and notes (part done, v0.1.1)
 
 - [ ] Arpeggiator, with rate, gate, range and pattern as inputs
-- [ ] Chord generator: bring in the Nebula2 Chord engine (`ChordEngine.h` is plain C++, so it drops in)
-- [ ] Stab and Pad / strings boards (need chords and the multi-oscillator)
+- [x] Chord generator: the Nebula2 Chord engine (`Source/ChordEngine.h`, copied unchanged). One progression shared by every tab: mood, Generate, song length, bars per chord
+- [x] Note sequencer can follow the chords (bass and lead do by default)
+- [x] Stab and Pad boards
+- [ ] Strings board
+- [ ] Edit single chords (colour, bass note, length, lock), and the Strange / Variation / Key change knobs from Nebula2 Chord
 - [ ] Euclidean rhythm, clock divider, probability, ratchet, swing
-- [ ] Longer patterns (more than one bar) and pattern chaining
+- [x] Longer patterns: 1, 2, 4 or 8 bars, with a button per bar. Ideas fill every bar; Random varies the bars and adds fills
+- [ ] Pattern chaining
 - [ ] Bigger Ideas libraries per sound
 
 ## Stage 4: effects and thickeners
@@ -63,6 +68,8 @@ Cubase. Tick things off here as they land.
 
 ## Stage 6: other plugins inside
 
+Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, Warmer and VenPressorDyn.
+
 - [ ] VST instrument slot: scan, load by drag and drop, open the plugin's window, save its state in the sound
 - [ ] VST effect slot
 - [ ] Per-tab load meter
@@ -78,15 +85,15 @@ This is the stage that can only be checked on Joe's PC in Cubase with his own pl
 
 ## Screen polish (Joe: "we can work the UI later")
 
+- [ ] Drag the board background to move around; zoom out to see a whole board
 - [ ] Add units menu: show a picture of each unit, so you can see what you're adding
 
 ## Later units
 
 Everything in the SPEC table that isn't bold.
 
-## Known gaps in v0.1.0
+## Known gaps
 
 - No undo yet.
-- One bar of 16 steps per pattern.
 - Boards are mono until the mixer.
 - Fixed window size.

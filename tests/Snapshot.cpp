@@ -33,8 +33,19 @@ int main (int, char** argv)
     e->selectTab (1); shoot (*ed, dir + "/ui_snare.png");
     e->selectTab (3); shoot (*ed, dir + "/ui_bass.png");
 
+    e->selectTab (4);
+    p.preview.store (true); run (p, 5.0);
+    shoot (*ed, dir + "/ui_pad.png");                   // the chord unit, with the playing chord lit
+    p.preview.store (false); run (p, 0.1);
+
+    // a four-bar bass pattern, showing bar 2
+    for (auto& m : p.rack.boards[3]->modules) if (m->info->seq == n2m::Seq::Note) { m->set ("bars", 2); n2m::randomNotes ("bass", 4242, *m); }
+    e->selectTab (3); shoot (*ed, dir + "/ui_bass4.png");
+
+    p.rack.addBoard (n2m::makeBoard ("stab", 48000));
+    e->selectTab (5); shoot (*ed, dir + "/ui_stab.png");
     p.rack.addBoard (n2m::makeBoard ("lead", 48000));
-    e->selectTab (4); shoot (*ed, dir + "/ui_lead.png");
+    e->selectTab (6); shoot (*ed, dir + "/ui_lead.png");
 
     // units added from the menu arrive unconnected
     auto& b = *p.rack.boards[0];

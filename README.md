@@ -5,6 +5,8 @@ it, and a mixing desk underneath.
 
 ![Nebula2 Modulation](docs/screenshot.png)
 
+![The chord generator on the Pad tab](docs/screenshot-chords.png)
+
 ![The Add units menu](docs/screenshot-add-units.png)
 
 This is an early build: the rack, the core sound modules and the first set of sounds. What's planned next is in
@@ -28,16 +30,20 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 1. Add Nebula2 Modulation as an **instrument track** in Cubase and press play. It follows Cubase's tempo.
    **Play** in the plugin runs it on its own when Cubase is stopped.
 2. Each **tab** is one sound. Click a tab to see only that sound's modules.
-3. **+** adds a sound: kick, snare, hi-hat, percussion, bass, lead, or an empty board. It arrives cabled and playing.
+3. **+** adds a sound: kick, snare, hi-hat, percussion, bass, lead, stab, pad, or an empty board. It arrives cabled and playing.
 4. **Add units** opens the menu of modules. Tick one or several and they land on the board, unconnected.
 5. **Cables:** drag from an output jack (coloured ring) to an input jack. Pull a plug out of an input to move it,
    or drop it on nothing to remove it. Right-click a module to disconnect or delete it.
 6. A module marked **not connected** has no path to the Output, so it can't be heard yet.
 7. **Patterns:** click steps to edit. **Ideas** gives ready-made patterns for that kind of sound; **Random**
-   makes a new one in the same style.
-8. **Key** at the top is shared by every tab. Notes are always in key.
-9. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-10. **Tidy** lines the modules up in signal order.
+   makes a new one in the same style. Set **Bars** to 2, 4 or 8 for a longer pattern, and use the numbered
+   buttons to move between bars.
+8. **Chords:** the **Chord generator** (on the Pad and Stab tabs) holds the song's chords. Pick a **Mood**, press
+   **Generate**, and choose the song length and how long each chord lasts. There is one set of chords for the
+   whole song. A Note sequencer set to **Follow** moves its notes with the chords, so the bass and lead keep up.
+9. **Key** at the top is shared by every tab. Notes and chords are always in key.
+10. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
+11. **Tidy** lines the modules up in signal order.
 
 Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.

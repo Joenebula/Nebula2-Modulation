@@ -21,12 +21,15 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include "ChordEngine.h"   // the chord generator from Nebula2 Chord, unchanged
 
 namespace n2m
 {
 constexpr int kBlock = 64;    // the engine works in chunks of up to 64 samples
-constexpr int kData = 32;     // pattern slots a sequencer module carries
-constexpr int kSteps = 16;
+constexpr int kSteps = 16;    // steps in a bar
+constexpr int kMaxBars = 8;   // the longest pattern
+constexpr int kMaxSteps = kSteps * kMaxBars;
+constexpr int kData = 2 * kMaxSteps;   // a sequencer carries two rows: hits (or note on/off), then which note
 constexpr double kPi = 3.14159265358979323846;
 
 // ---- Keys: the same scales as Nebula2 Chord, so the two stay in step ----
@@ -65,7 +68,7 @@ struct Param
     float skew = 1.0f;                       // above 1 gives the low end of the knob more room
     std::vector<const char*> choices {};     // not empty: a switch, not a knob
 };
-enum class Seq { None, Drum, Note };
+enum class Seq { None, Drum, Note, Chord };
 
 struct Info
 {
@@ -119,6 +122,28 @@ inline std::string paramText (const Param& p, float v)
     return b;
 }
 
+// ---- The song's chords, as the audio thread sees them ----
+// One slot per chord: where it starts, how long it lasts, and the notes to play (as pitch signals).
+struct ChordSlot
+{
+    int start = 0, len = 32;          // in 16th steps
+    int deg = 0, tr = 0;              // the chord's step of the key, and any key-change lift in semitones
+    float bass = -2.0f;               // pitch signals (octaves from middle C)
+    float voice[4] { 0, 0, 0, 0 };
+};
+struct Timeline
+{
+    std::vector<ChordSlot> slots;
+    int total = 0;                    // steps before the progression loops
+    int indexAt (long step) const
+    {
+        if (slots.empty() || total <= 0) return -1;
+        const int s = (int) (((step % total) + total) % total);
+        for (int i = (int) slots.size(); --i >= 0;) if (s >= slots[(size_t) i].start) return i;
+        return 0;
+    }
+};
+
 // What every module is told about the moment it is playing
 struct Ctx
 {
@@ -128,6 +153,7 @@ struct Ctx
     bool playing = false;
     int root = 2;                // key note, 0 = C
     const int* scale = nullptr;  // 7 intervals
+    const Timeline* chords = nullptr;
 };
 
 using Buf = std::array<float, kBlock>;
@@ -377,7 +403,17 @@ inline float softLimit (float x)
     return (x < 0 ? -1.0f : 1.0f) * (0.5f + 0.5f * std::tanh ((a - 0.5f) * 2.0f));
 }
 
-// ---- The rack: every board, the key, the master ----
+// The song's chord progression, shared by every tab the way the key is. Made by the Nebula2 Chord engine.
+struct Harmony
+{
+    std::string mood = "deep";
+    uint32_t seed = 362668;
+    int lenBars = 16, chordBars = 2, strange = 35, variation = 50;
+    std::vector<n2c::Chord> seq;
+    std::vector<std::string> names;   // "Dm7", "Bbmaj9" ... one per chord, for the screen
+};
+
+// ---- The rack: every board, the key, the chords, the master ----
 struct Rack
 {
     std::vector<std::unique_ptr<Board>> boards;
@@ -385,6 +421,82 @@ struct Rack
     std::atomic<float> master { 0.8f }, peakL { 0.0f }, peakR { 0.0f };
     double sr = 48000;
     TryLock lock;
+    Harmony harmony;
+    Timeline timeline;            // swapped in whole, under the lock
+
+    Rack() { generateChords (harmony.seed); }
+
+    n2c::Theory theory() const
+    {
+        n2c::Theory t;
+        t.moodId = harmony.mood;
+        t.scaleId = scales()[(size_t) std::min ((int) scales().size() - 1, std::max (0, scale.load()))].id;
+        t.tonic = root.load();
+        return t;
+    }
+
+    // Works the chords out again as notes: after a new progression, or a change of key
+    void rebuildChords()
+    {
+        const auto t = theory();
+        const auto voiced = t.voiceAll (harmony.seq);
+        Timeline tl;
+        harmony.names.clear();
+        int at = 0;
+        for (size_t i = 0; i < harmony.seq.size(); ++i)
+        {
+            const auto& c = harmony.seq[i];
+            ChordSlot s;
+            s.start = at; s.len = std::max (1, c.bars) * kSteps; s.deg = c.deg; s.tr = c.tr;
+            at += s.len;
+            s.bass = (float) (voiced[i].bass + 12 - 60) / 12.0f;
+            // Four notes from the full voicing: different notes of the chord first, then the highest left over
+            std::vector<int> pick, rest;
+            for (int q : voiced[i].upper)
+            {
+                bool seen = false;
+                for (int p : pick) seen = seen || n2c::mod12 (p) == n2c::mod12 (q);
+                (seen ? rest : pick).push_back (q);
+            }
+            while (pick.size() > 4) pick.erase (pick.begin() + (long) (pick.size() / 2));
+            while (pick.size() < 4 && ! rest.empty()) { pick.push_back (rest.back()); rest.pop_back(); }
+            while (pick.size() < 4) pick.push_back (pick.empty() ? 60 : pick.back());
+            std::sort (pick.begin(), pick.end());
+            for (int k = 0; k < 4; ++k) s.voice[k] = (float) (pick[(size_t) k] - 60) / 12.0f;
+            tl.slots.push_back (s);
+            harmony.names.push_back (t.chordName (c));
+        }
+        tl.total = at;
+        { Hold h (lock); timeline.slots.swap (tl.slots); timeline.total = tl.total; }
+    }
+
+    // A new progression from the mood, in the current key
+    void generateChords (uint32_t newSeed)
+    {
+        harmony.seed = newSeed;
+        n2c::Theory::GenSettings g;
+        g.lenBars = harmony.lenBars; g.chordBars = harmony.chordBars; g.strange = harmony.strange; g.variation = harmony.variation;
+        auto seq = theory().generate (newSeed, g);
+        if (! seq.empty() && seq[0].intro) seq.erase (seq.begin());   // no glide intro here: the song starts on chord 1
+        harmony.seq = seq;
+        rebuildChords();
+    }
+
+    // Choosing a mood also moves to that mood's scale, as in Nebula2 Chord. The key note stays.
+    void setMood (const std::string& id)
+    {
+        harmony.mood = n2c::moods()[(size_t) n2c::moodIndex (id)].id;
+        const auto& m = n2c::moods()[(size_t) n2c::moodIndex (id)];
+        for (size_t i = 0; i < scales().size(); ++i) if (m.scale == scales()[i].id) scale.store ((int) i);
+        generateChords (harmony.seed);
+    }
+
+    void setKey (int newRoot, int newScale)
+    {
+        root.store (((newRoot % 12) + 12) % 12);
+        scale.store (std::min ((int) scales().size() - 1, std::max (0, newScale)));
+        rebuildChords();
+    }
 
     void prepare (double sampleRate)
     {
@@ -403,6 +515,7 @@ struct Rack
         c.ppqPerSample = bpm / 60.0 / sr;
         c.root = root.load();
         c.scale = scales()[(size_t) std::min ((int) scales().size() - 1, std::max (0, scale.load()))].iv;
+        c.chords = &timeline;
         bool anySolo = false;
         for (auto& b : boards) anySolo = anySolo || b->solo.load();
         for (int pos = 0; pos < n; pos += kBlock)
@@ -467,12 +580,16 @@ struct Rack
             o << "mod " << m->uid << ' ' << m->info->type << ' ' << m->x << ' ' << m->y << '\n';
             for (size_t k = 0; k < m->info->params.size(); ++k)
                 o << "p " << m->uid << ' ' << m->info->params[k].id << ' ' << m->params[k].load() << '\n';
-            if (m->info->seq != Seq::None)
-            {
-                o << "d " << m->uid;
-                for (auto& d : m->data) o << ' ' << d.load();
-                o << '\n';
-            }
+            if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note)
+                for (int row = 0; row < 2; ++row)
+                {
+                    // Each row is written up to its last used bar, so short patterns make short saves
+                    int used = kSteps;
+                    for (int k = 0; k < kMaxSteps; ++k) if (m->data[(size_t) (row * kMaxSteps + k)].load() != 0.0f) used = ((k / kSteps) + 1) * kSteps;
+                    o << (row == 0 ? "g " : "n ") << m->uid;
+                    for (int k = 0; k < used; ++k) o << ' ' << m->data[(size_t) (row * kMaxSteps + k)].load();
+                    o << '\n';
+                }
         }
         for (auto& c : b.cables)
         {
@@ -484,14 +601,18 @@ struct Rack
     {
         std::ostringstream o;
         o << "N2M 1\n" << "key " << root.load() << ' ' << scale.load() << '\n' << "master " << master.load() << '\n';
+        o << "harmony " << harmony.mood << ' ' << harmony.seed << ' ' << harmony.lenBars << ' ' << harmony.chordBars << ' ' << harmony.strange << ' ' << harmony.variation << '\n';
+        for (auto& c : harmony.seq)
+            o << "chord " << c.deg << ' ' << c.bars << ' ' << c.tr << ' ' << c.inv << ' ' << (c.t.empty() ? "-" : c.t) << '\n';
         for (auto& b : boards) writeBoard (o, *b);
         o << "end\n";
         return o.str();
     }
 
     // Reads boards from saved text. Unknown module types and lines are skipped, not fatal.
-    static std::vector<std::unique_ptr<Board>> readBoards (const std::string& text, double sampleRate, int* rootOut = nullptr, int* scaleOut = nullptr, float* masterOut = nullptr)
+    static std::vector<std::unique_ptr<Board>> readBoards (const std::string& text, double sampleRate, int* rootOut = nullptr, int* scaleOut = nullptr, float* masterOut = nullptr, Harmony* harmonyOut = nullptr)
     {
+        bool sawHarmony = false;
         std::vector<std::unique_ptr<Board>> made;
         std::istringstream in (text);
         std::string line;
@@ -502,6 +623,23 @@ struct Rack
             std::string tag; ls >> tag;
             if (tag == "key") { int r = 2, s = 0; ls >> r >> s; if (rootOut) *rootOut = ((r % 12) + 12) % 12; if (scaleOut) *scaleOut = std::min ((int) scales().size() - 1, std::max (0, s)); }
             else if (tag == "master") { float m = 0.8f; ls >> m; if (masterOut) *masterOut = m; }
+            else if (tag == "harmony")
+            {
+                if (harmonyOut == nullptr) continue;
+                Harmony hm; std::string mood;
+                ls >> mood >> hm.seed >> hm.lenBars >> hm.chordBars >> hm.strange >> hm.variation;
+                hm.mood = n2c::moods()[(size_t) n2c::moodIndex (mood)].id;
+                *harmonyOut = hm; sawHarmony = true;
+            }
+            else if (tag == "chord")
+            {
+                if (harmonyOut == nullptr || ! sawHarmony) continue;
+                n2c::Chord c; std::string t;
+                ls >> c.deg >> c.bars >> c.tr >> c.inv >> t;
+                c.deg = ((c.deg % 7) + 7) % 7; c.bars = std::min (8, std::max (1, c.bars)); c.inv = std::min (2, std::max (0, c.inv));
+                c.t = t == "-" ? "" : t;
+                if (harmonyOut->seq.size() < 64) harmonyOut->seq.push_back (c);
+            }
             else if (tag == "board")
             {
                 std::string rest; std::getline (ls, rest);
@@ -540,10 +678,25 @@ struct Rack
                     if (k >= 0) { const auto& p = m->info->params[(size_t) k]; m->params[(size_t) k].store (std::min (p.hi, std::max (p.lo, v))); }
                 }
             }
-            else if (tag == "d")
+            else if (tag == "g" || tag == "n")
             {
                 int uid = 0; ls >> uid;
-                if (auto* m = b->find (uid)) for (auto& d : m->data) { float v = 0; if (ls >> v) d.store (v); }
+                const int base = tag == "g" ? 0 : kMaxSteps;
+                if (auto* m = b->find (uid)) for (int k = 0; k < kMaxSteps; ++k) { float v = 0; if (ls >> v) m->data[(size_t) (base + k)].store (v); else break; }
+            }
+            else if (tag == "d")
+            {
+                // v0.1.0 saves: one bar. Hits in the first 16 numbers; a note sequencer's notes in the next 16.
+                int uid = 0; ls >> uid;
+                if (auto* m = b->find (uid))
+                {
+                    std::vector<float> v; float x = 0;
+                    while (ls >> x) v.push_back (x);
+                    for (int k = 0; k < kSteps && k < (int) v.size(); ++k)
+                        for (int bar = 0; bar < kMaxBars; ++bar) m->data[(size_t) (bar * kSteps + k)].store (v[(size_t) k]);
+                    for (int k = 0; k < kSteps && kSteps + k < (int) v.size(); ++k)
+                        for (int bar = 0; bar < kMaxBars; ++bar) m->data[(size_t) (kMaxSteps + bar * kSteps + k)].store (v[(size_t) (kSteps + k)]);
+                }
             }
             else if (tag == "cable")
             {
@@ -564,10 +717,14 @@ struct Rack
     {
         if (text.compare (0, 4, "N2M ") != 0) return false;
         int r = root.load(), s = scale.load(); float m = master.load();
-        auto made = readBoards (text, sr, &r, &s, &m);
+        Harmony hm;
+        auto made = readBoards (text, sr, &r, &s, &m, &hm);
         std::vector<std::unique_ptr<Board>> old;
         { Hold h (lock); old.swap (boards); boards.swap (made); }
         root.store (r); scale.store (s); master.store (m);
+        harmony = hm;
+        if (harmony.seq.empty()) generateChords (harmony.seed);   // a save from before chords existed
+        else rebuildChords();
         return true;
     }
 

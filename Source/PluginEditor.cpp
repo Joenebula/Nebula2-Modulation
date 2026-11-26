@@ -147,7 +147,11 @@ SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p)
 void SeqView::resized() { ideas.setBounds (0, 0, 58, 20); random.setBounds (62, 0, 66, 20); }
 
 juce::Rectangle<int> SeqView::grid() const { return { 0, 24, lay::seqW, getHeight() - 24 - 4 }; }
-int SeqView::stepAtX (int x) const { return juce::jlimit (0, kSteps - 1, x / 20); }
+// The step under the mouse, on the bar being shown
+int SeqView::stepAtX (int x) const { return page * kSteps + juce::jlimit (0, kSteps - 1, x / 20); }
+int SeqView::bars() const { return 1 << juce::jlimit (0, 3, (int) std::lround (module.P (module.paramIndex ("bars")))); }
+// One small button per bar, to the right of Random
+juce::Rectangle<int> SeqView::pill (int bar) const { return { 136 + bar * 23, 1, 21, 18 }; }
 
 void SeqView::showIdeas()
 {
@@ -170,19 +174,35 @@ void SeqView::paint (juce::Graphics& g)
 {
     const auto col = boardColour (board.colour);
     const auto gr = grid();
-    const int len = (int) std::lround (module.P (module.paramIndex ("length")));
+    const int len = loopSteps (module.P (module.paramIndex ("length")), module.P (module.paramIndex ("bars")));
+    const int nBars = bars();
+    page = juce::jmin (page, nBars - 1);
     const bool drum = module.info->seq == Seq::Drum;
     const int root = proc.rack.root.load();
     const int* sc = scales()[(size_t) juce::jlimit (0, (int) scales().size() - 1, proc.rack.scale.load())].iv;
 
+    // Bar buttons: the one shown is lit, the one playing has a yellow mark
+    if (nBars > 1)
+        for (int b = 0; b < nBars; ++b)
+        {
+            const auto r = pill (b).toFloat();
+            if (b == page) { g.setColour (col.withAlpha (0.85f)); g.fillRoundedRectangle (r, 4.0f); }
+            else { g.setColour (n4); g.fillRoundedRectangle (r, 4.0f); }
+            g.setFont (font (10.0f, Weight::SemiBold));
+            g.setColour (b == page ? n0 : n7);
+            g.drawText (juce::String (b + 1), pill (b), juce::Justification::centred, false);
+            if (shownStep >= 0 && shownStep / kSteps == b) { g.setColour (noteAccent); g.fillRoundedRectangle (r.withTop (r.getBottom() - 2.5f).reduced (4.0f, 0.0f), 1.0f); }
+        }
+
     for (int i = 0; i < kSteps; ++i)
     {
-        const float alpha = i < len ? 1.0f : 0.3f;
-        const bool now = i == shownStep;
+        const int st = page * kSteps + i;
+        const float alpha = st < len ? 1.0f : 0.3f;
+        const bool now = st == shownStep;
         if (drum)
         {
             const auto r = juce::Rectangle<float> ((float) (i * 20 + 1), (float) gr.getY(), 18.0f, (float) gr.getHeight());
-            const float d = module.data[(size_t) i].load();
+            const float d = module.data[(size_t) st].load();
             if (d > 0.5f)
             {
                 g.setColour (col.withAlpha ((d > 1.5f ? 1.0f : 0.5f) * alpha));
@@ -201,8 +221,8 @@ void SeqView::paint (juce::Graphics& g)
             const auto cell = juce::Rectangle<float> ((float) (i * 20 + 1), bar.getBottom() + 4.0f, 18.0f, 14.0f);
             g.setColour ((i % 4 == 0 ? n4.withAlpha (0.6f) : sunkenHi).withAlpha (alpha));
             g.fillRoundedRectangle (bar, 3.0f);
-            const bool on = module.data[(size_t) i].load() > 0.5f;
-            const int deg = juce::jlimit (kDegLo, kDegHi, (int) std::lround (module.data[(size_t) (kSteps + i)].load()));
+            const bool on = module.data[(size_t) st].load() > 0.5f;
+            const int deg = juce::jlimit (kDegLo, kDegHi, (int) std::lround (module.data[(size_t) (kMaxSteps + st)].load()));
             const float rowH = bar.getHeight() / (float) (kDegHi - kDegLo + 1);
             const float y = bar.getBottom() - (float) (deg - kDegLo + 1) * rowH;
             g.setColour (on ? col.withAlpha (alpha) : n6.withAlpha (0.5f * alpha));
@@ -223,7 +243,7 @@ void SeqView::setDegreeFromY (int step, int y)
     const float barH = (float) gr.getHeight() - 18.0f;
     const float rowH = barH / (float) (kDegHi - kDegLo + 1);
     const int deg = juce::jlimit (kDegLo, kDegHi, kDegLo + (int) (((float) gr.getY() + barH - (float) y) / rowH));
-    module.data[(size_t) (kSteps + step)].store ((float) deg);
+    module.data[(size_t) (kMaxSteps + step)].store ((float) deg);
     module.data[(size_t) step].store (1.0f);
 }
 
@@ -231,6 +251,8 @@ void SeqView::mouseDown (const juce::MouseEvent& e)
 {
     const auto gr = grid();
     dragStep = -1;
+    for (int b = 0; b < bars(); ++b)
+        if (bars() > 1 && pill (b).contains (e.getPosition())) { page = b; repaint(); return; }
     if (! gr.contains (e.getPosition())) return;
     const int s = stepAtX (e.x);
     if (module.info->seq == Seq::Drum)
@@ -259,11 +281,110 @@ void SeqView::tick()
 }
 
 //==============================================================================
+ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), module (m)
+{
+    for (auto* b : { &mood, &generate, &length, &each }) addAndMakeVisible (b);
+    auto changed = [this] { proc.chordsVersion.fetch_add (1); };
+    generate.onClick = [this, changed] { proc.rack.generateChords (proc.nextSeed()); changed(); };
+    mood.onClick = [this, changed]
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("Mood");
+        int i = 1;
+        for (auto& md : n2c::moods()) menu.addItem (i++, md.name, true, md.id == proc.rack.harmony.mood);
+        juce::Component::SafePointer<ChordView> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&mood), [safe, changed] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            safe->proc.rack.setMood (n2c::moods()[(size_t) (r - 1)].id);
+            changed();
+        });
+    };
+    length.onClick = [this, changed]
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("Song length");
+        for (int bars : { 8, 16, 32 }) menu.addItem (bars, juce::String (bars) + " bars", true, bars == proc.rack.harmony.lenBars);
+        juce::Component::SafePointer<ChordView> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&length), [safe, changed] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            safe->proc.rack.harmony.lenBars = r;
+            safe->proc.rack.generateChords (safe->proc.rack.harmony.seed);
+            changed();
+        });
+    };
+    each.onClick = [this, changed]
+    {
+        juce::PopupMenu menu;
+        menu.addSectionHeader ("Each chord lasts");
+        for (int bars : { 1, 2, 4 }) menu.addItem (bars, bars == 1 ? "1 bar" : juce::String (bars) + " bars", true, bars == proc.rack.harmony.chordBars);
+        juce::Component::SafePointer<ChordView> safe (this);
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&each), [safe, changed] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            safe->proc.rack.harmony.chordBars = r;
+            safe->proc.rack.generateChords (safe->proc.rack.harmony.seed);
+            changed();
+        });
+    };
+    setSize (lay::chordW, lay::chordSeqH);
+    refreshLabels();
+}
+
+void ChordView::refreshLabels()
+{
+    const auto& h = proc.rack.harmony;
+    mood.setButtonText (n2c::moods()[(size_t) n2c::moodIndex (h.mood)].name);
+    length.setButtonText (juce::String (h.lenBars) + " bars");
+    each.setButtonText (h.chordBars == 1 ? "1 bar each" : juce::String (h.chordBars) + " bars each");
+}
+
+void ChordView::resized()
+{
+    mood.setBounds (0, 0, 150, 22);
+    generate.setBounds (154, 0, 88, 22);
+    length.setBounds (246, 0, 76, 22);
+    each.setBounds (326, 0, 100, 22);
+}
+
+void ChordView::paint (juce::Graphics& g)
+{
+    const auto& h = proc.rack.harmony;
+    for (int i = 0; i < (int) h.names.size() && i < 32; ++i)
+    {
+        const auto r = juce::Rectangle<float> ((float) ((i % 8) * 60 + 1), (float) (28 + (i / 8) * lay::chordTileH), 58.0f, (float) lay::chordTileH - 2.0f);
+        const auto col = degreeColour (h.seq[(size_t) i].deg);
+        const bool now = i == shown;
+        g.setColour (col.withAlpha (now ? 0.95f : 0.16f));
+        g.fillRoundedRectangle (r, 4.0f);
+        g.setColour (col.withAlpha (now ? 0.0f : 0.8f));
+        g.fillRoundedRectangle (r.getX() + 6.0f, r.getY() + 2.0f, r.getWidth() - 12.0f, 1.5f, 0.75f);
+        g.setFont (font (10.0f, Weight::Medium));
+        g.setColour (now ? n0 : n8);
+        g.drawFittedText (h.names[(size_t) i], r.toNearestInt().reduced (3, 0), juce::Justification::centred, 1, 0.7f);
+    }
+}
+
+void ChordView::tick()
+{
+    const int v = proc.chordsVersion.load(), s = module.playStep.load();
+    if (v != seenVersion) { seenVersion = v; refreshLabels(); repaint(); }
+    if (s != shown) { shown = s; repaint(); }
+}
+
+//==============================================================================
 ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, Module& m) : module (m), owner (o), proc (p), board (b)
 {
     const auto& info = *m.info;
     setBounds ((int) m.x, (int) m.y, lay::width (info), lay::height (info));
-    if (info.seq != Seq::None)
+    if (info.seq == Seq::Chord)
+    {
+        chords = std::make_unique<ChordView> (p, m);
+        addAndMakeVisible (*chords);
+        chords->setTopLeftPosition ((getWidth() - lay::chordW) / 2, lay::header);
+    }
+    else if (info.seq != Seq::None)
     {
         seq = std::make_unique<SeqView> (p, b, m);
         addAndMakeVisible (*seq);
@@ -531,7 +652,11 @@ void BoardView::endCable (juce::Point<int> at)
 
 void BoardView::tick()
 {
-    for (auto* c : comps) if (c->seq != nullptr) c->seq->tick();
+    for (auto* c : comps)
+    {
+        if (c->seq != nullptr) c->seq->tick();
+        if (c->chords != nullptr) c->chords->tick();
+    }
 }
 
 //==============================================================================
@@ -1034,8 +1159,9 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     for (int i = 0; i < 12; ++i) keyBox.addItem (kNoteNames[i], i + 1);
     for (int i = 0; i < (int) scales().size(); ++i) scaleBox.addItem (scales()[(size_t) i].name, i + 1);
     addAndMakeVisible (keyBox); addAndMakeVisible (scaleBox);
-    keyBox.onChange = [this] { proc.rack.root.store (keyBox.getSelectedId() - 1); boardView.repaint(); };
-    scaleBox.onChange = [this] { proc.rack.scale.store (scaleBox.getSelectedId() - 1); boardView.repaint(); };
+    // The key is shared by every tab. Changing it moves the notes and the chords with it.
+    keyBox.onChange = [this] { proc.rack.setKey (keyBox.getSelectedId() - 1, proc.rack.scale.load()); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
+    scaleBox.onChange = [this] { proc.rack.setKey (proc.rack.root.load(), scaleBox.getSelectedId() - 1); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
 
     addAndMakeVisible (tabs);
     tabs.onSelect = [this] (int i) { selectTab (i); };
@@ -1106,6 +1232,12 @@ void Nebula2ModulationEditor::timerCallback()
         selectTab (proc.selectedTab.load());
         tabs.showSelected();
         repaint();
+    }
+    // Choosing a mood on the Chord generator can change the scale: keep the box at the top in step
+    if (scaleBox.getSelectedId() != proc.rack.scale.load() + 1)
+    {
+        scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
+        boardView.repaint();
     }
     const bool host = proc.hostPlaying.load(), on = proc.isPlaying();
     const juce::String text = host ? "Playing" : on ? "Stop" : "Play";

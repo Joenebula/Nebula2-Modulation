@@ -326,19 +326,26 @@ struct Lfo : Module
 inline long stepAt (double ppq) { return (long) std::floor (ppq * 4.0 + 1.0e-9); }
 inline int wrapStep (long s, int len) { return (int) (((s % len) + len) % len); }
 
-// Drum sequencer: 16 steps. data[step] = 0 off, 1 hit, 2 accent.
+// How long a pattern is before it loops: whole bars, with the last bar cut to "Steps" (16 = a full bar)
+inline int loopSteps (float stepsParam, float barsParam)
+{
+    const int bars = 1 << std::min (3, std::max (0, (int) std::lround (barsParam)));
+    return (bars - 1) * kSteps + std::min (kSteps, std::max (1, (int) std::lround (stepsParam)));
+}
+
+// Drum sequencer: up to 8 bars of 16 steps. data[step] = 0 off, 1 hit, 2 accent.
 struct DrumSeq : Module
 {
     static const Info& desc()
     {
-        static const Info i { "drumseq", "Drum sequencer", "Notes and rhythm", "16 steps. Click a step for a hit, again for an accent",
+        static const Info i { "drumseq", "Drum sequencer", "Notes and rhythm", "Up to 8 bars. Click a step for a hit, again for an accent",
             {}, { { "trig", "Trig" }, { "vel", "Vel" } },
-            { { "length", "Steps", 1, 16, 16, Fmt::Int } }, Seq::Drum };
+            { { "length", "Steps", 1, 16, 16, Fmt::Int }, { "bars", "Bars", 0, 3, 0, Fmt::Int, 1, { "1 bar", "2 bars", "4 bars", "8 bars" } } }, Seq::Drum };
         return i;
     }
     void process (int n, const Ctx& c) override
     {
-        const int len = std::min (kSteps, std::max (1, (int) std::lround (P (0))));
+        const int len = loopSteps (P (0), P (1));
         const int gateLen = std::max (8, (int) (0.5 * 0.25 / std::max (1.0e-9, c.ppqPerSample)));   // half a step
         for (int i = 0; i < n; ++i)
         {
@@ -366,21 +373,24 @@ struct DrumSeq : Module
     float vel = 0.72f;
 };
 
-// Note sequencer: 16 steps. data[0..15] = note on/off, data[16..31] = which note of the key.
+// Note sequencer: up to 8 bars. First row of data = note on/off, second row = which note of the key.
 // Notes are stored as scale steps, so changing the key moves every pattern with it.
+// With Follow on, the steps count from the chord playing now, so the line moves with the chords.
 struct NoteSeq : Module
 {
     static const Info& desc()
     {
-        static const Info i { "noteseq", "Note sequencer", "Notes and rhythm", "16 steps of notes, always in the key",
+        static const Info i { "noteseq", "Note sequencer", "Notes and rhythm", "Up to 8 bars of notes, always in the key. Can follow the chords",
             {}, { { "pitch", "Pitch" }, { "gate", "Gate" } },
             { { "octave", "Octave", -4, 3, -1, Fmt::Int }, { "gatelen", "Length", 0.1f, 1, 0.55f, Fmt::Percent },
-              { "length", "Steps", 1, 16, 16, Fmt::Int } }, Seq::Note };
+              { "length", "Steps", 1, 16, 16, Fmt::Int }, { "bars", "Bars", 0, 3, 0, Fmt::Int, 1, { "1 bar", "2 bars", "4 bars", "8 bars" } },
+              { "follow", "Chords", 0, 1, 0, Fmt::Int, 1, { "Ignore", "Follow" } } }, Seq::Note };
         return i;
     }
     void process (int n, const Ctx& c) override
     {
-        const int len = std::min (kSteps, std::max (1, (int) std::lround (P (2))));
+        const int len = loopSteps (P (2), P (3));
+        const bool follow = P (4) > 0.5f;
         const double stepSamples = 0.25 / std::max (1.0e-9, c.ppqPerSample);
         const float gl = P (1);
         // 100% ties into the next note; anything less leaves a gap so the envelope re-fires
@@ -397,8 +407,14 @@ struct NoteSeq : Module
                     playStep.store (k);
                     if (data[(size_t) k].load (std::memory_order_relaxed) > 0.5f)
                     {
-                        const int deg = (int) std::lround (data[(size_t) (kSteps + k)].load (std::memory_order_relaxed));
-                        const int semis = c.root + degreeToSemis (deg, c.scale) + 12 * (int) std::lround (P (0));
+                        int deg = (int) std::lround (data[(size_t) (kMaxSteps + k)].load (std::memory_order_relaxed));
+                        int lift = 0;
+                        if (follow && c.chords != nullptr)
+                        {
+                            const int ci = c.chords->indexAt (s);
+                            if (ci >= 0) { deg += c.chords->slots[(size_t) ci].deg; lift = c.chords->slots[(size_t) ci].tr; }
+                        }
+                        const int semis = c.root + degreeToSemis (deg, c.scale) + lift + 12 * (int) std::lround (P (0));
                         pitch = (float) semis / 12.0f;
                         left = gateLen;
                     }
@@ -415,6 +431,118 @@ struct NoteSeq : Module
     float pitch = 0;
 };
 
+// Chord generator: plays the song's chord progression (shared by every tab, like the key).
+// Sends the chord out as a bass note and four voices, with a gate in the chosen rhythm.
+struct ChordGen : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "chords", "Chord generator", "Notes and rhythm", "Plays the song's chord progression, always in key",
+            {}, { { "bass", "Bass" }, { "v1", "Note 1" }, { "v2", "Note 2" }, { "v3", "Note 3" }, { "v4", "Note 4" }, { "gate", "Gate" } },
+            { { "pattern", "Rhythm", 0, 6, 0, Fmt::Int, 1, { "Hold", "Rave stab", "8th pulse", "16th pulse", "Off-beat", "Syncopated", "Two hits" } },
+              { "octave", "Octave", -2, 2, 0, Fmt::Int } }, Seq::Chord };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const auto& pats = n2c::patterns();
+        const auto& pat = pats[(size_t) std::min ((int) pats.size() - 1, std::max (0, (int) std::lround (P (0))))].steps;
+        const float oct = std::round (P (1));
+        const double stepSamples = 0.25 / std::max (1.0e-9, c.ppqPerSample);
+        for (int i = 0; i < n; ++i)
+        {
+            if (c.playing && c.chords != nullptr)
+            {
+                const long s = stepAt (c.ppq + i * c.ppqPerSample);
+                if (s != last)
+                {
+                    last = s;
+                    const int ci = c.chords->indexAt (s);
+                    if (ci >= 0)
+                    {
+                        const auto& slot = c.chords->slots[(size_t) ci];
+                        bass = slot.bass;
+                        for (int k = 0; k < 4; ++k) voice[k] = slot.voice[k] + oct;
+                        playStep.store (ci);
+                        const int inChord = (int) (((s % c.chords->total) + c.chords->total) % c.chords->total) - slot.start;
+                        if (pat.empty())
+                        {
+                            // Hold: the gate stays up for the whole chord, with a short gap at each change so envelopes restart
+                            left = inChord == slot.len - 1 ? (int) (stepSamples * 0.9) : (int) (stepSamples * 1.05);
+                        }
+                        else
+                        {
+                            const double g = pat[(size_t) (wrapStep (s, kSteps) % (int) pat.size())];
+                            if (g > 0) left = std::max (8, (int) (stepSamples * std::min (g, (double) (slot.len - inChord)) * 0.92));
+                        }
+                    }
+                }
+            }
+            else if (last != DrumSeq::noStep) { last = DrumSeq::noStep; left = 0; playStep.store (-1); }
+            out[0][(size_t) i] = bass;
+            for (int k = 0; k < 4; ++k) out[(size_t) (1 + k)][(size_t) i] = voice[k];
+            out[5][(size_t) i] = left > 0 ? 1.0f : 0.0f;
+            if (left > 0) --left;
+        }
+    }
+    long last = DrumSeq::noStep;
+    int left = 0;
+    float bass = -2.0f, voice[4] { 0, 0.25f, 0.5833f, 1.0f };
+};
+
+// Multi-oscillator: four notes at once, each a pair of slightly detuned waves. For chords, pads and stabs.
+struct MultiOsc : Module
+{
+    static const Info& desc()
+    {
+        static const Info i { "multiosc", "Multi-oscillator", "Sources", "Four notes at once, each thickened. For chords, pads and stabs",
+            { { "p1", "Note 1" }, { "p2", "Note 2" }, { "p3", "Note 3" }, { "p4", "Note 4" } }, { { "out", "Out" } },
+            { { "wave", "Wave", 0, 2, 0, Fmt::Int, 1, { "Saw", "Square", "Triangle" } },
+              { "detune", "Detune", 0, 50, 12, Fmt::Cents },
+              { "coarse", "Tune", -24, 24, 0, Fmt::Semis },
+              { "level", "Level", 0, 1, 0.7f, Fmt::Percent } } };
+        return i;
+    }
+    void process (int n, const Ctx& c) override
+    {
+        const int wave = (int) std::lround (P (0));
+        const double det = (double) P (1) / 1200.0, base = (double) P (2) / 12.0;
+        int active = 0;
+        for (int v = 0; v < 4; ++v) active += inOn[(size_t) v] ? 1 : 0;
+        // Zero means zero: a note input with nothing plugged in makes no sound
+        const float level = active > 0 ? P (3) * 0.5f / std::sqrt ((float) active) : 0.0f;
+        std::fill (out[0].begin(), out[0].begin() + n, 0.0f);
+        for (int v = 0; v < 4; ++v)
+        {
+            if (! inOn[(size_t) v]) continue;
+            for (int half = 0; half < 2; ++half)
+            {
+                double& ph = phase[v][half];
+                const double off = base + (half == 0 ? -det : det);
+                for (int i = 0; i < n; ++i)
+                {
+                    const double f = std::min (c.sr * 0.45, 261.6255653 * std::pow (2.0, (double) in[(size_t) v][(size_t) i] + off));
+                    const double dt = f / c.sr;
+                    float x;
+                    if (wave == 0) x = (float) (2.0 * ph - 1.0) - polyBlep (ph, dt);
+                    else if (wave == 1)
+                    {
+                        x = ph < 0.5 ? 1.0f : -1.0f;
+                        x += polyBlep (ph, dt);
+                        double t2 = ph + 0.5; if (t2 >= 1.0) t2 -= 1.0;
+                        x -= polyBlep (t2, dt);
+                    }
+                    else x = (float) (4.0 * std::abs (ph - 0.5) - 1.0);
+                    out[0][(size_t) i] += x * level;
+                    ph += dt;
+                    if (ph >= 1.0) ph -= std::floor (ph);
+                }
+            }
+        }
+    }
+    double phase[4][2] { { 0.0, 0.37 }, { 0.61, 0.13 }, { 0.29, 0.83 }, { 0.47, 0.71 } };
+};
+
 // ---------------------------------------------------------------- The list of every module type
 // The order here is the order inside each heading of the Add menu.
 template <typename T> TypeEntry entry() { return { &T::desc(), [] { return std::unique_ptr<Module> (new T()); } }; }
@@ -422,12 +550,12 @@ template <typename T> TypeEntry entry() { return { &T::desc(), [] { return std::
 inline const std::vector<TypeEntry>& registry()
 {
     static const std::vector<TypeEntry> r {
-        entry<Oscillator>(), entry<Noise>(),
+        entry<Oscillator>(), entry<MultiOsc>(), entry<Noise>(),
         entry<HitEnv>(), entry<Adsr>(),
         entry<Filter>(),
         entry<Drive>(),
         entry<Lfo>(),
-        entry<DrumSeq>(), entry<NoteSeq>(),
+        entry<DrumSeq>(), entry<NoteSeq>(), entry<ChordGen>(),
         entry<Vca>(), entry<Mixer4>(), entry<Atten>(), entry<OutputModule>() };
     return r;
 }

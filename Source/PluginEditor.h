@@ -49,8 +49,25 @@ private:
     void setDegreeFromY (int step, int y);
     void showIdeas();
     Nebula2ModulationProcessor& proc; Board& board; Module& module;
+    juce::Rectangle<int> pill (int bar) const;
+    int bars() const;
     juce::TextButton ideas { "Ideas" }, random { "Random" };
-    int shownStep = -1, dragStep = -1;
+    int shownStep = -1, dragStep = -1, page = 0;
+};
+
+// The song's chords, on the Chord generator: mood, Generate, and a tile per chord
+class ChordView : public juce::Component
+{
+public:
+    ChordView (Nebula2ModulationProcessor&, Module&);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void tick();
+private:
+    void refreshLabels();
+    Nebula2ModulationProcessor& proc; Module& module;
+    juce::TextButton mood, generate { "Generate" }, length, each;
+    int shown = -1, seenVersion = -1;
 };
 
 class BoardView;
@@ -69,6 +86,7 @@ public:
     bool jackAt (juce::Point<int> p, bool& isOut, int& port) const;
     Module& module;
     std::unique_ptr<SeqView> seq;
+    std::unique_ptr<ChordView> chords;
 private:
     BoardView& owner; Nebula2ModulationProcessor& proc; Board& board;
     juce::OwnedArray<ParamCell> cells;

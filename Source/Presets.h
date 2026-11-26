@@ -10,14 +10,16 @@ namespace lay
 {
 constexpr int cell = 54, cellH = 62, header = 26, jackW = 40, jackH = 44, pad = 8;
 constexpr int drumSeqH = 62, noteSeqH = 118, seqW = 16 * 20;
-inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note ? noteSeqH : 0; }
+constexpr int chordW = 8 * 60, chordTileH = 28, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
+inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : 0; }
+inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq != Seq::None ? seqW : 0; }
 constexpr int perRow = 5;
 inline int cols (const Info& i) { return (int) std::min<size_t> (perRow, i.params.size()); }
 inline int rows (const Info& i) { return (int) ((i.params.size() + perRow - 1) / perRow); }
 inline int width (const Info& i)
 {
     const int jacks = (int) (i.ins.size() + i.outs.size());
-    return std::max ({ cols (i) * cell, jacks * jackW, i.seq != Seq::None ? seqW : 0, 96 }) + 2 * pad;
+    return std::max ({ cols (i) * cell, jacks * jackW, seqWidth (i), 96 }) + 2 * pad;
 }
 inline int height (const Info& i) { return header + seqHeight (i) + rows (i) * cellH + jackH + pad; }
 }
@@ -66,24 +68,23 @@ inline void tidy (Board& b)
 }
 
 // ---- Patterns ----
-// Drum pattern as 16 characters: '.' off, 'x' hit, 'X' accent
-inline void setDrum (Module& m, const char* pat)
+// One bar of drum pattern as 16 characters: '.' off, 'x' hit, 'X' accent
+inline void setDrumBar (Module& m, int bar, const char* pat)
+{
+    for (int i = 0; i < kSteps && pat[i] != 0; ++i)
+        m.data[(size_t) (bar * kSteps + i)].store (pat[i] == 'X' ? 2.0f : pat[i] == 'x' ? 1.0f : 0.0f);
+}
+inline void setNotesBar (Module& m, int bar, const char* gates, const int* degrees)
 {
     for (int i = 0; i < kSteps; ++i)
     {
-        const char ch = pat[i] == 0 ? '.' : pat[i];
-        m.data[(size_t) i].store (ch == 'X' ? 2.0f : ch == 'x' ? 1.0f : 0.0f);
-        if (pat[i] == 0) break;
+        m.data[(size_t) (bar * kSteps + i)].store (gates[i] == 'x' ? 1.0f : 0.0f);
+        m.data[(size_t) (kMaxSteps + bar * kSteps + i)].store ((float) degrees[i]);
     }
 }
-inline void setNotes (Module& m, const char* gates, const int* degrees)
-{
-    for (int i = 0; i < kSteps; ++i)
-    {
-        m.data[(size_t) i].store (gates[i] == 'x' ? 1.0f : 0.0f);
-        m.data[(size_t) (kSteps + i)].store ((float) degrees[i]);
-    }
-}
+// A one-bar idea fills every bar, so making the pattern longer keeps it playing
+inline void setDrum (Module& m, const char* pat) { for (int b = 0; b < kMaxBars; ++b) setDrumBar (m, b, pat); }
+inline void setNotes (Module& m, const char* gates, const int* degrees) { for (int b = 0; b < kMaxBars; ++b) setNotesBar (m, b, gates, degrees); }
 
 struct DrumIdea { const char* name; const char* pat; };
 struct NoteIdea { const char* name; const char* gates; int deg[16]; };
@@ -141,10 +142,9 @@ struct Rand
     uint32_t a;
 };
 
-inline void randomDrum (const std::string& boardType, uint32_t seed, Module& m)
+// One bar in the style of the sound
+inline void randomDrumBar (const std::string& boardType, Rand& r, char* p)
 {
-    Rand r (seed);
-    char p[17] = "................";
     if (boardType == "kick")
     {
         for (int i = 0; i < 16; i += 4) p[i] = 'x';                        // the four stays: it's a kick
@@ -175,14 +175,43 @@ inline void randomDrum (const std::string& boardType, uint32_t seed, Module& m)
         for (int i = 0; i < 16; ++i)
             if (((i * hits) % 16) < hits) p[(i + turn) % 16] = r.chance (0.25f) ? 'X' : 'x';
     }
-    setDrum (m, p);
 }
 
-inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
+// A whole pattern: bar 1 sets the idea, the other bars repeat it with small changes,
+// and bars 4 and 8 end with a fill, so a longer pattern goes somewhere.
+inline void randomDrum (const std::string& boardType, uint32_t seed, Module& m)
 {
     Rand r (seed);
-    char g[17] = "................";
-    int d[16] {};
+    char base[17] = "................";
+    randomDrumBar (boardType, r, base);
+    for (int bar = 0; bar < kMaxBars; ++bar)
+    {
+        char p[17];
+        std::copy (base, base + 17, p);
+        if (bar > 0)
+        {
+            const int changes = bar % 2 == 1 ? 1 + r.upTo (2) : r.upTo (2);
+            for (int k = 0; k < changes; ++k)
+            {
+                const int i = 1 + r.upTo (15);
+                if (boardType == "kick" && i % 4 == 0) continue;                       // the four stays
+                if (boardType == "snare" && (i == 4 || i == 12)) continue;             // so does the backbeat
+                p[i] = p[i] == '.' ? 'x' : '.';
+            }
+            if (bar % 4 == 3)
+            {
+                if (boardType == "kick") p[14] = 'x';
+                else if (boardType == "snare") { p[13] = 'x'; p[14] = 'x'; p[15] = 'X'; }
+                else if (boardType == "hat") { p[12] = '.'; p[13] = '.'; p[14] = 'X'; }
+                else p[15] = 'X';
+            }
+        }
+        setDrumBar (m, bar, p);
+    }
+}
+
+inline void randomNotesBar (const std::string& boardType, Rand& r, char* g, int* d)
+{
     if (boardType == "bass")
     {
         const int style = r.upTo (3);
@@ -208,7 +237,32 @@ inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
         }
         g[0] = 'x';
     }
-    setNotes (m, g, d);
+}
+
+// Bar 1 sets the tune; later bars keep its rhythm and change a few notes, so it develops instead of looping
+inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
+{
+    Rand r (seed);
+    char g[17] = "................";
+    int d[16] {};
+    randomNotesBar (boardType, r, g, d);
+    static const int moves[5] = { -2, -1, 1, 2, 4 };
+    for (int bar = 0; bar < kMaxBars; ++bar)
+    {
+        char gg[17]; int dd[16];
+        std::copy (g, g + 17, gg); std::copy (d, d + 16, dd);
+        if (bar > 0)
+        {
+            const int changes = bar % 2 == 1 ? 2 + r.upTo (2) : r.upTo (2);
+            for (int k = 0; k < changes; ++k)
+            {
+                const int i = 8 + r.upTo (8);                 // the second half of the bar is where it varies
+                dd[i] = std::min (14, std::max (-7, dd[i] + moves[r.upTo (5)]));
+                if (r.chance (0.3f) && i != 0) gg[i] = gg[i] == 'x' ? '.' : 'x';
+            }
+        }
+        setNotesBar (m, bar, gg, dd);
+    }
 }
 
 // ---- The kinds of sound a new tab can be ----
@@ -217,7 +271,7 @@ inline const std::vector<BoardType>& boardTypes()
 {
     static const std::vector<BoardType> t {
         { "kick", "Kick", 0 }, { "snare", "Snare", 3 }, { "hat", "Hi-hat", 5 }, { "perc", "Percussion", 4 },
-        { "bass", "Bass", 2 }, { "lead", "Lead", 1 }, { "empty", "Empty board", 6 } };
+        { "bass", "Bass", 2 }, { "lead", "Lead", 1 }, { "stab", "Stab", 7 }, { "pad", "Pad", 6 }, { "empty", "Empty board", 0 } };
     return t;
 }
 
@@ -225,7 +279,7 @@ inline const std::vector<BoardType>& boardTypes()
 inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48000)
 {
     auto b = std::make_unique<Board>();
-    b->type = "empty"; b->name = "Sound"; b->colour = 6;
+    b->type = "empty"; b->name = "Sound"; b->colour = 0;
     for (auto& t : boardTypes()) if (type == t.id) { b->type = t.id; b->name = t.name; b->colour = t.colour; }
     if (b->type == "empty") b->name = "Sound";
 
@@ -285,7 +339,7 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
     }
     else if (b->type == "bass")
     {
-        auto* seq = add ("noteseq"); seq->set ("octave", -2);
+        auto* seq = add ("noteseq"); seq->set ("octave", -2); seq->set ("follow", 1);
         setNotes (*seq, noteIdeas ("bass")[0].gates, noteIdeas ("bass")[0].deg);
         auto* osc = add ("osc"); osc->set ("wave", 2);
         auto* pluck = add ("hitenv"); pluck->set ("decay", 0.18f);
@@ -299,7 +353,7 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
     }
     else if (b->type == "lead")
     {
-        auto* seq = add ("noteseq"); seq->set ("octave", 0);
+        auto* seq = add ("noteseq"); seq->set ("octave", 0); seq->set ("follow", 1);
         setNotes (*seq, noteIdeas ("lead")[0].gates, noteIdeas ("lead")[0].deg);
         auto* lfo = add ("lfo"); lfo->set ("rate", 1);
         auto* saw = add ("osc"); saw->set ("wave", 2); saw->set ("level", 0.6f);
@@ -313,6 +367,30 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
         cable (lfo, "out", filt, "cutoff"); cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv");
         cable (vca, "out", out, "left");
     }
+    else if (b->type == "pad")
+    {
+        auto* ch = add ("chords");
+        auto* lfo = add ("lfo"); lfo->set ("rate", 0);
+        auto* osc = add ("multiosc"); osc->set ("detune", 14);
+        auto* filt = add ("filter"); filt->set ("cutoff", 0.52f); filt->set ("res", 0.2f); filt->set ("modamt", 1.0f);
+        auto* env = add ("adsr"); env->set ("attack", 0.35f); env->set ("decay", 0.6f); env->set ("sustain", 0.85f); env->set ("release", 1.2f);
+        auto* vca = add ("vca"); vca->set ("level", 0.8f);
+        cable (ch, "v1", osc, "p1"); cable (ch, "v2", osc, "p2"); cable (ch, "v3", osc, "p3"); cable (ch, "v4", osc, "p4");
+        cable (ch, "gate", env, "gate"); cable (osc, "out", filt, "in"); cable (lfo, "out", filt, "cutoff");
+        cable (filt, "out", vca, "in"); cable (env, "out", vca, "cv"); cable (vca, "out", out, "left");
+    }
+    else if (b->type == "stab")
+    {
+        auto* ch = add ("chords"); ch->set ("pattern", 1);
+        auto* osc = add ("multiosc"); osc->set ("detune", 9);
+        auto* snap = add ("hitenv"); snap->set ("decay", 0.22f);
+        auto* filt = add ("filter"); filt->set ("cutoff", 0.5f); filt->set ("res", 0.3f); filt->set ("modamt", 2.5f);
+        auto* vca = add ("vca"); vca->set ("level", 0.9f);
+        auto* drive = add ("drive"); drive->set ("drive", 0.15f);
+        cable (ch, "v1", osc, "p1"); cable (ch, "v2", osc, "p2"); cable (ch, "v3", osc, "p3"); cable (ch, "v4", osc, "p4");
+        cable (ch, "gate", snap, "trig"); cable (osc, "out", filt, "in"); cable (snap, "out", filt, "cutoff");
+        cable (filt, "out", vca, "in"); cable (snap, "out", vca, "cv"); cable (vca, "out", drive, "in"); cable (drive, "out", out, "left");
+    }
     tidy (*b);
     return b;
 }
@@ -320,9 +398,10 @@ inline std::unique_ptr<Board> makeBoard (const std::string& type, double sr = 48
 // What a brand new project opens with
 inline void loadStarter (Rack& rack)
 {
-    for (const char* t : { "kick", "snare", "hat", "bass" }) rack.addBoard (makeBoard (t, rack.sr));
+    for (const char* t : { "kick", "snare", "hat", "bass", "pad" }) rack.addBoard (makeBoard (t, rack.sr));
     rack.boards[1]->level.store (0.6f);
     rack.boards[2]->level.store (0.45f);
     rack.boards[3]->level.store (0.6f);
+    rack.boards[4]->level.store (0.5f);
 }
 } // namespace n2m

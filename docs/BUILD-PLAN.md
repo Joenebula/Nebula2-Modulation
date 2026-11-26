@@ -34,7 +34,8 @@ Cubase. Tick things off here as they land.
 - [ ] Sample player (drop an audio file on it)
 - [x] Clap board, with its own clap envelope (v0.1.7)
 - [ ] Stereo cables (today a board is mono until its Output; pan is on the mixer)
-- [ ] Undo and redo
+- [x] Undo and redo (v0.1.8): buttons and Ctrl+Z / Ctrl+Y. Covers knobs, patterns, cables, adding, moving and deleting units, tabs, the mixer, links, chords and key. Keeps the last 100 steps. A board is put back in place, so undoing a knob never reloads a plugin in a slot
+- [ ] Not undoable yet: loading or emptying a plugin slot, changes made inside a hosted plugin's own window, the master fader
 - [ ] Play boards from a MIDI keyboard / Cubase MIDI track
 
 ## Stage 3: rhythm and notes (part done, v0.1.1)
@@ -136,6 +137,5 @@ Everything in the SPEC table that isn't bold.
 
 ## Known gaps
 
-- No undo yet.
 - Boards are mono until the mixer.
 - Fixed window size.

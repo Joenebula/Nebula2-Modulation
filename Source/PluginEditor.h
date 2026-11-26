@@ -132,7 +132,7 @@ public:
 private:
     BoardView& owner; Nebula2ModulationProcessor& proc; Board& board;
     juce::OwnedArray<ParamCell> cells;
-    juce::Point<int> dragOffset; bool moving = false, cabling = false;
+    juce::Point<int> dragOffset; bool moving = false, cabling = false, movedYet = false;
 };
 
 // The board for the selected tab: its modules and the cables between them
@@ -143,6 +143,8 @@ public:
     void setBoard (Board*);
     void rebuild();              // after modules are added or removed
     void refreshLive();          // after cables change: dim what can't be heard
+    void willChange (int removingUid = 0);   // call just before changing this board, so Undo can put it back
+    void settled();              // call when a gesture ends: drops the undo step if nothing changed
     void repaintAll();           // after a linked knob or pattern changed others on this board
     void fitToContent();
     void paint (juce::Graphics&) override;
@@ -255,6 +257,7 @@ public:
     n2m::AddPanel addPanel;      // public so the snapshot test can open it
     n2m::HostOverlay hostOverlay;
     n2m::BoardView& board() { return boardView; }   // for the tests
+    void stepHistory (bool redo);                   // Undo (false) or Redo (true)
     void addUnits (const std::vector<std::string>& types);
 private:
     void timerCallback() override;
@@ -262,7 +265,7 @@ private:
 
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
-    juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" };
+    juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
     juce::ComboBox keyBox, scaleBox;
     n2m::TabBar tabs;
     juce::Viewport viewport;

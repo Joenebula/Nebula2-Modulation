@@ -1,5 +1,6 @@
 // Checks the rack engine on its own (no Cubase, no JUCE). Prints "All passed" or what failed.
 #include "Presets.h"
+#include "History.h"
 #include <cstdio>
 #include <cstring>
 
@@ -1035,6 +1036,90 @@ int main()
         CHECK (v[3000] < 0.01f && v[45000] > v[21000] && v[21000] > v[9000], "Ramp up climbs through the bar");
         Fx a ("stepmod"), b ("stepmod"); randomValues (99, *a.m); randomValues (99, *b.m);
         CHECK (a.run (silenceSig) == b.run (silenceSig), "a random shape is repeatable by seed");
+    }
+
+    // ================= Undo and redo =================
+    {
+        Rack rack; rack.prepare (48000); loadStarter (rack);
+        History hist (rack);
+        auto& kick = *rack.boards[0];
+        auto* drive = firstOf (kick, "drive"); auto* seq = firstOf (kick, "drumseq");
+        const std::string start = rack.save();
+        CHECK (! hist.canUndo() && ! hist.undo(), "nothing to undo at first");
+
+        // a knob
+        hist.before (kick); drive->set ("drive", 0.9f);
+        CHECK (hist.canUndo() && hist.undo() && drive->P (0) == 0.35f, "undo puts a knob back");
+        CHECK (firstOf (kick, "drive") == drive, "and the unit itself is the same one, still running, not a rebuilt copy");
+        CHECK (hist.redo() && drive->P (0) == 0.9f && ! hist.canRedo(), "redo turns it again");
+        CHECK (hist.undo() && rack.save() == start, "and back to exactly where it started");
+
+        // a pattern
+        hist.before (kick); randomDrum ("kick", 12345, *seq);
+        CHECK (rack.save() != start && hist.undo() && rack.save() == start, "undo puts a pattern back");
+
+        // adding a unit, then cabling it
+        hist.before (kick);
+        auto* filt = rack.addModule (kick, "filter", 400, 400);
+        const int filtUid = filt->uid;
+        hist.before (kick);
+        rack.connect (kick, drive->uid, 0, filtUid, 0);
+        const std::string cabled = rack.save();
+        CHECK (hist.undo() && kick.find (filtUid) != nullptr && kick.cables.size() == 9, "undo removes the cable and leaves the unit");
+        CHECK (hist.undo() && kick.find (filtUid) == nullptr && rack.save() == start, "undo again removes the unit");
+        CHECK (hist.redo() && hist.redo() && rack.save() == cabled && kick.find (filtUid) != nullptr, "redo brings the unit and the cable back, with the same id");
+
+        // deleting a unit: undo brings it back, cables and all
+        hist.before (kick, filtUid);
+        rack.removeModule (kick, filtUid);
+        CHECK (kick.find (filtUid) == nullptr && hist.undo() && rack.save() == cabled, "undo brings back a deleted unit with its cables");
+        CHECK (peakOf (render (rack, 1).l) > 0.05f && allFinite (render (rack, 1).l), "and it all still plays");
+        hist.undo(); hist.undo();
+        CHECK (rack.save() == start, "three undos later, back at the start");
+
+        // a new edit throws away the redo list
+        hist.before (kick); drive->set ("drive", 0.1f);
+        CHECK (! hist.canRedo(), "a fresh change clears redo");
+        hist.undo();
+
+        // mixer channel
+        hist.before (kick); kick.mute.store (true); kick.level.store (0.2f); kick.out.store (3);
+        CHECK (hist.undo() && ! kick.mute.load() && kick.level.load() == 0.8f && kick.out.load() == 0, "undo covers the mixer channel too");
+
+        // tabs: add, delete, move
+        rack.addBoard (makeBoard ("lead", 48000)); hist.tabAdded ((int) rack.boards.size() - 1);
+        CHECK (rack.boards.size() == 6 && hist.undo() && rack.boards.size() == 5 && rack.save() == start, "undo removes an added tab");
+        CHECK (hist.redo() && rack.boards.size() == 6 && rack.boards[5]->type == "lead" && hist.showTab == 5, "redo brings it back and says which tab to show");
+        hist.undo();
+        hist.tabRemoving (1); rack.removeBoard (1);
+        CHECK (rack.boards.size() == 4 && rack.boards[1]->type == "hat", "a tab deleted");
+        CHECK (hist.undo() && rack.save() == start && hist.showTab == 1, "undo puts a deleted tab back in its place");
+        rack.moveBoard (0, 2); hist.tabMoved (0, 2);
+        CHECK (rack.boards[2]->type == "kick" && hist.undo() && rack.save() == start, "undo moves a tab back");
+        CHECK (hist.redo() && rack.boards[2]->type == "kick" && hist.undo(), "and redo moves it again");
+
+        // chords and key
+        const auto chordsBefore = rack.harmony.names;
+        hist.beforeChords(); rack.generateChords (4242);
+        CHECK (rack.harmony.names != chordsBefore && hist.undo() && rack.harmony.names == chordsBefore && rack.save() == start, "undo puts the chords back");
+        hist.beforeChords(); rack.setKey (9, 2);
+        CHECK (hist.undo() && rack.root.load() == 2 && rack.scale.load() == 0 && rack.save() == start, "undo puts the key back");
+
+        // linked things on other tabs come back too
+        auto* bassSeq = firstOf (*rack.boards[3], "noteseq");
+        rack.addBoard (makeBoard ("lead", 48000));
+        auto* leadSeq = firstOf (*rack.boards[5], "noteseq");
+        rack.linkPattern (*bassSeq, 1, 3); rack.linkPattern (*leadSeq, 1, 3);
+        const std::string linked = rack.save();
+        hist.before (*rack.boards[3]);
+        randomNotes ("bass", 777, *bassSeq); rack.pushPattern (*bassSeq);
+        CHECK (rack.save() != linked && hist.undo() && rack.save() == linked, "undoing a linked pattern edit puts both tabs back");
+        CHECK (firstOf (*rack.boards[5], "noteseq") == leadSeq, "without rebuilding the other tab's units");
+
+        // a long run of changes: the list is capped, and undoing all of it never breaks anything
+        for (int k = 0; k < 150; ++k) { hist.before (kick); drive->set ("drive", (float) (k % 10) / 10.0f); }
+        int undone = 0; while (hist.undo()) ++undone;
+        CHECK (undone == 100 && allFinite (render (rack, 1).l), "the undo list holds the last 100 changes");
     }
 
     if (failures == 0) std::printf ("All passed\n");

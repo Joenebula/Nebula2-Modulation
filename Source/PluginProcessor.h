@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <atomic>
 #include "PluginHost.h"
+#include "History.h"
 
 // The plugin as Cubase sees it: holds the rack, follows Cubase's tempo and transport, saves with the project.
 class Nebula2ModulationProcessor : public juce::AudioProcessor
@@ -34,6 +35,7 @@ public:
 
     // ---- For the screen ----
     n2m::Rack rack;
+    n2m::History history { rack };              // undo and redo
     std::atomic<bool> preview { false };        // the plugin's own Play, for when Cubase is stopped
     std::atomic<bool> hostPlaying { false };
     std::atomic<double> bpm { 124.0 };

@@ -13,6 +13,9 @@ juce::Colour boardColour (int index)
 }
 
 static juce::Font smallCaps() { return font (9.0f, Weight::Medium, 0.4f); }
+// For anything sitting on a board: tell the board it is about to change (for Undo), and when the gesture is over
+static void boardWillChange (juce::Component& c, int removing = 0) { if (auto* v = c.findParentComponentOfClass<BoardView>()) v->willChange (removing); }
+static void boardSettled (juce::Component& c) { if (auto* v = c.findParentComponentOfClass<BoardView>()) v->settled(); }
 static juce::String groupLetter (int group) { return juce::String::charToString ((juce::juce_wchar) ('A' + juce::jlimit (1, kLinkGroups, group) - 1)); }
 static juce::Colour groupColour (int group) { return boardColour (group + 2); }
 
@@ -71,6 +74,7 @@ void ParamCell::linkMenu()
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
     {
         if (safe == nullptr || r <= 0) return;
+        boardWillChange (*safe);
         safe->proc.rack.linkParam (safe->module, safe->idx, r - 1);
         safe->repaint();
     });
@@ -145,10 +149,11 @@ void ParamCell::mouseDown (const juce::MouseEvent& e)
         juce::Component::SafePointer<ParamCell> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
         {
-            if (safe != nullptr && r > 0) { safe->module.params[(size_t) safe->idx].store ((float) (r - 1)); safe->changed(); }
+            if (safe != nullptr && r > 0) { boardWillChange (*safe); safe->module.params[(size_t) safe->idx].store ((float) (r - 1)); safe->changed(); }
         });
         return;
     }
+    boardWillChange (*this);
     dragStart = paramToNorm (param, module.P (idx));
     dragging = true;
     juce::ignoreUnused (e);
@@ -161,16 +166,21 @@ void ParamCell::mouseDrag (const juce::MouseEvent& e)
     setNorm (dragStart - (float) e.getDistanceFromDragStartY() / (e.mods.isShiftDown() ? 600.0f : 150.0f));
 }
 
-void ParamCell::mouseUp (const juce::MouseEvent&) { dragging = false; repaint(); }
+void ParamCell::mouseUp (const juce::MouseEvent&) { if (dragging) boardSettled (*this); dragging = false; repaint(); }
 
 void ParamCell::mouseDoubleClick (const juce::MouseEvent&)
 {
-    if (param.choices.empty()) { module.params[(size_t) idx].store (param.def); changed(); }
+    if (param.choices.empty()) { boardWillChange (*this); module.params[(size_t) idx].store (param.def); changed(); }
 }
 
 void ParamCell::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
     if (! param.choices.empty()) { Component::mouseWheelMove (e, w); return; }
+    // One undo step for a spin of the wheel, not one per notch
+    static juce::uint32 lastWheel = 0;
+    const auto now = juce::Time::getMillisecondCounter();
+    if (now - lastWheel > 700) boardWillChange (*this);
+    lastWheel = now;
     const float step = param.fmt == Fmt::Int ? (w.deltaY > 0 ? 1.0f : -1.0f) / std::max (1.0f, param.hi - param.lo) : w.deltaY * 0.25f;
     setNorm (paramToNorm (param, module.P (idx)) + step);
 }
@@ -184,6 +194,7 @@ SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p)
     ideas.onClick = [this] { showIdeas(); };
     random.onClick = [this]
     {
+        boardWillChange (*this);
         if (module.info->seq == Seq::Drum) randomDrum (ideaKind(), proc.nextSeed(), module);
         else if (module.info->seq == Seq::Value) randomValues (proc.nextSeed(), module);
         else randomNotes (board.type, proc.nextSeed(), module);
@@ -225,6 +236,7 @@ void SeqView::showIdeas()
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&ideas), [safe, drum, value] (int r)
     {
         if (safe == nullptr || r <= 0) return;
+        boardWillChange (*safe);
         if (drum) setDrum (safe->module, drumIdeas (safe->ideaKind())[(size_t) (r - 1)].pat);
         else if (value) setValues (safe->module, valueIdeas()[(size_t) (r - 1)].v);
         else { auto& d = noteIdeas (safe->board.type)[(size_t) (r - 1)]; setNotes (safe->module, d.gates, d.deg); }
@@ -318,6 +330,7 @@ void SeqView::mouseDown (const juce::MouseEvent& e)
     for (int b = 0; b < bars(); ++b)
         if (bars() > 1 && pill (b).contains (e.getPosition())) { page = b; repaint(); return; }
     if (! gr.contains (e.getPosition())) return;
+    boardWillChange (*this);
     const int s = stepAtX (e.x);
     if (module.info->seq == Seq::Drum)
     {
@@ -349,7 +362,7 @@ ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), modu
 {
     for (auto* b : { &mood, &generate, &length, &each }) addAndMakeVisible (b);
     auto changed = [this] { proc.chordsVersion.fetch_add (1); };
-    generate.onClick = [this, changed] { proc.rack.generateChords (proc.nextSeed()); changed(); };
+    generate.onClick = [this, changed] { proc.history.beforeChords(); proc.rack.generateChords (proc.nextSeed()); changed(); };
     mood.onClick = [this, changed]
     {
         juce::PopupMenu menu;
@@ -360,6 +373,7 @@ ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), modu
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&mood), [safe, changed] (int r)
         {
             if (safe == nullptr || r <= 0) return;
+            safe->proc.history.beforeChords();
             safe->proc.rack.setMood (n2c::moods()[(size_t) (r - 1)].id);
             changed();
         });
@@ -373,6 +387,7 @@ ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), modu
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&length), [safe, changed] (int r)
         {
             if (safe == nullptr || r <= 0) return;
+            safe->proc.history.beforeChords();
             safe->proc.rack.harmony.lenBars = r;
             safe->proc.rack.generateChords (safe->proc.rack.harmony.seed);
             changed();
@@ -387,6 +402,7 @@ ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), modu
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&each), [safe, changed] (int r)
         {
             if (safe == nullptr || r <= 0) return;
+            safe->proc.history.beforeChords();
             safe->proc.rack.harmony.chordBars = r;
             safe->proc.rack.generateChords (safe->proc.rack.harmony.seed);
             changed();
@@ -647,6 +663,7 @@ void ModuleComp::linkMenu()
     {
         if (safe == nullptr || r <= 0) return;
         auto& mod = safe->module;
+        safe->owner.willChange();
         if (r > 100) safe->proc.rack.linkPattern (mod, mod.patternLink, r - 100);
         else
         {
@@ -738,8 +755,8 @@ void ModuleComp::mouseDown (const juce::MouseEvent& e)
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [view, uid, rack, b] (int r)
         {
             if (view == nullptr || r <= 0) return;
-            if (r == 1) { rack->disconnectAll (*b, uid); view->refreshLive(); }
-            if (r == 2) { rack->removeModule (*b, uid); view->rebuild(); }
+            if (r == 1) { view->willChange(); rack->disconnectAll (*b, uid); view->refreshLive(); }
+            if (r == 2) { view->willChange (uid); rack->removeModule (*b, uid); view->rebuild(); }
         });
         return;
     }
@@ -750,7 +767,7 @@ void ModuleComp::mouseDown (const juce::MouseEvent& e)
         owner.beginCable (*this, isOut, port, e.getEventRelativeTo (&owner).getPosition());
         return;
     }
-    moving = true;
+    moving = true; movedYet = false;
     dragOffset = e.getPosition();
 }
 
@@ -758,6 +775,7 @@ void ModuleComp::mouseDrag (const juce::MouseEvent& e)
 {
     if (cabling) { owner.dragCable (e.getEventRelativeTo (&owner).getPosition()); return; }
     if (! moving) return;
+    if (! movedYet) { movedYet = true; owner.willChange(); }
     const auto p = e.getEventRelativeTo (&owner).getPosition() - dragOffset;
     const int x = juce::jmax (8, (p.x / 4) * 4), y = juce::jmax (8, (p.y / 4) * 4);
     module.x = (float) x; module.y = (float) y;
@@ -880,9 +898,13 @@ bool BoardView::findJack (juce::Point<int> at, ModuleComp*& comp, bool& isOut, i
     return false;
 }
 
+void BoardView::willChange (int removingUid) { if (board != nullptr) proc.history.before (*board, removingUid); }
+void BoardView::settled() { proc.history.discardIfUnchanged(); }
+
 void BoardView::beginCable (ModuleComp& comp, bool isOut, int port, juce::Point<int> at)
 {
     if (board == nullptr) return;
+    willChange();
     drag = { true, isOut, comp.module.uid, port, at };
     if (! isOut)
     {
@@ -914,6 +936,7 @@ void BoardView::endCable (juce::Point<int> at)
         else proc.rack.connect (*board, comp->module.uid, port, drag.uid, drag.port);
     }
     drag.active = false;
+    settled();
     refreshLive();
 }
 
@@ -945,6 +968,7 @@ bool BoardView::isInterestedInFileDrag (const juce::StringArray& files)
 void BoardView::filesDropped (const juce::StringArray& files, int x, int y)
 {
     if (board == nullptr) return;
+    willChange();
     for (auto& f : files)
     {
         if (! f.endsWithIgnoreCase (".vst3")) continue;
@@ -1105,6 +1129,7 @@ void TabBar::addMenu()
         for (auto& o : rack.boards) if (o->type == b->type) ++same;
         if (same > 0) b->name += " " + std::to_string (same + 1);
         rack.addBoard (std::move (b));
+        safe->proc.history.tabAdded ((int) rack.boards.size() - 1);
         if (safe->onChanged) safe->onChanged();
         if (safe->onSelect) safe->onSelect ((int) rack.boards.size() - 1);
         safe->showSelected();
@@ -1136,14 +1161,16 @@ void TabBar::tabMenu (int index)
             if (copy == nullptr) return;
             copy->name += " copy";
             rack.addBoard (std::move (copy));
+            safe->proc.history.tabAdded ((int) rack.boards.size() - 1);
             select = (int) rack.boards.size() - 1;
         }
-        if (r == 3) { rack.moveBoard (index, index - 1); select = index - 1; }
-        if (r == 4) { rack.moveBoard (index, index + 1); select = index + 1; }
+        if (r == 3) { rack.moveBoard (index, index - 1); safe->proc.history.tabMoved (index, index - 1); select = index - 1; }
+        if (r == 4) { rack.moveBoard (index, index + 1); safe->proc.history.tabMoved (index, index + 1); select = index + 1; }
         if (r == 5)
         {
             // The board on screen must stop pointing at this one before it goes
             if (safe->onSelect) safe->onSelect (-1);
+            safe->proc.history.tabRemoving (index);
             rack.removeBoard (index);
             select = juce::jmin (index, (int) rack.boards.size() - 1);
         }
@@ -1173,7 +1200,11 @@ void TabBar::rename (int index)
                 if (editor == nullptr) return;
                 const auto text = editor->getText().trim();
                 if (keep && text.isNotEmpty() && index < (int) proc.rack.boards.size())
+                {
+                    proc.history.before (*proc.rack.boards[(size_t) index]);
                     proc.rack.boards[(size_t) index]->name = text.toStdString();
+                    proc.history.discardIfUnchanged();
+                }
                 juce::MessageManager::callAsync ([safe]
                 {
                     if (safe != nullptr) { safe->editor.reset(); safe->repaint(); if (safe->onChanged) safe->onChanged(); }
@@ -1213,7 +1244,9 @@ void MixerStrip::outMenu (int channel)
     m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (outIn (this->channel (channel)))), [safe, channel] (int r)
     {
         if (safe == nullptr || r <= 0 || channel >= (int) safe->proc.rack.boards.size()) return;
+        safe->proc.history.before (*safe->proc.rack.boards[(size_t) channel]);
         safe->proc.rack.boards[(size_t) channel]->out.store (r - 1);
+        safe->proc.history.discardIfUnchanged();
         safe->repaint();
     });
 }
@@ -1309,6 +1342,7 @@ void MixerStrip::mouseDown (const juce::MouseEvent& e)
         if (! ch.contains (e.getPosition())) continue;
         auto& b = *proc.rack.boards[(size_t) i];
         if (outIn (ch).contains (e.getPosition())) { outMenu (i); return; }
+        proc.history.before (b);
         if (muteIn (ch).contains (e.getPosition())) b.mute.store (! b.mute.load());
         else if (soloIn (ch).contains (e.getPosition())) b.solo.store (! b.solo.load());
         else if (faderIn (ch).expanded (8, 4).contains (e.getPosition())) { dragChannel = i; mouseDrag (e); }
@@ -1328,7 +1362,7 @@ void MixerStrip::mouseDrag (const juce::MouseEvent& e)
     repaint();
 }
 
-void MixerStrip::mouseUp (const juce::MouseEvent&) { dragChannel = -2; repaint(); }
+void MixerStrip::mouseUp (const juce::MouseEvent&) { proc.history.discardIfUnchanged(); dragChannel = -2; repaint(); }
 
 void MixerStrip::mouseDoubleClick (const juce::MouseEvent& e)
 {
@@ -1491,17 +1525,19 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     setLookAndFeel (&lookAndFeel);
     setWantsKeyboardFocus (true);
 
-    for (auto* b : { &play, &addUnitsButton, &tidyButton }) addAndMakeVisible (b);
+    for (auto* b : { &play, &addUnitsButton, &tidyButton, &undoButton, &redoButton }) addAndMakeVisible (b);
+    undoButton.onClick = [this] { stepHistory (false); };
+    redoButton.onClick = [this] { stepHistory (true); };
     play.onClick = [this] { if (! proc.hostPlaying.load()) proc.preview.store (! proc.preview.load()); };
     addUnitsButton.onClick = [this] { addPanel.open(); };
-    tidyButton.onClick = [this] { if (auto* b = current()) { tidy (*b); boardView.rebuild(); viewport.setViewPosition (0, 0); } };
+    tidyButton.onClick = [this] { if (auto* b = current()) { proc.history.before (*b); tidy (*b); proc.history.discardIfUnchanged(); boardView.rebuild(); viewport.setViewPosition (0, 0); } };
 
     for (int i = 0; i < 12; ++i) keyBox.addItem (kNoteNames[i], i + 1);
     for (int i = 0; i < (int) scales().size(); ++i) scaleBox.addItem (scales()[(size_t) i].name, i + 1);
     addAndMakeVisible (keyBox); addAndMakeVisible (scaleBox);
     // The key is shared by every tab. Changing it moves the notes and the chords with it.
-    keyBox.onChange = [this] { proc.rack.setKey (keyBox.getSelectedId() - 1, proc.rack.scale.load()); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
-    scaleBox.onChange = [this] { proc.rack.setKey (proc.rack.root.load(), scaleBox.getSelectedId() - 1); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
+    keyBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (keyBox.getSelectedId() - 1, proc.rack.scale.load()); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
+    scaleBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (proc.rack.root.load(), scaleBox.getSelectedId() - 1); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
 
     addAndMakeVisible (tabs);
     tabs.onSelect = [this] (int i) { selectTab (i); };
@@ -1547,10 +1583,29 @@ void Nebula2ModulationEditor::selectTab (int index)
     tabs.repaint(); mixer.repaint();
 }
 
+// Undo or redo one step, then redraw from what the rack now holds
+void Nebula2ModulationEditor::stepHistory (bool redo)
+{
+    if (redo ? ! proc.history.canRedo() : ! proc.history.canUndo()) return;
+    hostOverlay.close();
+    boardView.setBoard (nullptr);            // the board on screen may be about to change or go
+    proc.history.showTab = -1;
+    if (redo) proc.history.redo(); else proc.history.undo();
+    if (proc.history.showTab >= 0) proc.selectedTab.store (proc.history.showTab);
+    proc.selectedTab.store (juce::jlimit (0, juce::jmax (0, (int) proc.rack.boards.size() - 1), proc.selectedTab.load()));
+    boardView.setBoard (current());
+    keyBox.setSelectedId (proc.rack.root.load() + 1, juce::dontSendNotification);
+    scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
+    proc.chordsVersion.fetch_add (1);
+    tabs.showSelected();
+    tabs.repaint(); mixer.repaint(); repaint();
+}
+
 void Nebula2ModulationEditor::addUnits (const std::vector<std::string>& types)
 {
     auto* b = current();
     if (b == nullptr) return;
+    proc.history.before (*b);
     // New units go in a row under everything already on the board, unconnected
     int bottom = 0;
     for (auto& m : b->modules) bottom = juce::jmax (bottom, (int) m->y + lay::height (*m->info));
@@ -1582,6 +1637,8 @@ void Nebula2ModulationEditor::timerCallback()
         scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
         boardView.repaint();
     }
+    undoButton.setEnabled (proc.history.canUndo());
+    redoButton.setEnabled (proc.history.canRedo());
     const bool host = proc.hostPlaying.load(), on = proc.isPlaying();
     const juce::String text = host ? "Playing" : on ? "Stop" : "Play";
     if (play.getButtonText() != text || play.getToggleState() != on) { play.setButtonText (text); play.setToggleState (on, juce::dontSendNotification); }
@@ -1594,6 +1651,9 @@ void Nebula2ModulationEditor::timerCallback()
 
 bool Nebula2ModulationEditor::keyPressed (const juce::KeyPress& k)
 {
+    if (k == juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0)) { stepHistory (false); return true; }
+    if (k == juce::KeyPress ('y', juce::ModifierKeys::commandModifier, 0)
+        || k == juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) { stepHistory (true); return true; }
     if (k == juce::KeyPress::spaceKey && ! proc.hostPlaying.load()) { proc.preview.store (! proc.preview.load()); return true; }
     if (k == juce::KeyPress::escapeKey && addPanel.isVisible()) { addPanel.setVisible (false); return true; }
     if (k == juce::KeyPress::escapeKey && hostOverlay.isVisible()) { hostOverlay.close(); return true; }
@@ -1619,6 +1679,8 @@ void Nebula2ModulationEditor::resized()
 {
     const int cy = (topbarH - 28) / 2;
     play.setBounds (236, cy, 84, 28);
+    undoButton.setBounds (744, cy, 64, 28);
+    redoButton.setBounds (812, cy, 64, 28);
     keyBox.setBounds (484, cy, 68, 28);
     scaleBox.setBounds (558, cy, 170, 28);
     tidyButton.setBounds (getWidth() - space4 - 70, cy, 70, 28);

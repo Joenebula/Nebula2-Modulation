@@ -59,7 +59,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 13. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
 14. **Tidy** lines the modules up in signal order.
 
-Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
+**Undo** and **Redo** are at the top (also Ctrl+Z and Ctrl+Y). Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.
 
 ## Build it yourself

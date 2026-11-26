@@ -29,6 +29,7 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - `Source/ChordEngine.h`: the chord generator, copied unchanged from Nebula2 Chord. Don't edit it here; change it there and copy it over.
 - `Source/Modules.h`: every module type, and `registry()`, the list the Add menu is drawn from. No JUCE.
 - `Source/Presets.h`: the starting board for each kind of sound, pattern Ideas, in-style Random, Tidy, module sizes. No JUCE.
+- `Source/History.h`: undo and redo. The screen calls `history.before (board)` (or `beforeChords`, `tabAdded`, `tabRemoving`, `tabMoved`) just before a change. No JUCE.
 - `Source/PluginHost.*`: the Plugin slot (HostedModule): holds another VST3, feeds it notes from cables and the song position, saves its state. Registered through `extraTypes()` because the engine itself has no JUCE.
 - `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
 - `Source/PluginEditor.*`: the screen. TabBar, BoardView, ModuleComp, ParamCell, SeqView, ChordView, HostView, HostOverlay, MixerStrip, AddPanel.
@@ -58,6 +59,7 @@ Rules that tests hold in place:
 - Projects saved by v0.1.0 (the `d` line, one bar) must keep loading.
 - Outputs: `Board::out` (0 = main mix, 1.. = Out 2 ...). A sound whose output the host hasn't switched on must stay in the main mix, never vanish.
 - Anything "random" (Random, Chance, the arpeggiator's Random pattern) is worked out from the song position by `hashUnit()`, so the same bar always sounds the same.
+- Anything the screen changes must call a History "before" first, or Undo will skip it. `BoardView::willChange()` is the usual way; `settled()` drops the step if nothing changed.
 - Links: `Module::patternLink` / `patternShare` and `paramLink`, pushed by `Rack::pushPattern` / `pushParam` when the screen edits something. Knobs link by position, not value. `patternShare` 4 is a follower: it keeps its own pattern and is shifted at play time by `leaderShift()`.
 
 ## Build and test (Linux)
@@ -87,10 +89,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.8'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.9'
 ```
 
-The latest release is **v0.1.7**. Bump by one each time.
+The latest release is **v0.1.8**. Bump by one each time.
 
 ## What can't be checked here
 

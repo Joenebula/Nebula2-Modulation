@@ -171,6 +171,25 @@ int main (int argc, char** argv)
         FakeCubase stopped; r.setPlayHead (&stopped);
         CHECK (run (r, stopped, 1.0) > 0.05f, "the re-cabled kick still sounds");
 
+        // Undo, through the screen: each step back redraws the board from what the rack now holds
+        {
+            const std::string now = r.rack.save();
+            ed->stepHistory (false);                                     // the failed output-to-output drag left nothing to undo; this undoes the dropped plug
+            CHECK (kick.cables.size() == cablesBefore + 2 && view.compFor (filter->uid) != nullptr, "Undo brings back the cable that was pulled out");
+            ed->stepHistory (false); ed->stepHistory (false); ed->stepHistory (false);
+            CHECK (kick.cables.size() == cablesBefore && ! kick.find (filter->uid)->live, "three more undos: back to the Filter just added and uncabled");
+            ed->stepHistory (false);
+            CHECK (kick.modules.size() == 7 && view.compFor (drive->uid) != nullptr && view.getNumChildComponents() == 7, "one more removes the Filter, and the screen shows exactly what is left");
+            for (int k = 0; k < 5; ++k) ed->stepHistory (true);
+            CHECK (r.rack.save() == now, "Redo, five times, is back where we were");
+            filter = kick.modules.back().get();                          // the Filter was made afresh on the way back
+            CHECK (std::string (filter->info->type) == "filter" && filter->live, "with the Filter cabled in and heard");
+            r.preview.store (true);
+            FakeCubase idle; r.setPlayHead (&idle);
+            CHECK (run (r, idle, 1.0) > 0.05f, "and it plays");
+            r.preview.store (false);
+        }
+
         // The board is wider and taller than the window, so it scrolls both ways
         auto* vp = view.findParentComponentOfClass<juce::Viewport>();
         CHECK (vp != nullptr && view.getWidth() > vp->getWidth() + 200 && view.getHeight() > vp->getHeight() + 100, "the board has room to scroll sideways and down");

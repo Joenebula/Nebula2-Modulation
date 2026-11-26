@@ -714,7 +714,9 @@ struct Rack
         for (auto& ch : s) if (ch == '|' || ch == '\n' || ch == '\r') ch = ' ';
         return s;
     }
-    static void writeBoard (std::ostringstream& o, const Board& b)
+    // wantExtra: which modules also write their "extra" state (a plugin slot's plugin and its settings, which is
+    // slow to gather). Null means all of them, as a project save needs. Undo passes a filter so it stays quick.
+    static void writeBoard (std::ostringstream& o, const Board& b, const std::function<bool (int uid)>* wantExtra = nullptr)
     {
         o << "board " << b.type << '|' << clean (b.name) << '|' << b.colour << '|' << b.level.load() << '|' << b.pan.load()
           << '|' << (b.mute.load() ? 1 : 0) << '|' << (b.solo.load() ? 1 : 0) << '|' << b.out.load() << '\n';
@@ -726,8 +728,11 @@ struct Rack
             for (size_t k = 0; k < m->info->params.size(); ++k)
                 if (m->paramLink[k] > 0) o << "l " << m->uid << ' ' << m->info->params[k].id << ' ' << m->paramLink[k] << '\n';
             if (m->patternLink > 0) o << "k " << m->uid << ' ' << m->patternLink << ' ' << m->patternShare << '\n';
-            const auto extra = m->saveExtra();
-            if (! extra.empty()) o << "x " << m->uid << ' ' << clean (extra) << '\n';
+            if (wantExtra == nullptr || (*wantExtra) (m->uid))
+            {
+                const auto extra = m->saveExtra();
+                if (! extra.empty()) o << "x " << m->uid << ' ' << clean (extra) << '\n';
+            }
             if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note || m->info->seq == Seq::Value)
                 for (int row = 0; row < 2; ++row)
                 {
@@ -892,6 +897,62 @@ struct Rack
         if (harmony.seq.empty()) generateChords (harmony.seed);   // a save from before chords existed
         else rebuildChords();
         return true;
+    }
+
+    static std::string boardText (const Board& b, const std::function<bool (int uid)>* wantExtra = nullptr)
+    {
+        std::ostringstream o;
+        writeBoard (o, b, wantExtra);
+        return o.str();
+    }
+
+    // The module ids named in a piece of saved board text
+    static std::vector<int> uidsIn (const std::string& text)
+    {
+        std::vector<int> ids;
+        std::istringstream in (text);
+        std::string line;
+        while (std::getline (in, line))
+            if (line.compare (0, 4, "mod ") == 0) ids.push_back (std::atoi (line.c_str() + 4));
+        return ids;
+    }
+
+    // Puts a board back to a saved state without rebuilding what hasn't changed: a module that is in both keeps
+    // running (so a plugin in a slot isn't reloaded) and just takes the saved knobs, pattern and position.
+    // Modules only in the saved state are created; modules not in it are removed.
+    void applyBoard (int index, const std::string& text)
+    {
+        if (index < 0 || index >= (int) boards.size()) return;
+        auto made = readBoards (text, sr);
+        if (made.empty()) return;
+        auto& src = *made[0];
+        auto& dst = *boards[(size_t) index];
+        std::vector<std::unique_ptr<Module>> gone;        // destroyed after the lock is released
+        {
+            Hold h (lock);
+            std::vector<std::unique_ptr<Module>> next;
+            for (auto& sm : src.modules)
+            {
+                std::unique_ptr<Module>* live = nullptr;
+                for (auto& lm : dst.modules) if (lm != nullptr && lm->uid == sm->uid && lm->info == sm->info) live = &lm;
+                if (live == nullptr) { next.push_back (std::move (sm)); continue; }
+                auto& m = **live;
+                for (size_t k = 0; k < m.params.size(); ++k) m.params[k].store (sm->params[k].load());
+                for (size_t k = 0; k < m.data.size(); ++k) m.data[k].store (sm->data[k].load());
+                m.paramLink = sm->paramLink; m.patternLink = sm->patternLink; m.patternShare = sm->patternShare;
+                m.x = sm->x; m.y = sm->y;
+                next.push_back (std::move (*live));
+                gone.push_back (std::move (sm));
+            }
+            for (auto& lm : dst.modules) if (lm != nullptr) gone.push_back (std::move (lm));
+            dst.modules = std::move (next);
+            dst.cables = src.cables;
+            dst.nextUid = std::max (dst.nextUid, src.nextUid);
+            dst.type = src.type; dst.name = src.name; dst.colour = src.colour;
+            dst.level.store (src.level.load()); dst.pan.store (src.pan.load());
+            dst.mute.store (src.mute.load()); dst.solo.store (src.solo.load()); dst.out.store (src.out.load());
+            dst.rebuild();
+        }
     }
 
     // A copy of one board, as a new board

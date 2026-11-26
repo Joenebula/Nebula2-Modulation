@@ -31,6 +31,7 @@ constexpr int kMaxBars = 8;   // the longest pattern
 constexpr int kMaxSteps = kSteps * kMaxBars;
 constexpr int kData = 2 * kMaxSteps;   // a sequencer carries two rows: hits (or note on/off), then which note
 constexpr int kLinkGroups = 8;         // link groups A to H
+constexpr int kOuts = 16;              // stereo outputs to the host: 1 is the main mix, 2 to 16 are separate
 constexpr double kPi = 3.14159265358979323846;
 
 // ---- Keys: the same scales as Nebula2 Chord, so the two stay in step ----
@@ -265,6 +266,7 @@ struct Board
     int colour = 0;
     std::atomic<float> level { 0.8f }, pan { 0.0f }, peak { 0.0f };
     std::atomic<bool> mute { false }, solo { false };
+    std::atomic<int> out { 0 };       // which output this sound goes to: 0 = the main mix, 1.. = Out 2, Out 3 ...
     std::vector<std::unique_ptr<Module>> modules;
     std::vector<Cable> cables;
     int nextUid = 1;
@@ -435,6 +437,9 @@ struct Harmony
     std::vector<std::string> names;   // "Dm7", "Bbmaj9" ... one per chord, for the screen
 };
 
+// The separate outputs, for one call to process. A null pair means the host hasn't switched that output on.
+struct Outs { float* l[kOuts] {}; float* r[kOuts] {}; };
+
 // ---- The rack: every board, the key, the chords, the master ----
 struct Rack
 {
@@ -442,6 +447,7 @@ struct Rack
     std::atomic<int> root { 2 }, scale { 0 };
     std::atomic<float> master { 0.8f }, peakL { 0.0f }, peakR { 0.0f };
     double sr = 48000;
+    std::atomic<int> outsOn { 1 };      // which outputs the host has switched on, one bit each (bit 0 = main)
     TryLock lock;
     Harmony harmony;
     Timeline timeline;            // swapped in whole, under the lock
@@ -617,9 +623,20 @@ struct Rack
     }
 
     // Fills l and r (n samples). ppq is the song position at the first sample.
-    void process (float* l, float* r, int n, double bpm, double ppq, bool playing)
+    // Sounds sent to a separate output go there instead of the main mix. If that output isn't switched on
+    // in the host, the sound stays in the main mix, so nothing ever goes missing.
+    void process (float* l, float* r, int n, double bpm, double ppq, bool playing, const Outs* outs = nullptr)
     {
         std::fill (l, l + n, 0.0f); std::fill (r, r + n, 0.0f);
+        int on = 1;
+        if (outs != nullptr)
+            for (int k = 1; k < kOuts; ++k)
+                if (outs->l[k] != nullptr && outs->r[k] != nullptr)
+                {
+                    std::fill (outs->l[k], outs->l[k] + n, 0.0f); std::fill (outs->r[k], outs->r[k] + n, 0.0f);
+                    on |= 1 << k;
+                }
+        outsOn.store (on);
         if (! lock.tryLock()) return;
         Ctx c;
         c.sr = sr; c.bpm = bpm; c.playing = playing;
@@ -639,9 +656,17 @@ struct Rack
             const int len = std::min (kBlock, n - pos);
             c.ppq = ppq + pos * c.ppqPerSample;
             for (auto& b : boards)
-                b->process (len, c, l + pos, r + pos, anySolo ? b->solo.load() : ! b->mute.load());
+            {
+                const int k = b->out.load();
+                const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
+                b->process (len, c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
+            }
         }
         lock.unlock();
+        // Separate outputs skip the master fader (the host's own channel fader does that job) but keep the safety limiter
+        for (int k = 1; k < kOuts; ++k)
+            if ((on & (1 << k)) != 0)
+                for (int i = 0; i < n; ++i) { outs->l[k][i] = softLimit (outs->l[k][i]); outs->r[k][i] = softLimit (outs->r[k][i]); }
         const float g = master.load();
         float pl = 0, pr = 0;
         for (int i = 0; i < n; ++i)
@@ -690,7 +715,7 @@ struct Rack
     static void writeBoard (std::ostringstream& o, const Board& b)
     {
         o << "board " << b.type << '|' << clean (b.name) << '|' << b.colour << '|' << b.level.load() << '|' << b.pan.load()
-          << '|' << (b.mute.load() ? 1 : 0) << '|' << (b.solo.load() ? 1 : 0) << '\n';
+          << '|' << (b.mute.load() ? 1 : 0) << '|' << (b.solo.load() ? 1 : 0) << '|' << b.out.load() << '\n';
         for (auto& m : b.modules)
         {
             o << "mod " << m->uid << ' ' << m->info->type << ' ' << m->x << ' ' << m->y << '\n';
@@ -776,6 +801,7 @@ struct Rack
                 if (f.size() > 4) b->pan.store ((float) std::atof (f[4].c_str()));
                 if (f.size() > 5) b->mute.store (f[5] == "1");
                 if (f.size() > 6) b->solo.store (f[6] == "1");
+                if (f.size() > 7) b->out.store (std::min (kOuts - 1, std::max (0, std::atoi (f[7].c_str()))));
             }
             else if (b == nullptr) continue;
             else if (tag == "mod")

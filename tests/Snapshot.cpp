@@ -30,7 +30,9 @@ int main (int argc, char** argv)
     shoot (*ed, dir + "/ui_playing.png");               // playing: step lights and meters
     p.preview.store (false); run (p, 0.1);
 
+    p.rack.boards[0]->out.store (1); p.rack.boards[3]->out.store (2);   // kick to Out 2, bass to Out 3 (neither switched on here, so they show orange)
     e->selectTab (1); shoot (*ed, dir + "/ui_snare.png");
+    p.rack.boards[0]->out.store (0); p.rack.boards[3]->out.store (0);
     e->selectTab (3); shoot (*ed, dir + "/ui_bass.png");
 
     e->selectTab (4);

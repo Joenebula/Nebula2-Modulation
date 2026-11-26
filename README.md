@@ -51,8 +51,11 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
     pattern and moves up and down, in key, as the first one's notes change. The same menu can instead make them
     share the same rhythm, the same notes or both. To link knobs, right-click a knob and pick a group; every knob
     in that group turns together.
-12. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-13. **Tidy** lines the modules up in signal order.
+12. **Separate outputs:** to mix a sound in Cubase's own mixer, click the **MAIN** label on its channel in the mixing
+    desk and pick **Out 2** to **Out 16**. In Cubase, switch that output on from the instrument's Activate Outputs
+    list. If the label is orange, the output isn't switched on yet and the sound is still in the main mix.
+13. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
+14. **Tidy** lines the modules up in signal order.
 
 Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;
 right-click it to duplicate, move or delete.

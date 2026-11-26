@@ -507,6 +507,34 @@ int main()
         CHECK (other.load (rack.save()) && firstOf (*other.boards[1], "noteseq")->patternShare == 4, "the follow setting saves with the project");
     }
 
+    // 22c. Separate outputs: a sound sent to Out 2 leaves the main mix and arrives on Out 2
+    {
+        Rack rack; rack.prepare (48000); loadStarter (rack);
+        for (size_t i = 1; i < rack.boards.size(); ++i) rack.boards[i]->mute.store (true);     // the kick alone
+        const int n = 48000;
+        std::vector<float> l ((size_t) n), r ((size_t) n), l2 ((size_t) n, 9.0f), r2 ((size_t) n, 9.0f);
+        Outs outs; outs.l[1] = l2.data(); outs.r[1] = r2.data();
+        rack.process (l.data(), r.data(), n, 124, 0, true, &outs);
+        CHECK (peakOf (l) > 0.2f && peakOf (l2) == 0.0f, "by default everything is in the main mix, and unused outputs are silent");
+        rack.boards[0]->out.store (1);
+        rack.process (l.data(), r.data(), n, 124, 0, true, &outs);
+        CHECK (peakOf (l) == 0.0f && peakOf (l2) > 0.2f && peakOf (r2) > 0.2f, "sent to Out 2: gone from the main mix, present on Out 2");
+        CHECK (peakOf (l2) <= 1.0f, "separate outputs are limited too");
+        rack.boards[0]->mute.store (true);
+        rack.process (l.data(), r.data(), n, 124, 0, true, &outs);
+        CHECK (peakOf (l2) == 0.0f, "mute still works on a separate output");
+        rack.boards[0]->mute.store (false);
+        // Out 3 isn't switched on in the host: the sound stays in the main mix instead of vanishing
+        rack.boards[0]->out.store (2);
+        rack.process (l.data(), r.data(), n, 124, 0, true, &outs);
+        CHECK (peakOf (l) > 0.2f && peakOf (l2) == 0.0f, "an output that isn't switched on falls back to the main mix");
+        CHECK ((rack.outsOn.load() & 2) != 0 && (rack.outsOn.load() & 4) == 0, "the rack knows which outputs are on");
+        rack.process (l.data(), r.data(), n, 124, 0, true);
+        CHECK (peakOf (l) > 0.2f, "with no separate outputs at all, everything is in the main mix");
+        Rack other; other.prepare (48000);
+        CHECK (other.load (rack.save()) && other.boards[0]->out.load() == 2 && other.boards[1]->out.load() == 0, "output choices save with the project");
+    }
+
     // 23. Links: knobs in the same group move together, by knob position
     {
         Rack rack; rack.prepare (48000);

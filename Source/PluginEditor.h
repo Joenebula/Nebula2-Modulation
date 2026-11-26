@@ -208,13 +208,15 @@ public:
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void tick();
     std::function<void (int)> onSelect;
 private:
     juce::Rectangle<int> channel (int i) const, masterArea() const;
-    static juce::Rectangle<int> faderIn (juce::Rectangle<int> ch), muteIn (juce::Rectangle<int> ch), soloIn (juce::Rectangle<int> ch);
+    static juce::Rectangle<int> faderIn (juce::Rectangle<int> ch), muteIn (juce::Rectangle<int> ch), soloIn (juce::Rectangle<int> ch), outIn (juce::Rectangle<int> ch);
+    void outMenu (int channel);
     Nebula2ModulationProcessor& proc;
     std::vector<float> shown;
     float shownL = 0, shownR = 0;

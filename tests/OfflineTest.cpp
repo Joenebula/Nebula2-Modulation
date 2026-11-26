@@ -89,6 +89,33 @@ int main (int argc, char** argv)
     q.setStateInformation (junk, (int) sizeof junk);
     CHECK (q.rack.boards.size() == 6, "bad project data is ignored, not loaded");
 
+    // ---- Separate outputs to the host's mixer ----
+    {
+        Nebula2ModulationProcessor m;
+        CHECK (m.getBusCount (false) == n2m::kOuts && m.getBus (false, 0)->isEnabled() && ! m.getBus (false, 1)->isEnabled(), "one main output, and 15 more that start switched off");
+        CHECK (m.getBus (false, 1)->getName() == "Out 2", "the outputs are named for the host's mixer");
+        auto layout = m.getBusesLayout();
+        layout.outputBuses.getReference (1) = juce::AudioChannelSet::stereo();     // the host switches Out 2 on
+        CHECK (m.setBusesLayout (layout), "the host can switch an output on");
+        FakeCubase song; m.setPlayHead (&song);
+        m.setRateAndBufferSizeDetails (48000, 256);
+        m.prepareToPlay (48000, 256);
+        for (size_t i = 1; i < m.rack.boards.size(); ++i) m.rack.boards[i]->mute.store (true);
+        m.rack.boards[0]->out.store (1);
+        song.playing = true;
+        float mainPeak = 0, out2Peak = 0;
+        for (int b = 0; b < 200; ++b)
+        {
+            juce::AudioBuffer<float> buf (m.getTotalNumOutputChannels(), 256); juce::MidiBuffer midi;
+            m.processBlock (buf, midi);
+            mainPeak = juce::jmax (mainPeak, buf.getMagnitude (0, 0, 256));
+            out2Peak = juce::jmax (out2Peak, buf.getMagnitude (2, 0, 256), buf.getMagnitude (3, 0, 256));
+            song.ppq += 256 * 124.0 / 60.0 / 48000.0;
+        }
+        CHECK (m.getTotalNumOutputChannels() == 4, "four channels: main and Out 2");
+        CHECK (mainPeak == 0.0f && out2Peak > 0.2f, "the kick comes out of Out 2, not the main output");
+    }
+
     // ---- The screen: cabling by dragging, the way the mouse does it ----
     {
         Nebula2ModulationProcessor r;

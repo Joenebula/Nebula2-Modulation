@@ -45,6 +45,7 @@ public:
     bool isPlaying() const { return hostPlaying.load() || preview.load(); }
 
 private:
+    static BusesProperties makeBuses();
     double ownPpq = 0;
     uint32_t seed = 0x9E3779B9u;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Nebula2ModulationProcessor)

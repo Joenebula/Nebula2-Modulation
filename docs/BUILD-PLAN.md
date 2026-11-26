@@ -98,6 +98,16 @@ Joe: "lock a bass to a string and change one, the other changes also", for anyth
 - [ ] A linked knob moved by a cable (not by hand) doesn't move the others
 - [ ] Offsets between linked things (the same line a third up, a knob that moves half as far)
 
+## Separate outputs (done, v0.1.5)
+
+Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed afterwards.
+
+- [x] 16 stereo outputs: Main, and Out 2 to Out 16 (off until switched on in the host)
+- [x] Each tab's mixer channel has an output label (MAIN / OUT n); click it to choose
+- [x] A sound sent to an output that isn't switched on stays in the main mix, and its label turns orange
+- [x] Separate outputs skip the master fader and keep the safety limiter
+- [ ] **Joe to test in Cubase**: Activate Outputs, and the channels appearing in the MixConsole
+
 ## Stage 7: the song
 
 - [ ] Song page: which tabs play when

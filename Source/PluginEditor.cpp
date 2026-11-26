@@ -1187,6 +1187,27 @@ juce::Rectangle<int> MixerStrip::channel (int i) const { return { 12 + i * (kCha
 juce::Rectangle<int> MixerStrip::faderIn (juce::Rectangle<int> ch) { return { ch.getX() + 10, ch.getY() + 30, 26, ch.getHeight() - 40 }; }
 juce::Rectangle<int> MixerStrip::muteIn (juce::Rectangle<int> ch) { return { ch.getX() + 44, ch.getY() + 30, 34, 22 }; }
 juce::Rectangle<int> MixerStrip::soloIn (juce::Rectangle<int> ch) { return { ch.getX() + 44, ch.getY() + 56, 34, 22 }; }
+juce::Rectangle<int> MixerStrip::outIn (juce::Rectangle<int> ch) { return { ch.getX() + 40, ch.getBottom() - 26, 42, 18 }; }
+
+// Which output a sound goes to: the main mix, or its own channel in the host's mixer
+void MixerStrip::outMenu (int channel)
+{
+    if (channel < 0 || channel >= (int) proc.rack.boards.size()) return;
+    auto* board = proc.rack.boards[(size_t) channel].get();
+    const int on = proc.rack.outsOn.load();
+    juce::PopupMenu m;
+    m.addSectionHeader ("Send " + juce::String (board->name) + " to");
+    m.addItem (1, "Main mix", true, board->out.load() == 0);
+    for (int k = 1; k < kOuts; ++k)
+        m.addItem (k + 1, "Out " + juce::String (k + 1) + ((on & (1 << k)) != 0 ? "" : "   (not switched on in Cubase)"), true, board->out.load() == k);
+    juce::Component::SafePointer<MixerStrip> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (outIn (this->channel (channel)))), [safe, channel] (int r)
+    {
+        if (safe == nullptr || r <= 0 || channel >= (int) safe->proc.rack.boards.size()) return;
+        safe->proc.rack.boards[(size_t) channel]->out.store (r - 1);
+        safe->repaint();
+    });
+}
 
 static void drawFader (juce::Graphics& g, juce::Rectangle<int> f, float level, float meterA, float meterB, juce::Colour col)
 {
@@ -1245,9 +1266,17 @@ void MixerStrip::paint (juce::Graphics& g)
             };
             pill (muteIn (ch), "M", b.mute.load(), bandPink);
             pill (soloIn (ch), "S", b.solo.load(), bandYellow);
-            g.setFont (font (10.0f));
-            g.setColour (n7);
-            g.drawText (juce::String ((int) std::lround (b.level.load() * 100)) + "%", ch.getX() + 40, ch.getBottom() - 24, 42, 12, juce::Justification::centred, false);
+            // The output label: MAIN, or OUT n. Orange when that output isn't switched on in the host
+            // (the sound then stays in the main mix). While the fader is dragged it shows the level instead.
+            const auto ob = outIn (ch);
+            const int out = b.out.load();
+            const bool missing = out > 0 && (proc.rack.outsOn.load() & (1 << out)) == 0;
+            g.setColour (out > 0 ? (missing ? bandOrange : accent).withAlpha (0.9f) : n4);
+            g.fillRoundedRectangle (ob.toFloat(), 4.0f);
+            g.setFont (font (9.0f, Weight::SemiBold, 0.3f));
+            g.setColour (out > 0 ? n0 : n7);
+            g.drawText (dragChannel == i ? juce::String ((int) std::lround (b.level.load() * 100)) + "%" : out > 0 ? "OUT " + juce::String (out + 1) : juce::String ("MAIN"),
+                        ob, juce::Justification::centred, false);
         }
     }
     const auto m = masterArea();
@@ -1270,6 +1299,7 @@ void MixerStrip::mouseDown (const juce::MouseEvent& e)
         const auto ch = channel (i);
         if (! ch.contains (e.getPosition())) continue;
         auto& b = *proc.rack.boards[(size_t) i];
+        if (outIn (ch).contains (e.getPosition())) { outMenu (i); return; }
         if (muteIn (ch).contains (e.getPosition())) b.mute.store (! b.mute.load());
         else if (soloIn (ch).contains (e.getPosition())) b.solo.store (! b.solo.load());
         else if (faderIn (ch).expanded (8, 4).contains (e.getPosition())) { dragChannel = i; mouseDrag (e); }
@@ -1288,6 +1318,8 @@ void MixerStrip::mouseDrag (const juce::MouseEvent& e)
     else if (dragChannel < (int) proc.rack.boards.size()) proc.rack.boards[(size_t) dragChannel]->level.store (v);
     repaint();
 }
+
+void MixerStrip::mouseUp (const juce::MouseEvent&) { dragChannel = -2; repaint(); }
 
 void MixerStrip::mouseDoubleClick (const juce::MouseEvent& e)
 {

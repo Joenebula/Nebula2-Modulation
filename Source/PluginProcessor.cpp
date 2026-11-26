@@ -1,8 +1,17 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
+// The main mix, plus 15 separate stereo outputs that start switched off. In Cubase they are switched on
+// from the instrument's "Activate Outputs" list, and each then gets its own channel in the MixConsole.
+juce::AudioProcessor::BusesProperties Nebula2ModulationProcessor::makeBuses()
+{
+    auto b = BusesProperties().withOutput ("Main", juce::AudioChannelSet::stereo(), true);
+    for (int k = 1; k < n2m::kOuts; ++k) b = b.withOutput ("Out " + juce::String (k + 1), juce::AudioChannelSet::stereo(), false);
+    return b;
+}
+
 Nebula2ModulationProcessor::Nebula2ModulationProcessor()
-    : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+    : AudioProcessor (makeBuses())
 {
     n2m::registerPluginSlot();
     n2m::loadStarter (rack);
@@ -15,7 +24,10 @@ void Nebula2ModulationProcessor::prepareToPlay (double sampleRate, int)
 
 bool Nebula2ModulationProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-    return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
+    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo()) return false;
+    for (int k = 1; k < layouts.outputBuses.size(); ++k)
+        if (! layouts.outputBuses[k].isDisabled() && layouts.outputBuses[k] != juce::AudioChannelSet::stereo()) return false;
+    return true;
 }
 
 void Nebula2ModulationProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -44,8 +56,18 @@ void Nebula2ModulationProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (! own) ownPpq = 0.0;
 
     if (buffer.getNumChannels() < 2) { buffer.clear(); return; }
-    rack.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, tempo, playing ? ppq : ownPpq, playing || own);
-    for (int ch = 2; ch < buffer.getNumChannels(); ++ch) buffer.clear (ch, 0, n);
+    // Hand the rack each separate output the host has switched on
+    n2m::Outs outs;
+    for (int k = 1; k < juce::jmin (n2m::kOuts, getBusCount (false)); ++k)
+    {
+        auto* bus = getBus (false, k);
+        if (bus == nullptr || ! bus->isEnabled() || bus->getNumberOfChannels() < 2) continue;
+        const int first = getChannelIndexInProcessBlockBuffer (false, k, 0);
+        if (first + 1 >= buffer.getNumChannels()) continue;
+        outs.l[k] = buffer.getWritePointer (first);
+        outs.r[k] = buffer.getWritePointer (first + 1);
+    }
+    rack.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, tempo, playing ? ppq : ownPpq, playing || own, &outs);
     if (own) ownPpq += n * tempo / 60.0 / getSampleRate();
 }
 

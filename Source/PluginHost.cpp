@@ -93,7 +93,8 @@ const Info& HostedModule::desc()
     static const Info i { "plugin", "Plugin slot", "Your plugins", "Holds one of your VST3 plugins",
         { { "p1", "Note 1" }, { "p2", "Note 2" }, { "p3", "Note 3" }, { "p4", "Note 4" }, { "gate", "Gate" }, { "vel", "Vel" }, { "inl", "In L" }, { "inr", "In R" },
           { "m1", "Mod 1" }, { "m2", "Mod 2" }, { "m3", "Mod 3" }, { "m4", "Mod 4" } },
-        { { "outl", "Out L" }, { "outr", "Out R" } },
+        { { "outl", "Out L" }, { "outr", "Out R" },
+          { "nt1", "Note 1" }, { "nt2", "Note 2" }, { "nt3", "Note 3" }, { "nt4", "Note 4" }, { "ngate", "Gate" } },
         { { "level", "Level", 0, 1.5f, 1.0f, Fmt::Percent },
           { "k1", "Knob 1", 0, 1, 0.5f, Fmt::Percent }, { "k2", "Knob 2", 0, 1, 0.5f, Fmt::Percent }, { "k3", "Knob 3", 0, 1, 0.5f, Fmt::Percent }, { "k4", "Knob 4", 0, 1, 0.5f, Fmt::Percent } }, Seq::Host };
     return i;
@@ -211,7 +212,13 @@ juce::Optional<juce::AudioPlayHead::PositionInfo> HostedModule::getPosition() co
 
 void HostedModule::process (int n, const Ctx& c)
 {
-    auto silence = [this, n] { std::fill (out[0].begin(), out[0].begin() + n, 0.0f); std::fill (out[1].begin(), out[1].begin() + n, 0.0f); };
+    auto silence = [this, n]
+    {
+        std::fill (out[0].begin(), out[0].begin() + n, 0.0f); std::fill (out[1].begin(), out[1].begin() + n, 0.0f);
+        for (int k = 0; k < 4; ++k) std::fill (out[(size_t) (2 + k)].begin(), out[(size_t) (2 + k)].begin() + n, noteOut[k]);
+        std::fill (out[6].begin(), out[6].begin() + n, 0.0f);
+        heldCount = 0;
+    };
     if (! guard.tryLock()) { silence(); return; }
     if (plugin == nullptr) { guard.unlock(); silence(); return; }
 
@@ -252,6 +259,40 @@ void HostedModule::process (int n, const Ctx& c)
     }
 
     plugin->processBlock (view, midi);
+
+    // Notes the plugin itself sends out (Nebula2 Chord's chords, an arpeggiator's notes) become cable signals:
+    // the notes held, lowest first, and a gate that dips for a sample on each new note so envelopes restart
+    {
+        auto it = midi.begin();
+        for (int i = 0; i < n; ++i)
+        {
+            bool fresh = false;
+            while (it != midi.end() && (*it).samplePosition <= i)
+            {
+                const auto m = (*it).getMessage();
+                if (m.isNoteOn() || m.isNoteOff())
+                {
+                    const int note = m.getNoteNumber();
+                    int w = 0;
+                    for (int k = 0; k < heldCount; ++k) if (heldNotes[k] != note) heldNotes[w++] = heldNotes[k];
+                    heldCount = w;
+                    if (m.isNoteOn() && heldCount < 16) { heldNotes[heldCount++] = note; fresh = true; }
+                }
+                else if (m.isAllNotesOff() || m.isAllSoundOff()) heldCount = 0;
+                ++it;
+            }
+            if (heldCount > 0)
+            {
+                int sorted[16];
+                std::copy (heldNotes, heldNotes + heldCount, sorted);
+                std::sort (sorted, sorted + heldCount);
+                for (int k = 0; k < 4; ++k) noteOut[k] = (float) (sorted[juce::jmin (k, heldCount - 1)] - 60) / 12.0f;
+            }
+            for (int k = 0; k < 4; ++k) out[(size_t) (2 + k)][(size_t) i] = noteOut[k];
+            out[6][(size_t) i] = heldCount > 0 && ! (fresh && gateWas) ? 1.0f : 0.0f;
+            gateWas = heldCount > 0;
+        }
+    }
 
     const float level = P (0);
     const float* l = view.getReadPointer (0);

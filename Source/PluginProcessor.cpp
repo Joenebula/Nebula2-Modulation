@@ -45,6 +45,9 @@ void Nebula2ModulationProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         const int at = juce::jlimit (0, juce::jmax (0, n - 1), meta.samplePosition);
         if (m.isNoteOn()) keyEvents[keysIn.count++] = { at, (unsigned char) m.getNoteNumber(), (unsigned char) juce::jmax (1, (int) m.getVelocity()), (unsigned char) m.getChannel(), true };
         else if (m.isNoteOff()) keyEvents[keysIn.count++] = { at, (unsigned char) m.getNoteNumber(), 0, (unsigned char) m.getChannel(), false };
+        else if (m.isPitchWheel()) keyEvents[keysIn.count++] = { at, 0, 0, (unsigned char) m.getChannel(), true, 1, (float) (m.getPitchWheelValue() - 8192) / 8192.0f };
+        else if (m.isControllerOfType (1)) keyEvents[keysIn.count++] = { at, 0, 0, (unsigned char) m.getChannel(), true, 2, (float) m.getControllerValue() / 127.0f };
+        else if (m.isSustainPedalOn() || m.isSustainPedalOff()) keyEvents[keysIn.count++] = { at, 0, 0, (unsigned char) m.getChannel(), m.isSustainPedalOn(), 3, 0.0f };
         else if (m.isAllNotesOff() || m.isAllSoundOff()) keyEvents[keysIn.count++] = { at, 255, 0, (unsigned char) m.getChannel(), false };
     }
     midi.clear();
@@ -82,6 +85,46 @@ void Nebula2ModulationProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
     rack.process (buffer.getWritePointer (0), buffer.getWritePointer (1), n, tempo, playing ? ppq : ownPpq, playing || own, &outs, &keysIn);
     if (own) ownPpq += n * tempo / 60.0 / getSampleRate();
+}
+
+juce::File Nebula2ModulationProcessor::renderTab (int tab, int bars)
+{
+    if (tab < 0 || tab >= (int) rack.boards.size()) return {};
+    // A private copy of the whole project, so the one that is playing is never disturbed
+    n2m::Rack copy;
+    copy.prepare (rack.sr);
+    if (! copy.load (rack.save()) || tab >= (int) copy.boards.size()) return {};
+    copy.master.store (1.0f);
+    copy.song.on.store (false);
+    for (size_t i = 0; i < copy.boards.size(); ++i)
+    {
+        auto& b = *copy.boards[i];
+        b.out.store (0); b.mute.store (false); b.solo.store ((int) i == tab);
+    }
+    if (bars <= 0) bars = juce::jlimit (4, 64, (copy.timeline.total + n2m::kSteps - 1) / n2m::kSteps);
+    const double tempo = juce::jlimit (20.0, 400.0, bpm.load()), sr = rack.sr;
+    const int total = (int) std::llround (bars * 4.0 * 60.0 / tempo * sr);
+    juce::AudioBuffer<float> audio (2, total);
+    audio.clear();
+    const int block = 512;
+    for (int pos = 0; pos < total; pos += block)
+    {
+        const int n = juce::jmin (block, total - pos);
+        copy.process (audio.getWritePointer (0, pos), audio.getWritePointer (1, pos), n, tempo, (double) pos * tempo / 60.0 / sr, true);
+    }
+    auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Nebula2-Modulation");
+    folder.createDirectory();
+    auto file = folder.getChildFile (juce::File::createLegalFileName (juce::String (rack.boards[(size_t) tab]->name)) + ".wav");
+    file.deleteFile();
+    auto stream = std::make_unique<juce::FileOutputStream> (file);
+    if (! stream->openedOk()) return {};
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (stream.get(), sr, 2, 24, {}, 0));
+    if (writer == nullptr) return {};
+    stream.release();                                  // the writer owns it now
+    if (! writer->writeFromAudioSampleBuffer (audio, 0, total)) return {};
+    writer.reset();
+    return file;
 }
 
 juce::File Nebula2ModulationProcessor::soundsFolder()

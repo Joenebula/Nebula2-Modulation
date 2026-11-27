@@ -464,10 +464,11 @@ struct KeysIn : Module
     static const Info& desc()
     {
         static const Info i { "keys", "MIDI keyboard", "Notes and rhythm", "Notes from your keyboard or a MIDI track",
-            {}, { { "pitch", "Pitch" }, { "gate", "Gate" }, { "vel", "Vel" }, { "n1", "Note 1" }, { "n2", "Note 2" }, { "n3", "Note 3" }, { "n4", "Note 4" } },
+            {}, { { "pitch", "Pitch" }, { "gate", "Gate" }, { "vel", "Vel" }, { "n1", "Note 1" }, { "n2", "Note 2" }, { "n3", "Note 3" }, { "n4", "Note 4" }, { "mod", "Mod wheel" } },
             { { "channel", "Channel", 0, 16, 0, Fmt::Int, 1, { "All", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16" } },
               { "octave", "Octave", -3, 3, 0, Fmt::Int },
-              { "snap", "Notes", 0, 1, 1, Fmt::Int, 1, { "As played", "Stay in key" } } } };
+              { "snap", "Notes", 0, 1, 1, Fmt::Int, 1, { "As played", "Stay in key" } },
+              { "bend", "Bend", 0, 12, 2, Fmt::Semis } } };
         return i;
     }
     // The nearest note of the key (the lower one when it falls between two)
@@ -507,15 +508,21 @@ struct KeysIn : Module
             lastOrder = newestOrder;
         }
         wasHeld = count > 0;
+        // The pitch wheel bends every note by up to the Bend knob's semitones; smoothed so it doesn't click
+        const float bendTo = c.keys != nullptr ? c.keys->bend * std::round (P (3)) / 12.0f : 0.0f;
+        const float modTo = c.keys != nullptr ? c.keys->mod : 0.0f;
         for (int i = 0; i < n; ++i)
         {
-            out[0][(size_t) i] = pitch;
+            bend += 0.002f * (bendTo - bend); if (std::abs (bend - bendTo) < 1.0e-5f) bend = bendTo;
+            mod += 0.002f * (modTo - mod); if (std::abs (mod - modTo) < 1.0e-5f) mod = modTo;
+            out[0][(size_t) i] = pitch + bend;
             out[1][(size_t) i] = count > 0 && ! (retrigger && i == 0) ? 1.0f : 0.0f;
             out[2][(size_t) i] = vel;
-            for (int k = 0; k < 4; ++k) out[(size_t) (3 + k)][(size_t) i] = voice[k];
+            for (int k = 0; k < 4; ++k) out[(size_t) (3 + k)][(size_t) i] = voice[k] + bend;
+            out[7][(size_t) i] = mod;
         }
     }
-    float pitch = 0, vel = 0.8f, voice[4] { 0, 0, 0, 0 };
+    float pitch = 0, vel = 0.8f, voice[4] { 0, 0, 0, 0 }, bend = 0, mod = 0;
     uint32_t lastOrder = 0; bool wasHeld = false;
 };
 

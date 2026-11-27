@@ -68,6 +68,9 @@ Rules that tests hold in place:
 - MIDI out: `notesOf (rack, module)` in `Presets.h` must give exactly the notes the unit plays (a test plays the song and compares). `Nebula2ModulationProcessor::writeMidi` turns it into a file.
 - Sounds: `saveSound` / `loadSound` on the processor; a `.n2msound` file is `N2MSOUND 1` plus one board's text. A loaded sound drops its links, solo and song sections.
 - Your plugins: `Nebula2ModulationProcessor::addPluginSound (name)` builds the ready-made tab; `ownPlugins()` is the menu list. Names match without spaces, hyphens or capitals; Nebula2 Drums is installed as plain "Nebula2".
+- Stereo cabling: the screen calls `Rack::connectStereo`, which adds the right-hand cable when both jacks have a partner (`rightOf`: ids ending l / r, or left / right).
+- Audio out: `renderTab (tab)` renders a private copy of the whole project with that tab soloed; it must leave the real rack untouched.
+- Ideas lists: only ever add to the end. Tests and snapshots pick ideas by position.
 - Links: `Module::patternLink` / `patternShare` and `paramLink`, pushed by `Rack::pushPattern` / `pushParam` when the screen edits something. Knobs link by position, not value. `patternShare` 4 is a follower: it keeps its own pattern and is shifted at play time by `leaderShift()`.
 
 ## Build and test (Linux)
@@ -97,10 +100,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.14'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.15'
 ```
 
-The latest release is **v0.1.13**. Bump by one each time.
+The latest release is **v0.1.14**. Bump by one each time.
 
 ## What can't be checked here
 

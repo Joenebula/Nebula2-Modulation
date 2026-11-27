@@ -32,13 +32,15 @@ Cubase. Tick things off here as they land.
 - [x] Starting boards: Kick, Snare, Hi-hat, Percussion, Bass, Lead, Stab, Pad, Empty
 - [x] Multi-oscillator (four notes at once)
 - [x] Sample player (v0.1.9): load or drop an audio file (wav, aiff, flac, ogg). Start, Length, Tune, Forward / Reverse, Once / Loop. A Pitch cable plays it at notes. A "Sample" sound in the + menu. The project remembers where the file is; if it has moved, the unit names the file it wants
-- [ ] Sample player: mp3 isn't read (the framework leaves it off for licensing); copy the file into the project so it travels with it
+- [x] Sample player reads mp3 (v0.1.14)
+- [ ] Sample player: copy the file into the project so it travels with it
 - [x] Clap board, with its own clap envelope (v0.1.7)
-- [ ] Stereo cables (today a board is mono until its Output; pan is on the mixer)
+- [x] Stereo cabling (v0.1.14): dragging a left output to a left input brings the right side along, when both units have one and the right input is free. Units themselves are as before: stereo ones have L and R jacks, mono ones have one
 - [x] Undo and redo (v0.1.8): buttons and Ctrl+Z / Ctrl+Y. Covers knobs, patterns, cables, adding, moving and deleting units, tabs, the mixer, links, chords and key. Keeps the last 100 steps. A board is put back in place, so undoing a knob never reloads a plugin in a slot
 - [ ] Not undoable yet: loading or emptying a plugin slot, changes made inside a hosted plugin's own window, the master fader
 - [x] MIDI keyboard unit (v0.1.12): notes from a keyboard or a Cubase MIDI track. Pitch, Gate and Vel for a bass or lead; Note 1 to 4 for chords. Channel (All or 1 to 16), Octave, and Stay in key (on by default) or As played. Keys land on their exact sample. Works with Cubase stopped
-- [ ] MIDI keyboard: no pitch bend, mod wheel or sustain pedal yet; the starting sounds still come with a sequencer, so the keyboard unit is cabled in by hand
+- [x] MIDI keyboard (v0.1.14): pitch wheel (Bend knob sets how far, 2 semitones to start), mod wheel on its own jack, sustain pedal
+- [ ] MIDI keyboard: the starting sounds still come with a sequencer, so the keyboard unit is cabled in by hand
 
 ## Stage 3: rhythm and notes (part done, v0.1.1)
 
@@ -53,7 +55,7 @@ Cubase. Tick things off here as they land.
 - [x] Ratchet and Swing units (v0.1.10)
 - [x] Longer patterns: 1, 2, 4 or 8 bars, with a button per bar. Ideas fill every bar; Random varies the bars and adds fills
 - [ ] Pattern chaining
-- [ ] Bigger Ideas libraries per sound
+- [x] Bigger Ideas libraries (v0.1.14): 16 kick, 12 snare, 12 hat, 12 percussion, 14 bass and 14 lead ideas
 
 ## Stage 4: effects and thickeners (most done, v0.1.6)
 
@@ -95,10 +97,9 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [x] A slot's Load menu lists every VST3 in the usual plugin folders by name (v0.1.9). The list is made by looking at the folders only; nothing is loaded to build it
 - [x] Knobs on the slot (v0.1.11): Knob 1 to 4, each pointed at one of the plugin's own controls from the Knobs button (pick from the list, or "the control I last moved in its window"). Mod 1 to 4 inputs let cables move them. Saved with the project
 - [ ] Pointing a knob isn't undoable, and Nexus / HALion controls can only be tried on Joe's PC
-- [ ] Notes out of a hosted plugin (so Nebula2 Chord inside a slot could drive other units)
+- [x] Notes out of a hosted plugin (v0.1.14): a slot has Note 1 to 4 and Gate outputs carrying whatever notes the plugin sends out, so Nebula2 Chord in a slot can play an oscillator or another slot. Tested with Nebula2 Chord
 - [ ] Latency of hosted plugins isn't compensated yet
 - [ ] Per-tab load meter
-- [ ] Freeze / bounce a tab to audio
 
 This is the stage that can only be checked on Joe's PC in Cubase with his own plugins.
 
@@ -130,7 +131,8 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 - [x] Song page (v0.1.11): the Song button opens a grid, sounds down the side and sections along the top. A filled square means the sound plays there. 2 to 16 sections of 1 to 16 bars; All on and Build up; the playing section is lit. A sound that sits out stops its patterns and lets its tail ring. Off by default; saved and undoable
 - [ ] Song page: sections all the same length; no names for sections; no copy of a section
 - [x] Drag MIDI out (v0.1.12): a DRAG MIDI label on note sequencers, drum sequencers and the chord unit. Drag it into Cubase for a MIDI part of exactly what the unit plays (in key, following the chords and any key change). **Joe to test the drag itself in Cubase**
-- [ ] Drag audio out
+- [x] Drag audio out (v0.1.14): a DRAG AUDIO label on each tab's Output. Drag it into Cubase for a WAV of that sound alone, the chords once through from bar 1, at the song's tempo. **Joe to test the drag itself in Cubase**
+- [ ] Freeze a tab (swap it for its audio inside the plugin)
 - [x] Save and load a sound (v0.1.12): right-click a tab, Save this sound. Saved sounds are listed under + (Your saved sounds), from any project. They live in Documents / Nebula2 Modulation / Sounds. A plugin in a slot is saved with its settings
 - [ ] A sound's sample file isn't copied with it; no pictures or tags in the list
 

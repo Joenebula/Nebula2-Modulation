@@ -70,6 +70,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
     sequencer's were. It plays from your keyboard or a Cubase MIDI track, and keeps notes in key unless you switch
     that off.
 16. **MIDI into Cubase:** drag the **DRAG MIDI** label on a sequencer or the chord unit into the Cubase project.
+    **DRAG AUDIO** on a tab's Output does the same with that sound as a WAV file.
 17. **Keep a sound:** right-click a tab and choose **Save this sound**. It then appears under **+**, in **Your saved
     sounds**, in every project.
 18. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.

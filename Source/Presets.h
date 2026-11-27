@@ -21,7 +21,8 @@ inline int rows (const Info& i) { return (int) ((i.params.size() + (size_t) rowL
 inline int width (const Info& i)
 {
     const int jacks = (int) (i.ins.size() + i.outs.size());
-    return std::max ({ cols (i) * cell, jacks * jackW, seqWidth (i), 96 }) + 2 * pad;
+    const int least = std::string (i.type) == "output" ? 140 : 96;      // the Output has room for its DRAG AUDIO label
+    return std::max ({ cols (i) * cell, jacks * jackW, seqWidth (i), least }) + 2 * pad;
 }
 inline int height (const Info& i) { return header + seqHeight (i) + rows (i) * cellH + jackH + pad; }
 }
@@ -167,16 +168,25 @@ inline const std::vector<DrumIdea>& drumIdeas (const std::string& boardType)
     static const std::vector<DrumIdea> kick {
         { "Four on the floor", "X...x...x...x..." }, { "Push into the bar", "X...x...x...x.x." }, { "Off-beat double", "X...x..xx...x..." },
         { "Broken", "X..x..x...x..x.." }, { "Half time", "X.........x....." }, { "Rolling", "X..xx...x..xx..." },
-        { "Two-step", "X.........x..x.." }, { "Driving 8ths", "X.x.x.x.x.x.x.x." } };
+        { "Two-step", "X.........x..x.." }, { "Driving 8ths", "X.x.x.x.x.x.x.x." },
+        { "Skip the three", "X...x.......x..." }, { "Late double", "X...x...x..xx..." }, { "Stumble", "X..x....x.x....." },
+        { "Breakbeat", "X.....x...X....." }, { "Garage", "X......x..x....." }, { "Three three two", "X..x..x.X..x..x." },
+        { "Heartbeat", "X.x.....X.x....." }, { "Triplet feel", "X..x..x..x..x..." } };
     static const std::vector<DrumIdea> snare {
         { "Backbeat", "....X.......X..." }, { "Backbeat with ghost", "....X..x....X..." }, { "Late push", "....X.......X.x." },
-        { "Half time", "........X......." }, { "Break", "....X..x.x..X..." }, { "Roll into the bar", "....X.......Xxxx" } };
+        { "Half time", "........X......." }, { "Break", "....X..x.x..X..." }, { "Roll into the bar", "....X.......Xxxx" },
+        { "Ghosts", "..x.X..x..x.X..x" }, { "Early second", "....X......X...." }, { "Drag", "...xX......xX..." },
+        { "Double hit", "....X.......XX.." }, { "Garage shuffle", "....X..x....X..x" }, { "Every beat", "X...X...X...X..." } };
     static const std::vector<DrumIdea> hat {
         { "Off-beat", "..x...x...x...x." }, { "Straight 8ths", "x.x.x.x.x.x.x.x." }, { "16ths with accents", "xxXxxxXxxxXxxxXx" },
-        { "Shuffle feel", "x.xxx.xxx.xxx.xx" }, { "Off-beat with skip", "..x...x..xx...x." }, { "Gallop", "x.xx.xx.x.xx.xx." } };
+        { "Shuffle feel", "x.xxx.xxx.xxx.xx" }, { "Off-beat with skip", "..x...x..xx...x." }, { "Gallop", "x.xx.xx.x.xx.xx." },
+        { "Accent the off-beat", "x.X.x.X.x.X.x.X." }, { "Roll at the end", "..x...x...x.xxxx" }, { "Sparse 16ths", "x..x.x..x..x.x.." },
+        { "Push pull", "xxX.xxX.xxX.xxX." }, { "Open on four", "..x...x...x...X." }, { "Ticking", "xxxxxxxxxxxxxxxx" } };
     static const std::vector<DrumIdea> perc {
         { "Three against four", "x..x..x..x..x..x" }, { "Clave", "x..x..x...x.x..." }, { "Answer", "......x.......xx" },
-        { "Tumble", "x.x..x..x.x..x.." }, { "Five in a bar", "x..x..x..x.x...." }, { "Sparse", "...x......x....." } };
+        { "Tumble", "x.x..x..x.x..x.." }, { "Five in a bar", "x..x..x..x.x...." }, { "Sparse", "...x......x....." },
+        { "Rumba", "x..x...x..x.x..." }, { "Shaker", "x.xXx.xXx.xXx.xX" }, { "Late answer", ".........x.x..x." },
+        { "Rim clicks", "..x..x....x..x.." }, { "Conga talk", "x..xx.x...xx.x.." }, { "Cowbell", "x...x.x.x...x.x." } };
     // For the trance gate: lit steps let the sound through
     static const std::vector<DrumIdea> gate {
         { "Classic trance", "x.xxx.xxx.xxx.xx" }, { "Off-beat", "..xx..xx..xx..xx" }, { "Gallop", "x.xxx.xxx.xxx.xx" }, { "Dotted", "xxx.xxx.xxx.xx.x" },
@@ -200,14 +210,30 @@ inline const std::vector<NoteIdea>& noteIdeas (const std::string& boardType)
         { "Octave jump", "x.x.x.x.x.x.x.x.", { 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0 } },
         { "Walk down", "x..x..x.x..x..x.", { 0, 0, 0, 0, 0, 0, -1, 0, -2, 0, 0, -2, 0, 0, -3, 0 } },
         { "Push and answer", "x..x..x...x.x...", { 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0, 2, 0, 0, 0 } },
-        { "Acid line", "xxx.xx.xxx.xx.xx", { 0, 0, 7, 0, 0, 2, 0, 0, 0, 7, 0, 4, 2, 0, 0, 7 } } };
+        { "Acid line", "xxx.xx.xxx.xx.xx", { 0, 0, 7, 0, 0, 2, 0, 0, 0, 7, 0, 4, 2, 0, 0, 7 } },
+        { "On the beat", "x...x...x...x...", { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } },
+        { "Root and fifth", "x.x...x.x.x...x.", { 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0 } },
+        { "Gallop", "x.xxx.xxx.xxx.xx", { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } },
+        { "Climb", "x..x..x.x..x..x.", { 0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, 4, 0 } },
+        { "Dub", "x.......x.x.....", { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -3, 0, 0, 0, 0, 0 } },
+        { "Garage skip", "x..x...x..x..x..", { 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 4, 0, 0, 2, 0, 0 } },
+        { "Octave bounce", "xxxxxxxxxxxxxxxx", { 0, 0, 7, 0, 0, 7, 0, 0, 7, 0, 0, 7, 0, 7, 0, 7 } },
+        { "Long and low", "x.........x.....", { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -2, 0, 0, 0, 0, 0 } } };
     static const std::vector<NoteIdea> lead {
         { "Arp up", "x.xx.xx.x.xx.xx.", { 0, 0, 2, 4, 4, 7, 4, 2, 0, 0, 2, 4, 4, 7, 9, 7 } },
         { "Up and down", "xxxxxxxxxxxxxxxx", { 0, 2, 4, 7, 9, 7, 4, 2, 0, 2, 4, 7, 9, 7, 4, 2 } },
         { "Call and answer", "x..x..x.....x.x.", { 4, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 7, 0 } },
         { "Stabs", "x.....x...x.....", { 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 0, 0 } },
         { "Trance gate", "x.xxx.xxx.xxx.xx", { 0, 0, 0, 0, 2, 0, 2, 2, 4, 0, 4, 4, 2, 0, 2, 2 } },
-        { "Falling", "x.x.x.x.x.x.x.x.", { 9, 0, 7, 0, 4, 0, 2, 0, 7, 0, 4, 0, 2, 0, 0, 0 } } };
+        { "Falling", "x.x.x.x.x.x.x.x.", { 9, 0, 7, 0, 4, 0, 2, 0, 7, 0, 4, 0, 2, 0, 0, 0 } },
+        { "Rising thirds", "x.x.x.x.x.x.x.x.", { 0, 0, 2, 0, 1, 0, 3, 0, 2, 0, 4, 0, 3, 0, 5, 0 } },
+        { "Hook", "x..x..x.x.....x.", { 4, 0, 0, 4, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0 } },
+        { "Off-beat plucks", "..x...x...x...x.", { 0, 0, 4, 0, 0, 0, 2, 0, 0, 0, 4, 0, 0, 0, 7, 0 } },
+        { "Three note loop", "x..x..x..x..x..x", { 0, 0, 0, 2, 0, 0, 4, 0, 0, 0, 0, 0, 2, 0, 0, 4 } },
+        { "Top note pedal", "xxxxxxxxxxxxxxxx", { 7, 0, 7, 2, 7, 4, 7, 2, 7, 0, 7, 2, 7, 4, 7, 5 } },
+        { "Question and answer", "x.xx....x.xx....", { 0, 0, 2, 4, 0, 0, 0, 0, 4, 0, 2, 0, 0, 0, 0, 0 } },
+        { "Octave leap", "x...x.x...x.x...", { 0, 0, 0, 0, 7, 0, 4, 0, 0, 0, 7, 0, 9, 0, 0, 0 } },
+        { "Slow line", "x.......x...x...", { 4, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0 } } };
     return boardType == "bass" ? bass : lead;
 }
 

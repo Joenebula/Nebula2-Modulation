@@ -1,3 +1,4 @@
+#include <set>
 // The plugin playing in a fake Cubase: transport, tempo, saving with the project. Prints "All passed".
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
@@ -480,6 +481,29 @@ int main (int argc, char** argv)
         run (r, song, 10.0);
         CHECK (run (r, song, 0.5) < 0.002f, "the notes end when the song stops: nothing left hanging");
 
+        // Notes the plugin sends out come back as cable signals (Nebula2 Chord sends its chords out as MIDI)
+        {
+            song.playing = true; song.ppq = 0;
+            int gateUps = 0; float lastGate = 0; std::set<int> lows, highs;
+            for (int blk = 0; blk < 1500; ++blk)
+            {
+                juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m;
+                r.processBlock (buf, m);
+                song.ppq += 256 * song.bpm / 60.0 / 48000.0;
+                const float g = slot->out[(size_t) slot->outIndex ("ngate")][0];
+                if (g > 0.5f && lastGate <= 0.5f) ++gateUps;
+                lastGate = g;
+                if (g > 0.5f) { lows.insert ((int) std::lround (slot->out[(size_t) slot->outIndex ("nt1")][0] * 12.0f)); highs.insert ((int) std::lround (slot->out[(size_t) slot->outIndex ("nt4")][0] * 12.0f)); }
+            }
+            std::printf ("notes out of the instrument: %d gate starts, %d different low notes\n", gateUps, (int) lows.size());
+            CHECK (gateUps >= 1 && lows.size() >= 2, "the chords a plugin plays come out of its Note and Gate jacks, changing as the song moves");
+            bool apart = false; for (int lo : lows) for (int hi : highs) apart = apart || hi > lo;
+            CHECK (apart, "Note 1 is the lowest note and Note 4 a higher one");
+            song.playing = false;
+            run (r, song, 3.0);
+            CHECK (slot->out[(size_t) slot->outIndex ("ngate")][0] < 0.5f, "its gate goes down when the song stops");
+        }
+
         // Knobs on the slot move the plugin's own controls
         CHECK (slot->numControls() > 1 && slot->controlName (0).isNotEmpty(), "the slot can list the plugin's own controls");
         int ctl = -1;       // a smooth control (not a switch): one that takes 0.37 and gives it back
@@ -697,6 +721,36 @@ int main (int argc, char** argv)
             mid.deleteFile();
         }
         CHECK (plain != nullptr && w.writeMidi (*plain, "x") == juce::File(), "a unit with no pattern writes nothing");
+
+        // One tab as an audio file
+        {
+            w.rack.boards[0]->solo.store (false);
+            const auto before = w.rack.save();
+            const auto wavFile = w.renderTab (0, 2);
+            CHECK (wavFile.existsAsFile() && wavFile.getFileExtension() == ".wav", "a tab renders to a WAV file");
+            juce::AudioFormatManager fm; fm.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (fm.createReaderFor (wavFile));
+            CHECK (reader != nullptr && reader->numChannels == 2 && std::abs ((double) reader->lengthInSamples - 2.0 * 4.0 * 60.0 / w.bpm.load() * 48000.0) < 2.0, "it is stereo and exactly as many bars long as asked");
+            if (reader != nullptr)
+            {
+                juce::AudioBuffer<float> got (2, (int) reader->lengthInSamples);
+                reader->read (&got, 0, (int) reader->lengthInSamples, 0, true, true);
+                const int bar = (int) (reader->lengthInSamples / 2);
+                CHECK (got.getMagnitude (0, 0, 4000) > 0.2f && got.getMagnitude (0, bar, 4000) > 0.2f, "with the kick on the first beat of each bar");
+                // only that tab: the same render with the kick's level at zero is silent
+                const float lvl = w.rack.boards[0]->level.load();
+                w.rack.boards[0]->level.store (0.0f);
+                const auto quietFile = w.renderTab (0, 1);
+                std::unique_ptr<juce::AudioFormatReader> quiet (fm.createReaderFor (quietFile));
+                juce::AudioBuffer<float> q (2, quiet != nullptr ? (int) quiet->lengthInSamples : 1);
+                if (quiet != nullptr) quiet->read (&q, 0, (int) quiet->lengthInSamples, 0, true, true);
+                CHECK (quiet != nullptr && q.getMagnitude (0, q.getNumSamples()) < 1.0e-4f, "no other tab leaks into it");
+                w.rack.boards[0]->level.store (lvl);
+            }
+            CHECK (w.rack.save() == before, "rendering leaves the project exactly as it was");
+            CHECK (w.renderTab (99) == juce::File(), "a tab that isn't there renders nothing");
+            CHECK (fm.getWildcardForAllFormats().containsIgnoreCase ("*.mp3"), "mp3 files can be read by the sample player");
+        }
     }
 
     {

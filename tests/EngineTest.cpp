@@ -1449,6 +1449,21 @@ int main()
         CHECK (gate[10] == 0.0f && rack.keys.count == 0, "all notes off clears every key");
         for (int i = 0; i < 40; ++i) rack.keys.on (40 + i, 100, 1);
         CHECK (rack.keys.count == Keys::kMax, "more keys than it can hold never overflow");
+        // sustain pedal, pitch wheel, mod wheel
+        rack.keys = Keys(); keys->set ("channel", 0); keys->set ("octave", 0);
+        play ({ { 0, 69, 100, 1, true }, { 10, 0, 0, 1, true, 3 }, { 20, 69, 0, 1, false } });
+        CHECK (gate[100] == 1.0f, "with the pedal down a key that is let go keeps sounding");
+        play ({ { 0, 62, 100, 1, true }, { 50, 62, 0, 1, false } });
+        CHECK (gate[100] == 1.0f && std::abs (pitch[100] - 2.0f / 12.0f) < 1.0e-6f, "and more notes can be played over it");
+        play ({ { 30, 0, 0, 1, false, 3 } });
+        CHECK (gate[29] == 1.0f && gate[30] == 0.0f && rack.keys.count == 0, "pedal up lets them all go");
+        play ({ { 0, 69, 100, 1, true }, { 0, 0, 0, 1, true, 1, 1.0f } }, 48000);
+        CHECK (std::abs (pitch[47000] - 11.0f / 12.0f) < 1.0e-4f, "the pitch wheel all the way up bends 2 semitones");
+        CHECK (pitch[1] < 9.5f / 12.0f, "and gets there smoothly, not in a jump");
+        keys->set ("bend", 12); play ({ { 0, 0, 0, 1, true, 1, -0.5f } }, 48000);
+        CHECK (std::abs (pitch[47000] - 3.0f / 12.0f) < 1.0e-4f, "the Bend knob sets how far: half way down with 12 is 6 semitones down");
+        play ({ { 0, 0, 0, 1, true, 1, 0.0f }, { 0, 0, 0, 1, true, 2, 0.5f }, { 0, 69, 0, 1, false } }, 48000);
+        CHECK (std::abs (keys->out[7][0] - 0.5f) < 1.0e-3f && std::abs (pitch[47000] - 9.0f / 12.0f) < 1.0e-4f, "the mod wheel comes out of its own jack, and the wheel back at rest is no bend");
     }
 
     // 51. A pattern as MIDI notes is exactly what the unit plays
@@ -1499,6 +1514,30 @@ int main()
         for (auto& nt : chords.notes) { if (nt.start != lastStart) { ++slotsSeen; lastStart = nt.start; } lengths = lengths && nt.len >= 16; }
         CHECK (chords.steps == rack.timeline.total && slotsSeen == rack.timeline.slots.size() && lengths, "the chords come out as held chords for the whole song");
         CHECK (! canExportMidi (*rack.boards[0]->modules[0]), "units with no pattern offer no MIDI");
+    }
+
+    // 52. One drag cables a stereo pair
+    {
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("empty", 48000));
+        auto& b = *rack.boards[0];
+        auto* out = b.modules[0].get();
+        auto* hall = rack.addModule (b, "hall", 0, 0);
+        auto* chorus = rack.addModule (b, "chorus", 0, 0);
+        auto* osc = rack.addModule (b, "osc", 0, 0);
+        auto has = [&b] (int s, int sp, int d, int dp) { for (auto& c : b.cables) if (c.src == s && c.srcPort == sp && c.dst == d && c.dstPort == dp) return true; return false; };
+        rack.connectStereo (b, hall->uid, hall->outIndex ("outl"), out->uid, out->inIndex ("left"));
+        CHECK (has (hall->uid, hall->outIndex ("outl"), out->uid, 0) && has (hall->uid, hall->outIndex ("outr"), out->uid, 1), "Out L into the Output's left brings Out R into its right");
+        rack.connectStereo (b, chorus->uid, chorus->outIndex ("outl"), hall->uid, hall->inIndex ("inl"));
+        CHECK (has (chorus->uid, chorus->outIndex ("outr"), hall->uid, hall->inIndex ("inr")), "the same between two stereo effects");
+        const size_t before = b.cables.size();
+        rack.connectStereo (b, osc->uid, 0, chorus->uid, chorus->inIndex ("in"));
+        CHECK (b.cables.size() == before + 1, "a mono cable stays one cable");
+        rack.disconnect (b, hall->uid, hall->outIndex ("outl"), out->uid, 0);
+        rack.connectStereo (b, chorus->uid, chorus->outIndex ("outl"), out->uid, 0);
+        CHECK (! has (chorus->uid, chorus->outIndex ("outr"), out->uid, 1), "a right input that already has a plug in it is left alone");
+        rack.connectStereo (b, hall->uid, hall->outIndex ("outr"), out->uid, 1);
+        CHECK (allFinite (render (rack, 1).l), "plugging a right jack on its own is just one cable");
     }
 
     if (failures == 0) std::printf ("All passed\n");

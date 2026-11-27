@@ -149,28 +149,53 @@ struct Timeline
 };
 
 // Notes from a MIDI keyboard, or from a MIDI track in the host. The MIDI keyboard unit reads them.
-struct KeyEvent { int sample = 0; unsigned char note = 60, vel = 100, channel = 1; bool on = true; };   // channel 1 to 16
+// kind: 0 a key, 1 pitch bend (value -1..1), 2 mod wheel (value 0..1), 3 sustain pedal (on = down)
+struct KeyEvent { int sample = 0; unsigned char note = 60, vel = 100, channel = 1; bool on = true; int kind = 0; float value = 0; };   // channel 1 to 16
 struct MidiIn { const KeyEvent* events = nullptr; int count = 0; };      // in time order
 struct Keys
 {
-    struct Held { unsigned char note, vel, channel; uint32_t order; };
+    struct Held { unsigned char note, vel, channel; uint32_t order; bool down; };   // down = false: let go, but held by the pedal
     static constexpr int kMax = 32;
     Held held[kMax] {};
     int count = 0;
     uint32_t serial = 0;                  // goes up with every key pressed
-    void off (int note, int channel)
+    float bend = 0, mod = 0;              // pitch bend -1..1, mod wheel 0..1
+    bool pedal = false;                   // the sustain pedal
+    void remove (int note, int channel)
     {
         int w = 0;
         for (int i = 0; i < count; ++i) if (! (held[i].note == note && held[i].channel == channel)) held[w++] = held[i];
         count = w;
     }
+    // A key let go while the pedal is down keeps sounding until the pedal comes up
+    void off (int note, int channel)
+    {
+        if (! pedal) { remove (note, channel); return; }
+        for (int i = 0; i < count; ++i) if (held[i].note == note && held[i].channel == channel) held[i].down = false;
+    }
+    void setPedal (bool down)
+    {
+        pedal = down;
+        if (down) return;
+        int w = 0;
+        for (int i = 0; i < count; ++i) if (held[i].down) held[w++] = held[i];
+        count = w;
+    }
     void on (int note, int vel, int channel)
     {
-        off (note, channel);
+        remove (note, channel);
         if (count == kMax) { for (int i = 1; i < count; ++i) held[i - 1] = held[i]; --count; }      // the oldest gives way
-        held[count++] = { (unsigned char) note, (unsigned char) std::max (1, vel), (unsigned char) channel, ++serial };
+        held[count++] = { (unsigned char) note, (unsigned char) std::max (1, vel), (unsigned char) channel, ++serial, true };
     }
-    void apply (const KeyEvent& e) { if (e.on && e.vel > 0) on (e.note, e.vel, e.channel); else if (e.note == 255) count = 0; else off (e.note, e.channel); }
+    void apply (const KeyEvent& e)
+    {
+        if (e.kind == 1) bend = std::min (1.0f, std::max (-1.0f, e.value));
+        else if (e.kind == 2) mod = std::min (1.0f, std::max (0.0f, e.value));
+        else if (e.kind == 3) setPedal (e.on);
+        else if (e.on && e.vel > 0) on (e.note, e.vel, e.channel);
+        else if (e.note == 255) { count = 0; pedal = false; }
+        else off (e.note, e.channel);
+    }
 };
 
 // Two shared buses, A and B: Send units on any tab add to them, Return units play them
@@ -809,6 +834,26 @@ struct Rack
     Module* addModule (Board& b, const std::string& type, float x, float y) { Hold h (lock); return b.add (type, x, y, sr); }
     void removeModule (Board& b, int uid) { Hold h (lock); b.remove (uid); }
     bool connect (Board& b, int s, int sp, int d, int dp) { Hold h (lock); return b.connect (s, sp, d, dp); }
+    // The right-hand partner of a left-hand jack ("outl" and "outr", "inl" and "inr", "left" and "right"), or -1
+    static int rightOf (const std::vector<Port>& ports, int index)
+    {
+        if (index < 0 || index + 1 >= (int) ports.size()) return -1;
+        const std::string a = ports[(size_t) index].id, b = ports[(size_t) index + 1].id;
+        if (a == "left" && b == "right") return index + 1;
+        if (a.size() > 1 && a.back() == 'l' && b == a.substr (0, a.size() - 1) + "r") return index + 1;
+        return -1;
+    }
+    // A cable from the screen. Joining a left output to a left input brings the right side along too, when
+    // both units have one and nothing is plugged into that right input yet: one drag cables a stereo pair.
+    bool connectStereo (Board& b, int s, int sp, int d, int dp)
+    {
+        Hold h (lock);
+        if (! b.connect (s, sp, d, dp)) return false;
+        auto* a = b.find (s); auto* c = b.find (d);
+        const int sr2 = rightOf (a->info->outs, sp), dr2 = rightOf (c->info->ins, dp);
+        if (sr2 >= 0 && dr2 >= 0 && ! c->inOn[(size_t) dr2]) b.connect (s, sr2, d, dr2);
+        return true;
+    }
     void disconnect (Board& b, int s, int sp, int d, int dp) { Hold h (lock); b.disconnect (s, sp, d, dp); }
     void disconnectAll (Board& b, int uid) { Hold h (lock); b.disconnectAll (uid); }
 

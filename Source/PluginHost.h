@@ -69,6 +69,8 @@ private:
     bool posPlaying = false;
     std::shared_ptr<bool> alive;
     std::atomic<int> target[kKnobs], touched { -1 };
+    int heldNotes[16] {}, heldCount = 0;               // notes the plugin is sending out right now
+    float noteOut[4] { 0, 0, 0, 0 }; bool gateWas = false;
     float sent[kKnobs] { -1, -1, -1, -1 };             // what each knob last told the plugin (-1 = nothing yet)
     juce::StringArray knobIds;                         // the plugin's own ids for those controls: what is saved
 };

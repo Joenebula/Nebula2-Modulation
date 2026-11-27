@@ -56,6 +56,11 @@ public:
     // A sequencer's pattern, or the chords, as a MIDI file to drag into the host. Returns the file written.
     juce::File writeMidi (const n2m::Module&, const juce::String& name);
 
+    // One tab on its own as an audio file (WAV), to drag into the host: the whole chord progression once through,
+    // from bar 1, at the current tempo, without the master fader. Other tabs are silent but still run, so a
+    // shared-effects tab is rendered with what feeds it. bars = 0: as long as the chords (4 to 64 bars).
+    juce::File renderTab (int tab, int bars = 0);
+
     // Your own plugins as ready-made sounds: a new tab with the plugin already in a slot and cabled.
     // An instrument goes straight to the Output; an effect is fed by send bus A. Either way a MIDI keyboard unit
     // is cabled in, so keys or a MIDI track reach the plugin. If the plugin isn't on this computer the tab is

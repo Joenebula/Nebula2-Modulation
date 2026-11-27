@@ -922,7 +922,7 @@ juce::Rectangle<int> ModuleComp::linkArea() const
 
 juce::Rectangle<int> ModuleComp::midiArea() const
 {
-    if (! canExportMidi (module)) return {};
+    if (! canExportMidi (module) && std::string (module.info->type) != "output") return {};
     const int nameW = juce::GlyphArrangement::getStringWidthInt (font (11.5f, Weight::SemiBold), module.info->name);
     const auto la = linkArea();
     const int x = la.isEmpty() ? 23 + nameW + 10 : la.getRight() + 6;
@@ -1004,7 +1004,7 @@ void ModuleComp::paint (juce::Graphics& g)
         g.fillRoundedRectangle (ma.toFloat(), 4.0f);
         g.setFont (font (9.0f, Weight::SemiBold, 0.4f));
         g.setColour (n7);
-        g.drawText ("DRAG MIDI", ma, juce::Justification::centred, false);
+        g.drawText (std::string (module.info->type) == "output" ? "DRAG AUDIO" : "DRAG MIDI", ma, juce::Justification::centred, false);
     }
 
     const int jy = getHeight() - lay::pad - lay::jackH;
@@ -1080,7 +1080,13 @@ void ModuleComp::mouseDrag (const juce::MouseEvent& e)
         // Pulled off the label: hand the host a MIDI file of this pattern
         if (e.getDistanceFromDragStart() < 6) return;
         midiDrag = false;
-        const auto file = proc.writeMidi (module, juce::String (board.name) + " " + module.info->name);
+        juce::File file;
+        if (std::string (module.info->type) == "output")
+        {
+            // The Output's label hands over this whole sound as audio
+            for (int i = 0; i < (int) proc.rack.boards.size(); ++i) if (proc.rack.boards[(size_t) i].get() == &board) file = proc.renderTab (i);
+        }
+        else file = proc.writeMidi (module, juce::String (board.name) + " " + module.info->name);
         if (file != juce::File()) juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this);
         return;
     }
@@ -1248,8 +1254,8 @@ void BoardView::endCable (juce::Point<int> at)
     ModuleComp* comp = nullptr; bool isOut = false; int port = 0;
     if (findJack (at, comp, isOut, port) && isOut != drag.fromOut && comp->module.uid != drag.uid)
     {
-        if (drag.fromOut) proc.rack.connect (*board, drag.uid, drag.port, comp->module.uid, port);
-        else proc.rack.connect (*board, comp->module.uid, port, drag.uid, drag.port);
+        if (drag.fromOut) proc.rack.connectStereo (*board, drag.uid, drag.port, comp->module.uid, port);
+        else proc.rack.connectStereo (*board, comp->module.uid, port, drag.uid, drag.port);
     }
     drag.active = false;
     settled();

@@ -99,7 +99,7 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [ ] Pointing a knob isn't undoable, and Nexus / HALion controls can only be tried on Joe's PC
 - [x] Notes out of a hosted plugin (v0.1.14): a slot has Note 1 to 4 and Gate outputs carrying whatever notes the plugin sends out, so Nebula2 Chord in a slot can play an oscillator or another slot. Tested with Nebula2 Chord
 - [ ] Latency of hosted plugins isn't compensated yet
-- [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% when the desk is opened with More; orange from 40%
+- [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% when the desk is opened with More; orange from 40%. A Total load figure by the master adds them up (v0.1.20); orange from 70%
 
 This is the stage that can only be checked on Joe's PC in Cubase with his own plugins.
 

@@ -1846,6 +1846,17 @@ void MixerStrip::paint (juce::Graphics& g)
     g.setFont (font (10.0f));
     g.setColour (n7);
     g.drawText (juce::String ((int) std::lround (proc.rack.master.load() * 100)) + "%", m.getX() + 66, m.getBottom() - 24, 42, 12, juce::Justification::centred, false);
+    if (proc.mixerTall.load())
+    {
+        // Every sound's load added up: what the whole plugin is using
+        float sum = 0;
+        for (auto& b : proc.rack.boards) sum += b->load.load();
+        const int total = (int) std::lround (sum * 100.0f);
+        caption (g, "Total", { m.getX() + 60, m.getY() + 36, 50, 12 }, juce::Justification::centred);
+        g.setFont (font (8.5f, Weight::Medium, 0.3f));
+        g.setColour (total >= 70 ? bandOrange : n7);
+        g.drawText ("LOAD " + juce::String (juce::jmin (999, total)) + "%", m.getX() + 56, m.getY() + 51, 58, 11, juce::Justification::centred, false);
+    }
 }
 
 void MixerStrip::mouseDown (const juce::MouseEvent& e)

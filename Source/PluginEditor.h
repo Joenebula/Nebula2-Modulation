@@ -238,6 +238,7 @@ public:
     void tick();
     void repaintAll();
     float fitZoom() const;       // the zoom at which everything is in view
+    int headNow() const;         // how tall the name strip above each sound is, before zoom
     float zoomNow() const;       // the zoom in use: the chosen one, or the fit
     juce::Rectangle<int> areaOf (int tab) const;      // in this component, before zoom
     BoardView* viewOf (int tab) const { return tab >= 0 && tab < views.size() ? views[tab] : nullptr; }

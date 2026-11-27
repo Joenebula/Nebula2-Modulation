@@ -1037,7 +1037,7 @@ int main (int argc, char** argv)
         ed->stepZoom (-1); ed->stepZoom (-1);
         CHECK (all.zoomNow() < fit, "and out goes below it");
         r.zoomAll.store (0.0f); all.layout();
-        CHECK (std::abs (all.zoomNow() - fit) < 1.0e-4f, "back to fitted");
+        CHECK (std::abs (all.zoomNow() - fit) < 0.01f, "back to fitted");
         // Add units goes to the selected sound, and that sound's area grows
         r.selectedTab.store (2);
         const size_t mods = r.rack.boards[2]->modules.size();

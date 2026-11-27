@@ -6,25 +6,63 @@
 namespace n2m
 {
 // ---- Sizes of a module on screen (shared by the screen and by Tidy) ----
+// Every module is a rack panel of the same height, like hardware: only the width differs. Knobs sit in a grid
+// in the middle, as big as the room allows; jacks sit in a strip along the bottom.
 namespace lay
 {
-constexpr int cell = 54, cellH = 62, header = 26, jackW = 40, jackH = 44, pad = 8;
+constexpr int panelH = 244, header = 22, pad = 8, foot = 12;
+constexpr int cell = 48, cellMinH = 52, cellMaxH = 84, jackW = 34, jackH = 36;
 constexpr int drumSeqH = 62, noteSeqH = 118, seqW = 16 * 20;
-constexpr int chordW = 8 * 60, chordTileH = 28, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
+constexpr int chordW = 8 * 60, chordTileH = 22, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
 constexpr int hostW = 360, hostSeqH = 58, sampleSeqH = 86, scopeSeqH = 112;
 inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note || i.seq == Seq::Value ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : i.seq == Seq::Sample ? sampleSeqH : i.seq == Seq::Scope ? scopeSeqH : 0; }
 inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq != Seq::None ? seqW : 0; }
-constexpr int perRow = 5;
-inline int rowLen (const Info& i) { return i.perRow > 0 ? i.perRow : perRow; }
-inline int cols (const Info& i) { return (int) std::min<size_t> ((size_t) rowLen (i), i.params.size()); }
-inline int rows (const Info& i) { return (int) ((i.params.size() + (size_t) rowLen (i) - 1) / (size_t) rowLen (i)); }
-inline int width (const Info& i)
+
+// Where everything on a panel goes
+struct Geo
 {
-    const int jacks = (int) (i.ins.size() + i.outs.size());
-    const int least = std::string (i.type) == "output" ? 140 : 96;      // the Output has room for its DRAG AUDIO label
-    return std::max ({ cols (i) * cell, jacks * jackW, seqWidth (i), least }) + 2 * pad;
+    int w = 0, h = panelH;
+    int cols = 1, rows = 0, cellW = cell, cellH = cellMinH, knobsX = pad, knobsY = header;   // the knob grid
+    int jackCols = 1, jackRows = 1, jacksY = 0;                                              // the jack strip
+};
+inline Geo geo (const Info& i)
+{
+    const int nKnobs = (int) i.params.size(), nJacks = (int) (i.ins.size() + i.outs.size());
+    const int seqH = seqHeight (i);
+    // wide enough for its name in the header (sequencers and the like are wider than their names anyway)
+    const int nameW = std::min (118, (int) std::char_traits<char>::length (i.name) * 7 + 22);
+    Geo best;
+    for (int cols = 1; cols <= std::max (1, nKnobs); ++cols)
+    {
+        Geo g;
+        const int inner = std::max ({ cols * cell, seqWidth (i), nameW, std::min (3, std::max (2, nJacks)) * jackW });   // up to three jacks always share a row
+        g.cols = nKnobs == 0 ? 1 : std::max (cols, std::min (nKnobs, inner / cell));
+        if (i.perRow > 0 && i.perRow * cell <= inner) g.cols = std::min (g.cols, i.perRow);      // a unit that wants its knobs in rows of so many
+        g.rows = nKnobs == 0 ? 0 : (nKnobs + g.cols - 1) / g.cols;
+        // jacks: one row if they all fit; otherwise the inputs get their own rows above the outputs
+        const int nIn = (int) i.ins.size(), nOut = (int) i.outs.size(), perRow = std::max (1, inner / jackW);
+        g.jackCols = std::max (1, std::min (std::max (1, nJacks), perRow));
+        g.jackRows = nJacks == 0 ? 0 : nJacks <= perRow ? 1 : (nIn + perRow - 1) / perRow + (nOut + perRow - 1) / perRow;
+        g.w = inner + 2 * pad;
+        g.jacksY = panelH - foot - g.jackRows * jackH;
+        const int room = g.jacksY - header - seqH - 4;
+        best = g;
+        best.knobsY = header + seqH + 2;
+        if (g.rows == 0 || g.rows * cellMinH <= room)
+        {
+            best.cellH = g.rows == 0 ? cellMinH : std::min (cellMaxH, room / g.rows);
+            best.cellW = inner / g.cols;
+            best.knobsX = pad + (inner - best.cellW * g.cols) / 2;
+            best.knobsY = header + seqH + 2 + (room - best.cellH * g.rows) / 2;      // centred in the room there is
+            return best;
+        }
+    }
+    // More knobs than any width can fit at this height: as many columns as there are knobs, squeezed
+    best.cellH = cellMinH; best.cellW = cell;
+    return best;
 }
-inline int height (const Info& i) { return header + seqHeight (i) + rows (i) * cellH + jackH + pad; }
+inline int width (const Info& i) { return geo (i).w; }
+inline int height (const Info&) { return panelH; }
 }
 
 // ---- A pattern as a list of notes, for a MIDI file to drag into the host ----
@@ -98,8 +136,8 @@ inline NoteList notesOf (const Rack& rack, const Module& m)
     return out;
 }
 
-// Lines the modules up in signal order: rhythm and movers along the top, the sound path below,
-// left to right. Cables are not changed.
+// Lines the modules up like a rack: rhythm and movers in the top row, the sound path in the row below,
+// left to right in signal order, panels side by side. Cables are not changed.
 inline void tidy (Board& b)
 {
     const size_t n = b.modules.size();
@@ -113,32 +151,29 @@ inline void tidy (Board& b)
             if (a < 0 || d < 0 || isTop ((size_t) a) || isTop ((size_t) d)) continue;
             if (depth[(size_t) d] < depth[(size_t) a] + 1 && depth[(size_t) a] + 1 < (int) n) depth[(size_t) d] = depth[(size_t) a] + 1;
         }
-    int x = 24, topH = 0;
+    const int gapX = 6, gapY = 18, x0 = 16, y0 = 14;
+    int x = x0;
+    bool anyTop = false;
     for (size_t i = 0; i < n; ++i)
         if (isTop (i))
         {
             auto& m = *b.modules[i];
-            m.x = (float) x; m.y = 24.0f;
-            x += lay::width (*m.info) + 24;
-            topH = std::max (topH, lay::height (*m.info));
+            m.x = (float) x; m.y = (float) y0;
+            x += lay::width (*m.info) + gapX;
+            anyTop = true;
         }
-    const int y0 = 24 + (topH > 0 ? topH + 36 : 0);
+    const int y1 = y0 + (anyTop ? lay::panelH + gapY : 0);
     int maxDepth = 0;
     for (size_t i = 0; i < n; ++i) if (! isTop (i)) maxDepth = std::max (maxDepth, depth[i]);
-    x = 24;
+    x = x0;
     for (int d = 0; d <= maxDepth; ++d)
-    {
-        int y = y0, colW = 0;
         for (size_t i = 0; i < n; ++i)
             if (! isTop (i) && depth[i] == d)
             {
                 auto& m = *b.modules[i];
-                m.x = (float) x; m.y = (float) y;
-                y += lay::height (*m.info) + 20;
-                colW = std::max (colW, lay::width (*m.info));
+                m.x = (float) x; m.y = (float) y1;
+                x += lay::width (*m.info) + gapX;
             }
-        if (colW > 0) x += colW + 36;
-    }
 }
 
 // ---- Patterns ----

@@ -37,7 +37,7 @@ void N2MLook::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool
 //==============================================================================
 ParamCell::ParamCell (Nebula2ModulationProcessor& p, Module& m, int index) : proc (p), module (m), idx (index), param (m.info->params[(size_t) index])
 {
-    setSize (lay::cell, lay::cellH);
+    setSize (lay::cell, lay::cellMinH);
 }
 
 void ParamCell::setNorm (float n)
@@ -83,14 +83,14 @@ void ParamCell::linkMenu()
 void ParamCell::paint (juce::Graphics& g)
 {
     const float v = module.P (idx);
-    g.setFont (smallCaps());
-    g.setColour (n7);
-    g.drawText (juce::String (param.name).toUpperCase(), 0, 1, getWidth(), 11, juce::Justification::centred, false);
+    g.setFont (font (8.0f, Weight::Medium, 0.2f));
+    g.setColour (n8);
+    g.drawFittedText (juce::String (param.name).toUpperCase(), 0, 0, getWidth(), 11, juce::Justification::centred, 1, 0.6f);
 
     // A linked knob wears its group's letter
     if (const int group = module.paramLink[(size_t) idx]; group > 0)
     {
-        const auto badge = juce::Rectangle<float> ((float) getWidth() - 14.0f, 12.0f, 12.0f, 12.0f);
+        const auto badge = juce::Rectangle<float> ((float) getWidth() - 12.0f, 11.0f, 12.0f, 12.0f);
         g.setColour (groupColour (group));
         g.fillEllipse (badge);
         g.setFont (font (8.5f, Weight::SemiBold));
@@ -98,44 +98,56 @@ void ParamCell::paint (juce::Graphics& g)
         g.drawText (groupLetter (group), badge.toNearestInt(), juce::Justification::centred, false);
     }
 
+    const float W = (float) getWidth(), H = (float) getHeight();
     if (! param.choices.empty())
     {
-        const auto r = juce::Rectangle<float> (3.0f, 20.0f, (float) getWidth() - 6.0f, 24.0f);
-        raised (g, r, radiusControl, isMouseOver());
+        // A switch: a small display showing the choice
+        const auto r = juce::Rectangle<float> (2.0f, 13.0f + (H - 13.0f - 22.0f) * 0.5f - 1.0f, W - 4.0f, 22.0f);
+        g.setColour (juce::Colour (0xff0b0c10));
+        g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (accent.withAlpha (isMouseOver() ? 0.55f : 0.25f));
+        g.drawRoundedRectangle (r.reduced (0.5f), 3.0f, 1.0f);
         g.setFont (font (10.0f, Weight::Medium));
-        g.setColour (n8);
-        g.drawFittedText (paramText (param, v), r.toNearestInt().reduced (3, 0), juce::Justification::centred, 1, 0.8f);
+        g.setColour (accent.brighter (0.3f));
+        g.drawFittedText (paramText (param, v), r.toNearestInt().reduced (2, 0), juce::Justification::centred, 1, 0.7f);
         return;
     }
 
+    // The knob is as big as its cell allows: a lone knob on a panel is a big one
     const float norm = paramToNorm (param, v);
-    const juce::Point<float> c ((float) getWidth() * 0.5f, 31.0f);
-    const float D = 28.0f, a0 = -2.36f, a1 = 2.36f, va = a0 + norm * (a1 - a0);
+    const float D = juce::jlimit (18.0f, 46.0f, juce::jmin (W - 14.0f, H - 30.0f));
+    const juce::Point<float> c (W * 0.5f, 12.0f + (H - 12.0f - 12.0f) * 0.5f);
+    const float a0 = -2.36f, a1 = 2.36f, va = a0 + norm * (a1 - a0);
     const bool bipolar = param.lo < 0.0f && param.hi > 0.0f;
     const float mid = bipolar ? a0 + paramToNorm (param, 0.0f) * (a1 - a0) : a0;
-    for (int i = 0; i < 17; ++i)
+    // The arc round it: a dim track, lit from the rest position to where the knob is
+    const float ar = D * 0.5f + 3.5f;
+    juce::Path track; track.addCentredArc (c.x, c.y, ar, ar, 0.0f, a0, a1, true);
+    g.setColour (juce::Colours::white.withAlpha (isMouseOver() ? 0.16f : 0.09f));
+    g.strokePath (track, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    if (std::abs (va - mid) > 0.02f)
     {
-        const float a = a0 + (float) i / 16.0f * (a1 - a0);
-        const bool lit = std::abs (va - mid) > 0.02f && a >= std::min (mid, va) - 0.001f && a <= std::max (mid, va) + 0.001f;
-        g.setColour (lit ? (dragging ? accent.brighter (0.2f) : accent) : juce::Colours::white.withAlpha (isMouseOver() ? 0.18f : 0.10f));
-        g.drawLine ({ { c.x + 17.0f * std::sin (a), c.y - 17.0f * std::cos (a) }, { c.x + 19.5f * std::sin (a), c.y - 19.5f * std::cos (a) } }, 1.4f);
+        juce::Path lit; lit.addCentredArc (c.x, c.y, ar, ar, 0.0f, juce::jmin (mid, va), juce::jmax (mid, va), true);
+        g.setColour (dragging ? accent.brighter (0.2f) : accent);
+        g.strokePath (lit, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     const auto body = juce::Rectangle<float> (D, D).withCentre (c);
     juce::Path bp; bp.addEllipse (body);
-    shadow (g, bp, juce::Colours::black.withAlpha (0.55f), 0.4f * D, 0.06f * D, 0.14f * D);
-    g.setGradientFill (juce::ColourGradient (isMouseOver() ? knobHiHover : knobHi, body.getTopLeft(), knobLo, body.getBottomRight(), false));
+    shadow (g, bp, juce::Colours::black.withAlpha (0.6f), 0.3f * D, 0.0f, 0.12f * D);
+    g.setGradientFill (juce::ColourGradient (isMouseOver() ? juce::Colour (0xff4a4e5a) : juce::Colour (0xff3a3d48), body.getX(), body.getY(), juce::Colour (0xff15161b), body.getX(), body.getBottom(), false));
     g.fillPath (bp);
-    g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.10f), body.getTopLeft(), juce::Colours::black.withAlpha (0.35f), body.getBottomRight(), false));
-    g.strokePath (bp, juce::PathStrokeType (1.0f));
-    const juce::Point<float> dot (c.x + D * 0.31f * std::sin (va), c.y - D * 0.31f * std::cos (va));
-    g.setColour (juce::Colours::black.withAlpha (0.5f));
-    g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (dot));
-    g.setColour (accent.withAlpha (dragging ? 1.0f : 0.7f));
-    g.fillEllipse (juce::Rectangle<float> (3.0f, 3.0f).withCentre (dot));
+    g.setColour (juce::Colours::white.withAlpha (0.14f));
+    g.drawEllipse (body.reduced (0.5f), 1.0f);
+    // the cap, and a white pointer line like a hardware knob
+    const auto cap = body.reduced (D * 0.16f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c2f38), cap.getX(), cap.getY(), juce::Colour (0xff1d1f26), cap.getX(), cap.getBottom(), false));
+    g.fillEllipse (cap);
+    g.setColour (dragging ? accent : juce::Colours::white.withAlpha (0.92f));
+    g.drawLine ({ { c.x + D * 0.14f * std::sin (va), c.y - D * 0.14f * std::cos (va) }, { c.x + D * 0.46f * std::sin (va), c.y - D * 0.46f * std::cos (va) } }, juce::jmax (1.6f, D * 0.07f));
 
-    g.setFont (font (10.0f));
+    g.setFont (font (9.5f));
     g.setColour (n8);
-    g.drawText (minus (paramText (param, v)), -4, 49, getWidth() + 8, 12, juce::Justification::centred, false);
+    g.drawFittedText (minus (paramText (param, v)), -2, getHeight() - 12, getWidth() + 4, 12, juce::Justification::centred, 1, 0.75f);
 }
 
 void ParamCell::mouseDown (const juce::MouseEvent& e)
@@ -947,23 +959,39 @@ ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, M
         addAndMakeVisible (*seq);
         seq->setTopLeftPosition ((getWidth() - lay::seqW) / 2, lay::header);
     }
-    const int cols = lay::cols (info);
-    const int x0 = (getWidth() - cols * lay::cell) / 2, y0 = lay::header + lay::seqHeight (info);
+    const auto g = lay::geo (info);
     for (int i = 0; i < (int) info.params.size(); ++i)
     {
         auto* c = cells.add (new ParamCell (p, m, i));
         addAndMakeVisible (c);
-        c->setTopLeftPosition (x0 + (i % lay::rowLen (info)) * lay::cell, y0 + (i / lay::rowLen (info)) * lay::cellH);
+        // a last row with fewer knobs is centred
+        const int row = i / g.cols, inRow = juce::jmin (g.cols, (int) info.params.size() - row * g.cols);
+        const int rowX = g.knobsX + (g.cols - inRow) * g.cellW / 2;
+        c->setBounds (rowX + (i % g.cols) * g.cellW, g.knobsY + row * g.cellH, g.cellW, g.cellH);
     }
     setAlpha (m.live ? 1.0f : 0.45f);
 }
 
+// Jacks sit in a strip along the bottom. When they all fit in one row the inputs are on the left and the
+// outputs on the right; otherwise the inputs have their own rows above the outputs.
 juce::Point<int> ModuleComp::jackCentre (bool isOut, int port) const
 {
-    const int y = getHeight() - lay::pad - lay::jackH + 29;
-    if (! isOut) return { lay::pad + port * lay::jackW + lay::jackW / 2, y };
-    const int nOut = (int) module.info->outs.size();
-    return { getWidth() - lay::pad - (nOut - port) * lay::jackW + lay::jackW / 2, y };
+    const auto g = lay::geo (*module.info);
+    const int nIn = (int) module.info->ins.size(), nOut = (int) module.info->outs.size();
+    const int inner = getWidth() - 2 * lay::pad;
+    const int slot = juce::jmin (lay::jackW + 4, inner / juce::jmax (1, g.jackCols));
+    const int left = lay::pad + 2, right = getWidth() - lay::pad - 2;
+    int row = 0, col = port, count = isOut ? nOut : nIn;
+    if (g.jackRows > 1)
+    {
+        const int inRows = (nIn + g.jackCols - 1) / g.jackCols;
+        row = (isOut ? inRows : 0) + port / g.jackCols;
+        col = port % g.jackCols;
+        count = juce::jmin (g.jackCols, (isOut ? nOut : nIn) - (port / g.jackCols) * g.jackCols);
+    }
+    const int y = g.jacksY + row * lay::jackH + lay::jackH - 13;
+    if (isOut) return { right - (count - col) * slot + slot / 2, y };
+    return { left + col * slot + slot / 2, y };
 }
 
 static juce::String linkText (const Module& m)
@@ -975,18 +1003,20 @@ static juce::String linkText (const Module& m)
 juce::Rectangle<int> ModuleComp::linkArea() const
 {
     if (module.info->seq != Seq::Drum && module.info->seq != Seq::Note) return {};
-    const int nameW = juce::GlyphArrangement::getStringWidthInt (font (11.5f, Weight::SemiBold), module.info->name);
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (font (10.0f, Weight::SemiBold, 0.5f), juce::String (module.info->name).toUpperCase());
     const int w = juce::GlyphArrangement::getStringWidthInt (font (9.0f, Weight::SemiBold, 0.4f), linkText (module)) + 14;
-    return { 23 + nameW + 10, 5, w, 16 };
+    return { 20 + nameW + 10, 4, w, 15 };
 }
 
 juce::Rectangle<int> ModuleComp::midiArea() const
 {
     if (! canExportMidi (module) && std::string (module.info->type) != "output") return {};
-    const int nameW = juce::GlyphArrangement::getStringWidthInt (font (11.5f, Weight::SemiBold), module.info->name);
+    // The Output is a narrow panel: its label sits under the name, across the panel
+    if (std::string (module.info->type) == "output") return { lay::pad, lay::header + 2, getWidth() - 2 * lay::pad, 15 };
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (font (10.0f, Weight::SemiBold, 0.5f), juce::String (module.info->name).toUpperCase());
     const auto la = linkArea();
-    const int x = la.isEmpty() ? 23 + nameW + 10 : la.getRight() + 6;
-    return { x, 5, 66, 16 };
+    const int x = la.isEmpty() ? 20 + nameW + 10 : la.getRight() + 6;
+    return { x, 4, 62, 15 };
 }
 
 // A sequencer's Link label: put its pattern in a group. Sequencers in the same group, on any tab, share
@@ -1038,21 +1068,71 @@ bool ModuleComp::jackAt (juce::Point<int> p, bool& isOut, int& port) const
     {
         const int n = (int) (pass == 0 ? module.info->ins.size() : module.info->outs.size());
         for (int i = 0; i < n; ++i)
-            if (jackCentre (pass == 1, i).getDistanceFrom (p) <= 14) { isOut = pass == 1; port = i; return true; }
+            if (jackCentre (pass == 1, i).getDistanceFrom (p) <= 13) { isOut = pass == 1; port = i; return true; }
     }
     return false;
 }
 
+// The colour a kind of unit wears on its panel, so a rack reads by function at a glance
+static juce::Colour shelfColour (const Info& info)
+{
+    const std::string s = info.shelf;
+    if (s == "Sources") return bandMint;
+    if (s == "Shapers") return bandYellow;
+    if (s == "Filters") return bandBlue;
+    if (s == "EQ") return bandGreen;
+    if (s == "Dynamics" || s == "Distortion") return bandOrange;
+    if (s == "Reverb" || s == "Delay and echo") return bandPurple;
+    if (s == "Movement" || s == "Pitch and width") return bandMagenta;
+    if (s == "Movers") return bandPink;
+    if (s == "Notes and rhythm") return accent;
+    return n7;
+}
+
+// A rack panel: a metal faceplate with a screw in each corner, the name printed across the top, a screen for
+// units that have one, and a darker strip along the bottom holding the jacks.
 void ModuleComp::paint (juce::Graphics& g)
 {
+    const auto& info = *module.info;
+    const auto geo = lay::geo (info);
     const auto r = getLocalBounds().toFloat().reduced (1.0f);
     const auto col = boardColour (board.colour);
-    raised (g, r, radiusCard);
-    g.setColour (col.withAlpha (0.85f));
-    g.fillEllipse (11.0f, 10.0f, 6.0f, 6.0f);
-    g.setFont (font (11.5f, Weight::SemiBold));
-    g.setColour (n8);
-    g.drawText (module.info->name, 23, 0, getWidth() - 30, lay::header, juce::Justification::centredLeft, true);
+    const auto tone = shelfColour (info);
+    const std::string shelf = info.shelf;
+    const bool black = shelf == "Filters" || shelf == "Notes and rhythm" || shelf == "Dynamics" || std::string (info.type) == "output";
+
+    // the plate
+    juce::Path plate; plate.addRoundedRectangle (r, 4.0f);
+    shadow (g, plate, juce::Colours::black.withAlpha (0.5f), 8.0f, 0.0f, 3.0f);
+    g.setGradientFill (juce::ColourGradient (black ? juce::Colour (0xff17181d) : juce::Colour (0xff2b2e38), 0.0f, r.getY(), black ? juce::Colour (0xff0e0f13) : juce::Colour (0xff1d1f27), 0.0f, r.getBottom(), false));
+    g.fillPath (plate);
+    g.setColour (tone.withAlpha (0.035f));
+    g.fillPath (plate);
+    g.setColour (juce::Colours::white.withAlpha (0.10f));                       // a lit top edge, a dark rim
+    g.fillRect (r.getX() + 4.0f, r.getY() + 0.5f, r.getWidth() - 8.0f, 1.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.55f));
+    g.strokePath (plate, juce::PathStrokeType (1.0f));
+
+    // screws
+    for (int k = 0; k < 4; ++k)
+    {
+        const juce::Point<float> c (k % 2 == 0 ? r.getX() + 6.5f : r.getRight() - 6.5f, k < 2 ? r.getY() + 6.5f : r.getBottom() - 6.5f);
+        g.setColour (juce::Colour (0xff0a0b0e));
+        g.fillEllipse (juce::Rectangle<float> (5.6f, 5.6f).withCentre (c));
+        g.setColour (juce::Colours::white.withAlpha (0.22f));
+        g.drawEllipse (juce::Rectangle<float> (5.6f, 5.6f).withCentre (c), 0.7f);
+        g.drawLine (c.x - 1.6f, c.y + (k % 2 == 0 ? 1.0f : -1.0f), c.x + 1.6f, c.y - (k % 2 == 0 ? 1.0f : -1.0f), 0.8f);
+    }
+
+    // the name, printed on the plate, over a line in the colour of its kind
+    g.setFont (font (10.0f, Weight::SemiBold, 0.5f));
+    g.setColour (juce::Colours::white.withAlpha (0.92f));
+    const bool labels = ! linkArea().isEmpty() || (! midiArea().isEmpty() && std::string (info.type) != "output");
+    g.drawFittedText (juce::String (info.name).toUpperCase(), labels ? 20 : 12, 2, getWidth() - (labels ? 28 : 24), lay::header - 5,
+                      labels ? juce::Justification::centredLeft : juce::Justification::centred, 1, 0.7f);
+    g.setColour (tone.withAlpha (0.85f));
+    g.fillRoundedRectangle (r.getX() + 12.0f, (float) lay::header - 3.0f, r.getWidth() - 24.0f, 1.6f, 0.8f);
+
     if (const auto la = linkArea(); ! la.isEmpty())
     {
         const bool on = module.patternLink > 0;
@@ -1060,44 +1140,69 @@ void ModuleComp::paint (juce::Graphics& g)
         g.setColour (on ? lc.withAlpha (0.9f) : n4);
         g.fillRoundedRectangle (la.toFloat(), 4.0f);
         g.setFont (font (9.0f, Weight::SemiBold, 0.4f));
-        g.setColour (on ? n0 : n7);
+        g.setColour (on ? n0 : n8);
         g.drawText (linkText (module), la, juce::Justification::centred, false);
     }
     if (const auto ma = midiArea(); ! ma.isEmpty())
     {
         g.setColour (n4);
         g.fillRoundedRectangle (ma.toFloat(), 4.0f);
-        g.setFont (font (9.0f, Weight::SemiBold, 0.4f));
-        g.setColour (n7);
-        g.drawText (std::string (module.info->type) == "output" ? "DRAG AUDIO" : "DRAG MIDI", ma, juce::Justification::centred, false);
+        g.setFont (font (8.5f, Weight::SemiBold, 0.3f));
+        g.setColour (n8);
+        g.drawFittedText (std::string (info.type) == "output" ? "DRAG AUDIO" : "DRAG MIDI", ma.reduced (2, 0), juce::Justification::centred, 1, 0.7f);
     }
 
-    const int jy = getHeight() - lay::pad - lay::jackH;
-    dividerH (g, lay::pad, getWidth() - lay::pad, jy - 2);
+    // a screen behind the pattern, the chords, the wave: black glass with a faint glow
+    if (const int sh = lay::seqHeight (info); sh > 0)
+    {
+        const auto screen = juce::Rectangle<float> ((float) lay::pad - 4.0f, (float) lay::header - 0.5f, (float) getWidth() - 2.0f * (float) lay::pad + 8.0f, (float) sh + 3.0f);
+        g.setColour (juce::Colour (0xff07080b));
+        g.fillRoundedRectangle (screen, 4.0f);
+        g.setColour (tone.withAlpha (0.22f));
+        g.drawRoundedRectangle (screen.reduced (0.5f), 4.0f, 1.0f);
+    }
+
+    // the jack strip
+    const int nIn = (int) info.ins.size(), nOut = (int) info.outs.size();
+    if (nIn + nOut > 0)
+    {
+        const auto strip = juce::Rectangle<float> (r.getX() + 4.0f, (float) geo.jacksY - 1.0f, r.getWidth() - 8.0f, (float) (geo.jackRows * lay::jackH) + 2.0f);
+        g.setColour (juce::Colours::black.withAlpha (black ? 0.45f : 0.32f));
+        g.fillRoundedRectangle (strip, 4.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        g.drawRoundedRectangle (strip.reduced (0.5f), 4.0f, 1.0f);
+    }
     for (int pass = 0; pass < 2; ++pass)
     {
-        const auto& ports = pass == 0 ? module.info->ins : module.info->outs;
+        const auto& ports = pass == 0 ? info.ins : info.outs;
         for (int i = 0; i < (int) ports.size(); ++i)
         {
             const auto c = jackCentre (pass == 1, i).toFloat();
-            g.setFont (font (8.5f, Weight::Medium, 0.3f));
-            g.setColour (pass == 1 ? n8 : n7);
-            g.drawText (juce::String (ports[(size_t) i].name).toUpperCase(), (int) c.x - lay::jackW / 2 - 4, jy + 4, lay::jackW + 8, 10, juce::Justification::centred, false);
-            juce::Path ring; ring.addEllipse (juce::Rectangle<float> (20.0f, 20.0f).withCentre (c));
-            sunken (g, ring, 20.0f);
+            // An output sits on a light pad, as on hardware, so ins and outs can be told apart at a glance
+            if (pass == 1)
+            {
+                g.setColour (juce::Colours::white.withAlpha (0.13f));
+                g.fillRoundedRectangle (c.x - 14.0f, c.y - 22.0f, 28.0f, 34.0f, 4.0f);
+            }
+            g.setFont (font (7.5f, Weight::SemiBold, 0.2f));
+            g.setColour (pass == 1 ? juce::Colours::white : n8);
+            g.drawFittedText (juce::String (ports[(size_t) i].name).toUpperCase(), (int) c.x - lay::jackW / 2, (int) c.y - 22, lay::jackW, 10, juce::Justification::centred, 1, 0.6f);
             // While a cable is being dragged, every jack it could go into lights up
             if (owner.couldTake (module.uid, pass == 1))
             {
                 g.setColour (accent.withAlpha (0.22f));
-                g.fillEllipse (juce::Rectangle<float> (30.0f, 30.0f).withCentre (c));
+                g.fillEllipse (juce::Rectangle<float> (28.0f, 28.0f).withCentre (c));
                 g.setColour (accent);
                 g.drawEllipse (juce::Rectangle<float> (22.0f, 22.0f).withCentre (c), 1.6f);
             }
-            // Outputs carry a ring in the sound's colour; inputs are plain
-            g.setColour (pass == 1 ? col.withAlpha (0.9f) : n6);
-            g.drawEllipse (juce::Rectangle<float> (15.0f, 15.0f).withCentre (c), 1.6f);
-            g.setColour (juce::Colours::black.withAlpha (0.85f));
-            g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (c));
+            // the nut: silver, with a ring in the sound's colour on outputs, and the hole
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xffb9bec9), c.x, c.y - 9.0f, juce::Colour (0xff5d616c), c.x, c.y + 9.0f, false));
+            g.fillEllipse (juce::Rectangle<float> (18.0f, 18.0f).withCentre (c));
+            g.setColour (juce::Colours::black.withAlpha (0.6f));
+            g.drawEllipse (juce::Rectangle<float> (18.0f, 18.0f).withCentre (c), 1.0f);
+            if (pass == 1) { g.setColour (col); g.drawEllipse (juce::Rectangle<float> (13.0f, 13.0f).withCentre (c), 1.8f); }
+            g.setColour (juce::Colour (0xff050608));
+            g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f).withCentre (c));
         }
     }
 }
@@ -1105,9 +1210,9 @@ void ModuleComp::paint (juce::Graphics& g)
 void ModuleComp::paintOverChildren (juce::Graphics& g)
 {
     if (module.live) return;
-    g.setFont (font (9.0f, Weight::Medium, 0.3f));
+    g.setFont (font (7.5f, Weight::SemiBold, 0.3f));
     g.setColour (bandOrange);
-    g.drawText ("NOT CONNECTED", 0, 0, getWidth() - 10, lay::header, juce::Justification::centredRight, false);
+    g.drawFittedText ("NOT CONNECTED", 12, getHeight() - lay::foot, getWidth() - 24, lay::foot - 2, juce::Justification::centred, 1, 0.6f);
 }
 
 void ModuleComp::mouseDown (const juce::MouseEvent& e)
@@ -1226,8 +1331,9 @@ void BoardView::fitToContent()
     if (auto* vp = findParentComponentOfClass<juce::Viewport>())
     {
         // Leave room for the scroll bars, so one appearing doesn't summon the other
-        w = juce::jmax (w, (int) std::ceil ((float) (vp->getWidth() - vp->getScrollBarThickness()) / zoom));
-        h = juce::jmax (h, (int) std::ceil ((float) (vp->getHeight() - vp->getScrollBarThickness()) / zoom));
+        // (and always more than a windowful, so there is somewhere to scroll to and put new units)
+        w = juce::jmax (w, (int) std::ceil ((float) (vp->getWidth() - vp->getScrollBarThickness()) / zoom) + 260);
+        h = juce::jmax (h, (int) std::ceil ((float) (vp->getHeight() - vp->getScrollBarThickness()) / zoom) + 160);
     }
     setSize (w, h);
     // Zoom: the board is drawn scaled inside a holder that is the scaled size, so scrolling covers all of it
@@ -1267,12 +1373,16 @@ void BoardView::drawCable (juce::Graphics& g, juce::Point<float> a, juce::Point<
     juce::Path p;
     p.startNewSubPath (a);
     p.cubicTo (a.x, a.y + sag, b.x, b.y + sag, b.x, b.y);
-    g.setColour (juce::Colours::black.withAlpha (ghost ? 0.15f : 0.3f));
-    g.strokePath (p, juce::PathStrokeType (4.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour (col.withAlpha (ghost ? 0.45f : 0.8f));
-    g.strokePath (p, juce::PathStrokeType (2.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f).withCentre (a));
-    g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f).withCentre (b));
+    g.setColour (juce::Colours::black.withAlpha (ghost ? 0.10f : 0.22f));
+    g.strokePath (p, juce::PathStrokeType (4.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (col.withAlpha (ghost ? 0.35f : 0.62f));
+    g.strokePath (p, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (col.withAlpha (ghost ? 0.45f : 0.95f));
+    g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre (a));
+    g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre (b));
+    g.setColour (juce::Colours::black.withAlpha (ghost ? 0.2f : 0.45f));
+    g.fillEllipse (juce::Rectangle<float> (4.0f, 4.0f).withCentre (a));
+    g.fillEllipse (juce::Rectangle<float> (4.0f, 4.0f).withCentre (b));
 }
 
 void BoardView::paintOverChildren (juce::Graphics& g)
@@ -1565,10 +1675,11 @@ void AllView::layout()
     const float vh = vp != nullptr ? (float) juce::jmax (120, vp->getHeight() - vp->getScrollBarThickness()) : 500.0f;
     auto place = [this] (int rowW, std::vector<juce::Rectangle<int>>* out)
     {
+        const int head = headNow();
         int x = margin, y = margin, rowH = 0, right = 0;
         for (auto* v : views)
         {
-            const int w = v->getWidth(), h = v->getHeight() + headerH;
+            const int w = v->getWidth(), h = v->getHeight() + head;
             if (x > margin && x + w > rowW) { x = margin; y += rowH + gap; rowH = 0; }
             if (out != nullptr) out->push_back ({ x, y, w, h });
             x += w + gap; rowH = juce::jmax (rowH, h); right = juce::jmax (right, x - gap);
@@ -1577,6 +1688,7 @@ void AllView::layout()
     };
     int widest = 0, sum = margin * 2;
     for (auto* v : views) { widest = juce::jmax (widest, v->getWidth()); sum += v->getWidth() + gap; }
+    fitScale = 0.4f;             // a starting guess, the same every time, so the same boards always lay out the same way
     int bestW = widest + margin * 2; float bestFit = 0.0f;
     for (int w = widest + margin * 2; w <= sum + widest; w += 60)
     {
@@ -1586,9 +1698,17 @@ void AllView::layout()
     }
     areas.clear();
     auto size = place (bestW, &areas);
-    for (int i = 0; i < views.size(); ++i) views[i]->setTopLeftPosition (areas[(size_t) i].getX(), areas[(size_t) i].getY() + headerH);
-    const float fit = juce::jlimit (0.1f, 1.0f, juce::jmin (vw / (float) juce::jmax (1, size.x), vh / (float) juce::jmax (1, size.y)));
-    fitScale = fit;
+    // The name strips are sized to stay readable at the zoom, and the zoom that fits depends on them:
+    // go round a few times, which settles it
+    for (int pass = 0; pass < 4; ++pass)
+    {
+        areas.clear();
+        size = place (bestW, &areas);
+        fitScale = juce::jlimit (0.1f, 1.0f, juce::jmin (vw / (float) juce::jmax (1, size.x), vh / (float) juce::jmax (1, size.y)));
+    }
+    areas.clear();
+    size = place (bestW, &areas);
+    for (int i = 0; i < views.size(); ++i) views[i]->setTopLeftPosition (areas[(size_t) i].getX(), areas[(size_t) i].getY() + headNow());
     const float zoom = zoomNow();
     // Never smaller than the window, so the background can always be grabbed and dragged
     size.x = juce::jmax (size.x, (int) std::ceil (vw / zoom)); size.y = juce::jmax (size.y, (int) std::ceil (vh / zoom));
@@ -1602,6 +1722,8 @@ void AllView::layout()
 }
 
 float AllView::fitZoom() const { return fitScale; }
+// The name strip above each sound: taller when zoomed out, so the name is always about the same size on screen
+int AllView::headNow() const { return juce::jlimit (headerH, 90, juce::roundToInt (24.0f / zoomNow())); }
 float AllView::zoomNow() const { const float z = proc.zoomAll.load(); return z > 0.01f ? juce::jlimit (0.1f, 1.5f, z) : fitScale; }
 juce::Rectangle<int> AllView::areaOf (int tab) const { return tab >= 0 && tab < (int) areas.size() ? areas[(size_t) tab] : juce::Rectangle<int>(); }
 
@@ -1622,10 +1744,11 @@ void AllView::paint (juce::Graphics& g)
         g.fillRoundedRectangle (r.expanded (4.0f), radiusPanel);
         g.setColour (col.withAlpha (i == sel ? 0.9f : 0.35f));
         g.drawRoundedRectangle (r.expanded (4.0f), radiusPanel, i == sel ? 2.0f : 1.2f);
-        g.fillEllipse (r.getX() + 10.0f, r.getY() + 10.0f, 10.0f, 10.0f);
-        g.setFont (font (15.0f, Weight::SemiBold));
+        const float head = (float) headNow(), dot = head * 0.34f;
+        g.fillEllipse (r.getX() + head * 0.3f, r.getY() + (head - dot) * 0.5f, dot, dot);
+        g.setFont (font (head * 0.52f, Weight::SemiBold));
         g.setColour (i == sel ? juce::Colours::white : n8);
-        g.drawText (b.name, areas[(size_t) i].withHeight (headerH).withTrimmedLeft (28), juce::Justification::centredLeft, true);
+        g.drawText (b.name, areas[(size_t) i].withHeight ((int) head).withTrimmedLeft (juce::roundToInt (head * 0.85f)), juce::Justification::centredLeft, true);
     }
 }
 
@@ -1663,7 +1786,7 @@ void AllView::mouseDoubleClick (const juce::MouseEvent& e)
     if (e.eventComponent != this) return;
     const auto p = e.getPosition();
     for (int i = 0; i < (int) areas.size(); ++i)
-        if (areas[(size_t) i].withHeight (headerH).contains (p)) { if (onOpen) onOpen (i); return; }
+        if (areas[(size_t) i].withHeight (headNow()).contains (p)) { if (onOpen) onOpen (i); return; }
 }
 
 void AllView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
@@ -2932,11 +3055,11 @@ void Nebula2ModulationEditor::addUnits (const std::vector<std::string>& types)
     // New units go in a row under everything already on the board, unconnected
     int bottom = 0;
     for (auto& m : b->modules) bottom = juce::jmax (bottom, (int) m->y + lay::height (*m->info));
-    int x = 24;
-    const int y = bottom + 28;
+    int x = 16;
+    const int y = bottom + 18;
     for (auto& t : types)
         if (auto* m = proc.rack.addModule (*b, t, (float) x, (float) y))
-            x += lay::width (*m->info) + 20;
+            x += lay::width (*m->info) + 6;
     refreshBoards();
     if (! proc.showAll.load()) viewport.setViewPosition (0, juce::jmax (0, juce::roundToInt ((float) (y - 60) * proc.zoom.load())));
     else scrollToTab (proc.selectedTab.load());
@@ -2999,6 +3122,7 @@ void Nebula2ModulationEditor::paint (juce::Graphics& g)
     g.setFont (titleFont());
     g.setColour (n8);
     g.drawText ("NEBULA2 MODULATION", space4, 0, 220, topbarH, juce::Justification::centredLeft, false);
+    dividerH (g, tabs.getRight(), getWidth(), tabs.getBottom() - 2);
     caption (g, "Tempo", { 336, 0, 44, topbarH });
     g.setFont (controlFont());
     g.setColour (n8);
@@ -3025,7 +3149,7 @@ void Nebula2ModulationEditor::resized()
     addUnitsButton.setBounds (tidyButton.getX() - 8 - 104, cy, 104, 28);
     const int top = topbarH + StyleBar::height;
     styleBar.setBounds (0, topbarH, getWidth(), StyleBar::height);
-    tabs.setBounds (0, top, getWidth(), kTabsH);
+    tabs.setBounds (0, top, getWidth() - 136, kTabsH);
     const int deskH = MixerStrip::heightFor (proc.mixerTall.load());
     mixer.setBounds (0, getHeight() - deskH, getWidth(), deskH);
     viewport.setBounds (0, top + kTabsH, getWidth(), getHeight() - top - kTabsH - deskH);
@@ -3033,7 +3157,7 @@ void Nebula2ModulationEditor::resized()
     deskButton.setToggleState (proc.mixerTall.load(), juce::dontSendNotification);
     deskButton.setBounds (getWidth() - 14 - 76, mixer.getY() - 22, 76, 22);
     // Change sound sits at the top right of the board, over it, for whichever tab is showing
-    soundButton.setBounds (getWidth() - 14 - 10 - 118, top + kTabsH + 8, 118, 26);
+    soundButton.setBounds (getWidth() - 14 - 118, top + 6, 118, 26);
     addPanel.setBounds (getLocalBounds());
     songPanel.setBounds (getLocalBounds());
     hostOverlay.setBounds (getLocalBounds());

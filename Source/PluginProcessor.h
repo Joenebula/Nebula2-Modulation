@@ -56,6 +56,13 @@ public:
     // A sequencer's pattern, or the chords, as a MIDI file to drag into the host. Returns the file written.
     juce::File writeMidi (const n2m::Module&, const juce::String& name);
 
+    // Your own plugins as ready-made sounds: a new tab with the plugin already in a slot and cabled.
+    // An instrument goes straight to the Output; an effect is fed by send bus A. Either way a MIDI keyboard unit
+    // is cabled in, so keys or a MIDI track reach the plugin. If the plugin isn't on this computer the tab is
+    // still made, with the slot saying so. path: a .vst3 to use instead of looking the name up.
+    static juce::StringArray ownPlugins();                          // the names offered in the + menu
+    int addPluginSound (const juce::String& name, const juce::String& path = {});
+
 private:
     static BusesProperties makeBuses();
     double ownPpq = 0;

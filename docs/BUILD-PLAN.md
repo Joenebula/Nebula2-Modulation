@@ -89,6 +89,8 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [x] The plugin inside follows the song's tempo and position
 - [x] Saved with the project, including the plugin's own preset and settings
 - [x] Joe tested v0.1.2 in Cubase on Windows (26 Nov 2026): loads, plugin loads into a slot, its window opens and Back returns, sound through cables, saves and reopens. All worked.
+- [x] Your plugins as ready-made sounds (v0.1.13): + > Your plugins lists Nebula2 Drums, Voice, Chord, Glitch, EQ, Warmer, VenPressorDyn and any other Nebula2 plugin installed. Picking one makes a tab with it loaded in a slot and cabled: an instrument straight to the Output, an effect fed by send bus A. A MIDI keyboard unit (As played) is cabled into it. Not installed: the tab is still made and the slot says to press Load. Tested here with Nebula2 Chord and Nebula2 Glitch built for Linux
+- [x] The same note on several cables into a slot is now one note, and a held note isn't cut when another key is added (v0.1.13)
 - [ ] Still to try: Nexus / HALion in a slot, and dropping a .vst3 on the board inside Cubase
 - [x] A slot's Load menu lists every VST3 in the usual plugin folders by name (v0.1.9). The list is made by looking at the folders only; nothing is loaded to build it
 - [x] Knobs on the slot (v0.1.11): Knob 1 to 4, each pointed at one of the plugin's own controls from the Knobs button (pick from the list, or "the control I last moved in its window"). Mod 1 to 4 inputs let cables move them. Saved with the project

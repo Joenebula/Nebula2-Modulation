@@ -699,6 +699,88 @@ int main (int argc, char** argv)
         CHECK (plain != nullptr && w.writeMidi (*plain, "x") == juce::File(), "a unit with no pattern writes nothing");
     }
 
+    {
+        // Your own plugins as ready-made sounds
+        const auto own = Nebula2ModulationProcessor::ownPlugins();
+        CHECK (own.contains ("Nebula2 Drums") && own.contains ("Nebula2 Voice") && own.contains ("Nebula2 Chord") && own.contains ("Nebula2 Glitch"), "the + menu offers Drums, Voice, Chord and Glitch");
+        bool self = false; for (auto& n : own) self = self || n.removeCharacters (" -").equalsIgnoreCase ("Nebula2Modulation");
+        CHECK (! self, "it never offers this plugin inside itself");
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        const int before = (int) r.rack.boards.size();
+        auto slotOf = [&] (int tab) { n2m::HostedModule* h = nullptr; for (auto& m : r.rack.boards[(size_t) tab]->modules) if (auto* x = dynamic_cast<n2m::HostedModule*> (m.get())) h = x; return h; };
+        auto has = [&] (int tab, const char* type) { for (auto& m : r.rack.boards[(size_t) tab]->modules) if (std::string (m->info->type) == type) return true; return false; };
+
+        // one that isn't on this computer: the tab is still made, and says what to do
+        const int missing = r.addPluginSound ("Nebula2 Voice No Such");
+        CHECK (missing == before && r.rack.boards[(size_t) missing]->name == "Nebula2 Voice No Such", "a plugin that isn't installed still gets its tab");
+        CHECK (slotOf (missing) != nullptr && ! slotOf (missing)->hasPlugin() && slotOf (missing)->status.contains ("Press Load"), "with an empty slot that says how to find it");
+        CHECK (slotOf (missing)->live && has (missing, "keys"), "already cabled to the Output, with a MIDI keyboard into it");
+
+        if (argc > 2)
+        {
+            // an instrument (Nebula2 Chord, built here)
+            const int tab = r.addPluginSound ("Nebula2 Chord", argv[2]);
+            auto* slot = slotOf (tab);
+            CHECK (slot != nullptr && slot->hasPlugin() && slot->live && ! has (tab, "return"), "an instrument arrives loaded and cabled straight to the Output");
+            for (auto& b : r.rack.boards) b->mute.store (true);
+            r.rack.boards[(size_t) tab]->mute.store (false);
+            song.playing = true; song.ppq = 0;
+            CHECK (run (r, song, 2.0) > 0.02f, "and is heard when the song plays");
+            // a key from Cubase reaches the plugin, as played
+            juce::AudioBuffer<float> buf (2, 256);
+            juce::MidiBuffer key; key.addEvent (juce::MidiMessage::noteOn (1, 66, (juce::uint8) 100), 0);
+            const int sentBefore = slot->notesSent.load();
+            r.processBlock (buf, key);
+            CHECK (slot->notesSent.load() == sentBefore + 1, "a key or MIDI track note reaches the plugin");
+            juce::MidiBuffer up; up.addEvent (juce::MidiMessage::noteOff (1, 66), 0);
+            r.processBlock (buf, up);
+            song.playing = false;
+            // found by name in the computer's plugin folders, when it is there
+            bool installed = false; for (auto& p : n2m::installedPlugins()) installed = installed || p.first.removeCharacters (" -").equalsIgnoreCase ("Nebula2Chord");
+            if (installed)
+            {
+                const int byName = r.addPluginSound ("Nebula2 Chord");
+                CHECK (slotOf (byName) != nullptr && slotOf (byName)->hasPlugin(), "an installed plugin is found by its name");
+            }
+            else std::printf ("(Nebula2 Chord isn't in this machine's plugin folders: find-by-name not checked)\n");
+            const int count = (int) r.rack.boards.size();
+            r.history.undo();
+            CHECK ((int) r.rack.boards.size() == count - 1, "Undo takes a plugin sound away again");
+        }
+        if (argc > 3)
+        {
+            // an effect (Nebula2 Glitch, built here): fed by send bus A
+            const int tab = r.addPluginSound ("Nebula2 Glitch", argv[3]);
+            auto* slot = slotOf (tab);
+            CHECK (slot != nullptr && slot->hasPlugin() && slot->live && has (tab, "return"), "an effect arrives loaded, with a Return feeding it");
+            std::printf ("effect: %s loaded in a slot\n", slot != nullptr ? slot->pluginName().toRawUTF8() : "?");
+            // the kick, sent to bus A, comes out of the effect's tab
+            for (auto& b : r.rack.boards) b->mute.store (true);
+            r.rack.boards[(size_t) tab]->mute.store (false);
+            song.playing = true; song.ppq = 0;
+            CHECK (run (r, song, 2.0) < 0.001f, "with nothing sent to it, the effect's tab is silent");
+            auto& kick = *r.rack.boards[0];
+            n2m::Module* outMod = nullptr; for (auto& m : kick.modules) if (std::string (m->info->type) == "output") outMod = m.get();
+            n2m::Cable into {}; for (auto& c : kick.cables) if (c.dst == outMod->uid && c.dstPort == 0) into = c;
+            auto* send = r.rack.addModule (kick, "send", 0, 0);
+            send->set ("amount", 1.0f);
+            r.rack.connect (kick, into.src, into.srcPort, send->uid, send->inIndex ("inl"));
+            song.ppq = 0;
+            CHECK (run (r, song, 2.0) > 0.02f, "a sound sent to bus A is heard through the effect");
+            song.playing = false;
+            // saved and reopened with the project
+            juce::MemoryBlock saved; r.getStateInformation (saved);
+            Nebula2ModulationProcessor q; q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+            q.setStateInformation (saved.getData(), (int) saved.getSize());
+            n2m::HostedModule* back = nullptr;
+            if (tab < (int) q.rack.boards.size()) for (auto& m : q.rack.boards[(size_t) tab]->modules) if (auto* x = dynamic_cast<n2m::HostedModule*> (m.get())) back = x;
+            CHECK (back != nullptr && back->hasPlugin(), "and it comes back with the project");
+        }
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

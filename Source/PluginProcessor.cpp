@@ -1,4 +1,5 @@
 #include "PluginProcessor.h"
+#include "PluginHost.h"
 #include "PluginEditor.h"
 
 // The main mix, plus 15 separate stereo outputs that start switched off. In Cubase they are switched on
@@ -147,6 +148,71 @@ juce::File Nebula2ModulationProcessor::writeMidi (const n2m::Module& m, const ju
     juce::FileOutputStream stream (out);
     if (! stream.openedOk() || ! file.writeTo (stream)) return {};
     return out;
+}
+
+// Names are compared without spaces, hyphens or capitals: "Nebula2-Glitch" is "Nebula2 Glitch"
+static juce::String plainName (const juce::String& s) { return s.toLowerCase().removeCharacters (" -_"); }
+
+juce::StringArray Nebula2ModulationProcessor::ownPlugins()
+{
+    juce::StringArray names { "Nebula2 Drums", "Nebula2 Voice", "Nebula2 Chord", "Nebula2 Glitch", "Nebula2 EQ", "Nebula2 Warmer", "VenPressorDyn" };
+    // and any other Nebula2 plugin found on this computer (but not this one inside itself)
+    for (auto& p : n2m::installedPlugins())
+    {
+        const auto plain = plainName (p.first);
+        if (! plain.startsWith ("nebula2") || plain == "nebula2modulation" || plain == "nebula2") continue;
+        bool have = false;
+        for (auto& n : names) have = have || plainName (n) == plain;
+        if (! have) names.add (p.first);
+    }
+    return names;
+}
+
+int Nebula2ModulationProcessor::addPluginSound (const juce::String& name, const juce::String& path)
+{
+    // Find it in the computer's plugin folders. Nebula2 Drums is installed under the plain name "Nebula2".
+    juce::String file = path;
+    if (file.isEmpty())
+    {
+        juce::StringArray wanted { plainName (name) };
+        if (wanted[0] == "nebula2drums") wanted.add ("nebula2");
+        for (auto& w : wanted)
+            for (auto& p : n2m::installedPlugins())
+                if (file.isEmpty() && plainName (p.first) == w) file = p.second;
+    }
+    std::vector<juce::PluginDescription> found;
+    if (file.isNotEmpty()) found = n2m::pluginsInFile (file);
+    const bool effect = ! found.empty() && ! found[0].isInstrument;
+
+    auto b = n2m::makeBoard ("empty", rack.sr);
+    b->name = name.toStdString();
+    b->colour = effect ? 1 : 4;
+    auto* out = b->modules[0].get();
+    auto* slot = b->add ("plugin", 0, 0, rack.sr);
+    auto* keys = b->add ("keys", 0, 0, rack.sr);
+    if (slot == nullptr || keys == nullptr) return -1;
+    keys->set ("snap", 0);            // drum pads and trigger keys must arrive as played
+    auto cable = [&b] (n2m::Module* a, const char* o, n2m::Module* c, const char* i) { b->connect (a->uid, a->outIndex (o), c->uid, c->inIndex (i)); };
+    cable (keys, "n1", slot, "p1"); cable (keys, "n2", slot, "p2"); cable (keys, "n3", slot, "p3"); cable (keys, "n4", slot, "p4");
+    cable (keys, "gate", slot, "gate"); cable (keys, "vel", slot, "vel");
+    cable (slot, "outl", out, "left"); cable (slot, "outr", out, "right");
+    if (effect)
+    {
+        // An effect needs sound coming in: everything the Send units on other tabs feed to bus A
+        auto* ret = b->add ("return", 0, 0, rack.sr);
+        cable (ret, "outl", slot, "inl"); cable (ret, "outr", slot, "inr");
+    }
+    n2m::tidy (*b);
+    auto* hosted = dynamic_cast<n2m::HostedModule*> (slot);
+    auto* board = rack.addBoard (std::move (b));
+    if (hosted != nullptr)
+    {
+        if (! found.empty()) hosted->load (found[0]);
+        else hosted->status = name + " wasn't found in this computer's VST3 folders. Press Load to find it";
+    }
+    juce::ignoreUnused (board);
+    history.tabAdded ((int) rack.boards.size() - 1);
+    return (int) rack.boards.size() - 1;
 }
 
 uint32_t Nebula2ModulationProcessor::nextSeed()

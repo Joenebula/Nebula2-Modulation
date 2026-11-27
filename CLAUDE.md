@@ -67,6 +67,7 @@ Rules that tests hold in place:
 - MIDI in: the processor hands `Rack::process` a `MidiIn` list; `Rack::keys` holds the keys down; the `keys` unit reads them. Chunks are cut at each key so timing is exact. A lost note-off must never happen: events are applied even when the lock is busy.
 - MIDI out: `notesOf (rack, module)` in `Presets.h` must give exactly the notes the unit plays (a test plays the song and compares). `Nebula2ModulationProcessor::writeMidi` turns it into a file.
 - Sounds: `saveSound` / `loadSound` on the processor; a `.n2msound` file is `N2MSOUND 1` plus one board's text. A loaded sound drops its links, solo and song sections.
+- Your plugins: `Nebula2ModulationProcessor::addPluginSound (name)` builds the ready-made tab; `ownPlugins()` is the menu list. Names match without spaces, hyphens or capitals; Nebula2 Drums is installed as plain "Nebula2".
 - Links: `Module::patternLink` / `patternShare` and `paramLink`, pushed by `Rack::pushPattern` / `pushParam` when the screen edits something. Knobs link by position, not value. `patternShare` 4 is a follower: it keeps its own pattern and is shifted at play time by `leaderShift()`.
 
 ## Build and test (Linux)
@@ -96,10 +97,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.13'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.14'
 ```
 
-The latest release is **v0.1.12**. Bump by one each time.
+The latest release is **v0.1.13**. Bump by one each time.
 
 ## What can't be checked here
 

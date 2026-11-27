@@ -2018,14 +2018,18 @@ struct NoteTracker
     template <typename Emit>
     void step (bool gateNow, const float* pitch, const char* plugged, int velocity, Emit&& emit)
     {
+        // What should sound now. Two cables carrying the same note are one note, not two.
+        int want[4];
         for (int v = 0; v < 4; ++v)
         {
-            const int want = gateNow && plugged[v] ? noteOf (pitch[v]) : -1;
-            if (want == sounding[v]) continue;
-            if (sounding[v] >= 0) emit (sounding[v], 0);
-            if (want >= 0) emit (want, std::min (127, std::max (1, velocity)));
-            sounding[v] = want;
+            want[v] = gateNow && plugged[v] ? noteOf (pitch[v]) : -1;
+            for (int u = 0; u < v; ++u) if (want[u] == want[v]) want[v] = -1;
         }
+        auto in = [] (const int* set, int note) { return set[0] == note || set[1] == note || set[2] == note || set[3] == note; };
+        // Notes that stop first, then notes that start: a note that only moved to another cable carries on untouched
+        for (int v = 0; v < 4; ++v) if (sounding[v] >= 0 && ! in (want, sounding[v])) emit (sounding[v], 0);
+        for (int v = 0; v < 4; ++v) if (want[v] >= 0 && ! in (sounding, want[v])) emit (want[v], std::min (127, std::max (1, velocity)));
+        for (int v = 0; v < 4; ++v) sounding[v] = want[v];
         gate = gateNow;
     }
 };

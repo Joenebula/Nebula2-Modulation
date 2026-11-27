@@ -52,7 +52,8 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
     the plugin's own window; **Back** returns to the board. Cable a sequencer's Pitch and Gate into the slot to
     play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
     **Knobs** points the slot's Knob 1 to 4 at the plugin's own controls; cable an LFO or any mover into Mod 1 to 4
-    to move them.
+    to move them. **+ > Your plugins** does it all in one go: a new tab with Nebula2 Drums, Voice, Chord, Glitch or
+    another of your plugins already loaded and cabled.
 11. **Links:** to make two sounds move together, link them. On a sequencer, click **LINK** next to its name and pick
     a group. Do the same on another sequencer, on any tab. The second one **follows** the first: it keeps its own
     pattern and moves up and down, in key, as the first one's notes change. The same menu can instead make them

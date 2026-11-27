@@ -148,6 +148,7 @@ int main (int argc, char** argv)
         }
         e->board().rebuild();
         shoot (*ed, dir + "/ui_slots.png");
+        if (argc > 2) { e->selectTab (p.addPluginSound ("Nebula2 Chord", argv[2])); shoot (*ed, dir + "/ui_plugin_sound.png"); }
         if (slot != nullptr && slot->hasPlugin())
         {
             e->hostOverlay.open (*slot, eb.name);

@@ -409,6 +409,27 @@ int main()
         CHECK (NoteTracker::noteOf (-20.0f) == 0 && NoteTracker::noteOf (20.0f) == 127, "notes stay in the playable range");
     }
 
+    // 21b. The same note on two cables is one note; a note that moves to another cable is not cut off
+    {
+        NoteTracker t;
+        std::vector<std::pair<int, int>> ev;
+        auto emit = [&ev] (int note, int vel) { ev.push_back ({ note, vel }); };
+        const char all[4] = { 1, 1, 1, 1 };
+        const float one[4] = { 0.5f, 0.5f, 0.5f, 0.5f };
+        t.step (true, one, all, 100, emit);
+        CHECK (ev.size() == 1 && ev[0].first == 66 && ev[0].second == 100, "four cables with the same note start it once");
+        ev.clear();
+        const float two[4] = { 0.0f, 0.5f, 0.5f, 0.5f };          // a lower key is added: the first note moves from cable 1 to cable 2
+        t.step (true, two, all, 100, emit);
+        CHECK (ev.size() == 1 && ev[0].first == 60 && ev[0].second > 0, "adding a key starts only the new note; the held one carries on");
+        ev.clear();
+        t.step (true, one, all, 100, emit);
+        CHECK (ev.size() == 1 && ev[0].first == 60 && ev[0].second == 0, "lifting it stops only that note");
+        ev.clear();
+        t.step (false, one, all, 100, emit);
+        CHECK (ev.size() == 1 && ev[0].first == 66 && ev[0].second == 0, "gate down stops the note once");
+    }
+
     // 22. Links: sequencers in the same group, on different tabs, change together
     {
         Rack rack; rack.prepare (48000);

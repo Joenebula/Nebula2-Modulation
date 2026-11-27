@@ -1461,10 +1461,16 @@ void TabBar::addMenu()
         m.addSubMenu ("Your saved sounds (" + juce::String ((int) saved.size()) + ")", mine);
     }
     m.addItem (900, "Load a sound from a file...");
+    // Your own plugins, each as a tab with the plugin already loaded and cabled
+    const auto own = Nebula2ModulationProcessor::ownPlugins();
+    juce::PopupMenu plugins;
+    for (int k = 0; k < own.size(); ++k) plugins.addItem (500 + k, own[k]);
+    m.addSubMenu ("Your plugins", plugins);
     juce::Component::SafePointer<TabBar> safe (this);
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (plusArea())), [safe, saved] (int r)
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (plusArea())), [safe, saved, own] (int r)
     {
         if (safe == nullptr || r <= 0) return;
+        if (r >= 500 && r < 900) { if (r - 500 < own.size()) safe->added (safe->proc.addPluginSound (own[r - 500])); return; }
         if (r >= 1000) { if (r - 1000 < (int) saved.size()) safe->added (safe->proc.loadSound (saved[(size_t) (r - 1000)])); return; }
         if (r == 900)
         {

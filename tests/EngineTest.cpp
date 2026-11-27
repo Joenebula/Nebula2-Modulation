@@ -1811,6 +1811,14 @@ int main()
         }
     }
 
+    // ---- Every unit fits on its panel ----
+    for (auto* t : allTypes())
+    {
+        if (! lay::fits (*t)) std::printf ("does not fit: %s\n", t->name);
+        CHECK (lay::fits (*t), "every unit's screen, knobs and jacks fit on its panel without overlapping");
+        CHECK (lay::height (*t) == lay::panelH, "every panel is the same height");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

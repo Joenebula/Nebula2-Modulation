@@ -162,6 +162,9 @@ public:
     juce::Rectangle<int> midiArea() const;                       // on a sequencer or the chords: drag from here to put the MIDI in the host
     bool midiDrag = false;
     juce::Rectangle<int> linkArea() const;                       // on a sequencer: the Link label in the header
+    bool onTimeline (int param) const { return board.autoIndex (module.uid, param) >= 0; }   // this knob has a line on the timeline
+    bool anyOnTimeline() const { for (auto& a : board.autos) if (a->uid == module.uid) return true; return false; }
+    Board& itsBoard() const { return board; }
     void linkMenu();
     bool jackAt (juce::Point<int> p, bool& isOut, int& port) const;
     Module& module;
@@ -215,6 +218,7 @@ public:
     std::function<void (HostedModule&)> onOpenPlugin;
     bool embedded = false;       // one of several boards on the All view: it is just as big as what is on it
     std::function<void()> onFit; // (embedded) its size changed
+    std::function<void (Board&, int uid, int param)> onDrawKnob;      // a knob's menu: give it a line on the timeline
     std::function<void()> onAddMenu;                                  // right-click on the board: open Add units
     std::function<void (const std::vector<std::string>&)> onAddTypes;   // ...or add a favourite straight away
 private:
@@ -394,15 +398,32 @@ public:
     void setSections (int n);
     void setBars (int n);
     void setOn (bool on);
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    // Knob lines: a row under a sound for each of its knobs that moves through the song
+    int addLane (int tab, int uid, int param);           // returns which line of that sound it is, or -1
+    void removeLane (int tab, int lane);
+    void knobMenu (int tab);                             // + Knob: pick one of that sound's knobs
+    juce::Rectangle<int> laneArea (int tab, int lane) const;      // the part of a line's row that is the timeline
+    juce::Point<int> pointAt (int tab, int lane, float bar, float value) const;   // where on screen a place on a line is
+    juce::Rectangle<int> knobChip (int tab) const, removeChip (int tab, int lane) const;
+    juce::Rectangle<int> cell (int tab, int section) const;
 private:
     juce::Rectangle<int> card() const;
-    juce::Rectangle<int> cell (int tab, int section) const;
-    int rowH() const;
+    juce::Rectangle<int> rows() const;                   // the scrolling part: the sounds and their lines
+    int rowY (int tab) const, contentH() const, timeX() const, timeW() const;
+    float barW() const;
     bool hit (juce::Point<int>, int& tab, int& section) const;
+    int pointNear (int tab, int lane, juce::Point<int>) const;
     void sync();
     Nebula2ModulationProcessor& proc;
     juce::TextButton onOff, fewer { "-" }, more { "+" }, barsButton, allOn { "All on" }, buildUp { "Build up" }, close { "Close" };
     bool paintTo = false; int shownSection = -2;
+    float shownBar = -2.0f;
+    int scroll = 0;
+    struct Drag { int kind = 0, tab = 0, lane = 0, point = 0; } drag;      // kind: 0 nothing, 1 painting squares, 2 a point
+    static constexpr int rowH = 26, laneH = 58, labelW = 210;
 };
 } // namespace n2m
 

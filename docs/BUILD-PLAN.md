@@ -167,6 +167,22 @@ the Song page, DRAG MIDI from a sequencer, Save this sound, the sound so far.
 - [ ] Still open from his list: the sample change "kept playing" (not clear yet what he saw), whether Drums / Voice are found by name on his PC, the whole window being small on his screen (a size setting for the whole plugin), DRAG AUDIO is easy to miss on the Output unit
 - Not a fault: DRAG MIDI is on our Chord generator unit; a hosted Nebula2 Chord plugin in a slot has no DRAG MIDI because its notes are its own
 
+## The Modurand rework (27 Nov 2026, not released yet: branch `claude/gallant-mendel-zh1u44`)
+
+Joe sent a video of Modurand: "This is where we need to be." Of the five differences, he chose: keep our look
+(dark, text buttons, fixed window) and rework the other four.
+
+- [x] **One button makes a whole track.** A style bar under the top bar: 14 styles (Techno, Hard techno, Acid, Tech house, House, Deep house, Melodic, Trance, Dub, Electro, Drum & bass, Garage, Minimal, Ambient). Make track builds every sound of the style, cabled and playing, with chords in the style's mood. Variation (new patterns, same sounds), Random knobs (shaping knobs move a little; tuning, levels and switches stay), Parts chips (one sound made again in place, keeping its mixer channel), Mode Replace / Add. Each is one Undo step. The style is saved with the project. `Source/Styles.h`
+- [x] **Everything on one board.** An All tab, first in the tab row, shows every sound in its own frame on one board, fitted to the window. Zoom 20% to 150%; click the zoom figure to fit again. Each frame is an ordinary board, so cables, knobs and Undo work as on a tab. A new project opens on it; an older project opens on its tab as it was saved
+- [x] **Modules look like hardware.** Every unit is a rack panel of the same height: knobs as big as the room allows, a screw in each corner, the name printed on the plate over a line in the colour of its kind, a black screen behind patterns and chords, jacks in a strip along the bottom with outputs on a light pad. Tidy lines panels up side by side in two rows. A test checks every unit fits its panel
+- [x] **A timeline with knob movement.** The Song page is now a timeline: bars along the top, a row per sound, the section blocks as before, a playhead. + Knob (or right-click a knob) gives a knob a line; click to add points, drag them, right-click to remove. Knobs follow their lines as the song plays and go round with it. Saved, undoable, and the same at any block size
+- [ ] **Joe to test in Cubase**: all four. None of it can be heard or clicked here beyond the tests and snapshots
+- [ ] A style doesn't set the tempo (Cubase owns it). Drum & bass at 124 isn't drum & bass until Cubase is at 174
+- [ ] Old projects keep their unit positions, which were laid out for the bigger panels: press Tidy
+- [ ] A knob with a line can still be turned by hand, but the line takes it back while the song plays
+- [ ] Change sound drops that sound's knob lines (the units they pointed at are gone)
+- [ ] Not done: their light theme, icon side rail and floating toolbar (Joe: keep ours)
+
 ## Screen polish (Joe: "we can work the UI later")
 
 - [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". A More / Less tab sits on the desk's top edge above the master. Opened, the desk is about twice as tall: every fader, the master included, grows to fill it, and each channel shows Pan and its load figure (v0.1.19; Joe: "make it taller, the master level needs to grow also", and the More / Less was "badly placed" beside the master fader). Saved with the project. Change sound was there in v0.1.17 and came out in v0.1.18 (Joe: "this is mixing elements"): the desk is for mixing only
@@ -182,4 +198,4 @@ Everything in the SPEC table that isn't bold.
 ## Known gaps
 
 - Boards are mono until the mixer.
-- Fixed window size.
+- Fixed window size (Joe, 27 Nov 2026: keep it).

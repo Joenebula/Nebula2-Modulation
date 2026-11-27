@@ -153,8 +153,8 @@ int main (int argc, char** argv)
     // Plugin slots: one empty, and (when a .vst3 path is given) one holding a plugin, then that plugin's window
     {
         auto& eb = *p.rack.boards.back();
-        p.rack.addModule (eb, "plugin", 24, 160);
-        auto* slot = dynamic_cast<n2m::HostedModule*> (p.rack.addModule (eb, "plugin", 24, 360));
+        p.rack.addModule (eb, "plugin", 160, 14);
+        auto* slot = dynamic_cast<n2m::HostedModule*> (p.rack.addModule (eb, "plugin", 160, 280));
         if (argc > 2 && slot != nullptr)
         {
             const auto found = n2m::pluginsInFile (argv[2]);
@@ -182,5 +182,26 @@ int main (int argc, char** argv)
     shoot (*ed, dir + "/ui_all_trance.png");            // a bigger track, fitted in
     e->stepZoom (1); e->stepZoom (1); e->stepZoom (1);
     shoot (*ed, dir + "/ui_all_zoomed.png");
+    // the timeline, with two knobs moving through the song
+    {
+        e->songPanel.open();
+        e->songPanel.fill (1);
+        int at = 0;
+        for (auto& b : p.rack.boards)
+        {
+            for (auto& m : b->modules)
+                if (std::string (m->info->type) == "filter" && (b->type == "bass" || b->type == "lead"))
+                {
+                    const int lane = e->songPanel.addLane (at, m->uid, m->paramIndex ("cutoff"));
+                    if (lane >= 0) { auto& a = *b->autos[(size_t) lane]; a.move (0, 0.0f, 0.25f); a.add (8.0f, 0.4f); a.add (16.0f, 0.9f); a.add (24.0f, 0.5f); }
+                }
+            ++at;
+        }
+        p.preview.store (true); run (p, 9.0);
+        shoot (*ed, dir + "/ui_timeline.png");
+        p.preview.store (false);
+        e->songPanel.setVisible (false);
+        shoot (*ed, dir + "/ui_all_marks.png");
+    }
     return 0;
 }

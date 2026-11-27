@@ -992,6 +992,13 @@ int main (int argc, char** argv)
         for (auto& t : before) n2m::AddPanel::setFavourite (t, true);
     }
 
+    // Every unit, the plugin slot and sample player included, fits on its panel
+    for (auto* t : n2m::allTypes())
+    {
+        if (! n2m::lay::fits (*t)) std::printf ("does not fit: %s\n", t->name);
+        CHECK (n2m::lay::fits (*t), "every unit fits on its panel without overlapping");
+    }
+
     // The All view: every sound on one board
     {
         Nebula2ModulationProcessor r;
@@ -1056,6 +1063,70 @@ int main (int argc, char** argv)
         juce::MemoryBlock old; { juce::MemoryOutputStream o (old, false); o.writeString (juce::String (r.rack.save())); o.writeInt (1); o.writeFloat (0.8f); o.writeBool (false); }
         Nebula2ModulationProcessor before; before.setStateInformation (old.getData(), (int) old.getSize());
         CHECK (! before.showAll.load() && before.selectedTab.load() == 1 && before.zoomAll.load() == 0.0f, "an older project opens on its tab");
+    }
+
+    // The timeline: a knob's line, drawn with the mouse on the Song page
+    {
+        Nebula2ModulationProcessor r;
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto& song = ed->songPanel;
+        auto event = [&song] (juce::Point<int> at, bool right)
+        {
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), right ? juce::ModifierKeys::rightButtonModifier : juce::ModifierKeys::leftButtonModifier,
+                                     0, 0, 0, 0, 0, &song, &song, juce::Time::getCurrentTime(), at.toFloat(), juce::Time::getCurrentTime(), 1, false);
+        };
+        song.open();
+        auto& bass = *r.rack.boards[3];
+        n2m::Module* filter = nullptr;
+        for (auto& m : bass.modules) if (std::string (m->info->type) == "filter") filter = m.get();
+        const int cut = filter->paramIndex ("cutoff");
+        const auto before = r.rack.save();
+        const int lane = song.addLane (3, filter->uid, cut);
+        CHECK (lane == 0 && bass.autos.size() == 1 && bass.autos[0]->count.load() == 2, "+ Knob gives the knob a line");
+        CHECK (song.addLane (3, filter->uid, cut) == 0 && bass.autos.size() == 1 && song.addLane (3, filter->uid, filter->paramIndex ("type")) == -1, "one line a knob, and none for a switch");
+        CHECK (song.getLocalBounds().contains (song.laneArea (3, 0)) && song.laneArea (3, 0).getY() == song.cell (3, 0).getBottom() && song.cell (4, 0).getY() == song.laneArea (3, 0).getBottom(), "the line has its own row, under its sound");
+        auto& a = *bass.autos[0];
+        // click on the row: a point lands there, on the nearest quarter bar
+        song.mouseDown (event (song.pointAt (3, 0, 2.1f, 0.8f), false));
+        song.mouseUp (event (song.pointAt (3, 0, 2.1f, 0.8f), false));
+        CHECK (a.count.load() == 3 && a.bar[1].load() == 2.0f && std::abs (a.val[1].load() - 0.8f) < 0.03f, "a click on the line adds a point there");
+        // drag it
+        song.mouseDown (event (song.pointAt (3, 0, 2.0f, a.val[1].load()), false));
+        song.mouseDrag (event (song.pointAt (3, 0, 5.0f, 0.3f), false));
+        song.mouseUp (event (song.pointAt (3, 0, 5.0f, 0.3f), false));
+        CHECK (a.count.load() == 3 && a.bar[1].load() == 5.0f && std::abs (a.val[1].load() - 0.3f) < 0.03f, "dragging a point moves it");
+        // it plays: half way to the point the knob is half way there
+        const float start = a.val[0].load();
+        juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer midi;
+        r.preview.store (true);
+        const int blocks = (int) (2.5 * 4.0 * 60.0 / r.bpm.load() * 48000.0 / 256.0);
+        for (int b = 0; b < blocks; ++b) r.processBlock (buf, midi);
+        r.preview.store (false);
+        CHECK (std::abs (n2m::paramToNorm (filter->info->params[(size_t) cut], filter->P (cut)) - (start + (0.3f - start) * 0.5f)) < 0.03f, "the knob moves along its line as the song plays");
+        // Undo: back before the drag, then before the click
+        ed->stepHistory (false);
+        CHECK (bass.autos.size() == 1 && bass.autos[0]->count.load() == 3 && bass.autos[0]->bar[1].load() == 2.0f, "Undo takes the drag back");
+        ed->stepHistory (false);
+        CHECK (bass.autos.size() == 1 && bass.autos[0]->count.load() == 2, "and then the point");
+        // right-click a point removes it, but the last one stays
+        song.mouseDown (event (song.pointAt (3, 0, 0.0f, bass.autos[0]->val[0].load()), true));
+        CHECK (bass.autos[0]->count.load() == 1, "right-click removes a point");
+        song.mouseDown (event (song.pointAt (3, 0, bass.autos[0]->bar[0].load(), bass.autos[0]->val[0].load()), true));
+        CHECK (bass.autos[0]->count.load() == 1, "the last point stays");
+        // the squares still work with a line in the way
+        r.rack.song.on.store (true);
+        song.mouseDown (event (song.cell (4, 1).getCentre(), false));
+        song.mouseUp (event (song.cell (4, 1).getCentre(), false));
+        CHECK (((r.rack.boards[4]->plays.load() >> 1) & 1u) == 0, "a section square under a line still switches");
+        // taking the line off
+        song.mouseDown (event (song.removeChip (3, 0).getCentre(), false));
+        CHECK (bass.autos.empty(), "the cross takes the line off");
+        while (r.history.canUndo()) ed->stepHistory (false);
+        r.rack.song.on.store (false);                    // (switched on above without Undo knowing)
+        CHECK (r.rack.save() == before, "and Undo walks all of it back");
     }
 
     // The style bar: Make track, Variation, Random knobs and the part chips, as the screen does them

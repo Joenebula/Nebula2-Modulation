@@ -10,7 +10,7 @@ namespace n2m
 // in the middle, as big as the room allows; jacks sit in a strip along the bottom.
 namespace lay
 {
-constexpr int panelH = 244, header = 22, pad = 8, foot = 12;
+constexpr int panelH = 248, header = 22, pad = 8, foot = 12;
 constexpr int cell = 48, cellMinH = 52, cellMaxH = 84, jackW = 34, jackH = 36;
 constexpr int drumSeqH = 62, noteSeqH = 118, seqW = 16 * 20;
 constexpr int chordW = 8 * 60, chordTileH = 22, chordSeqH = 28 + 4 * chordTileH + 6;   // room for 32 chords, 8 to a row
@@ -32,12 +32,15 @@ inline Geo geo (const Info& i)
     // wide enough for its name in the header (sequencers and the like are wider than their names anyway)
     const int nameW = std::min (118, (int) std::char_traits<char>::length (i.name) * 7 + 22);
     Geo best;
+    // The narrowest panel everything fits on: more knob columns first, then (for a unit with a great many
+    // jacks) wider still so the jacks take fewer rows
+    for (int extra = 0; extra <= 16; ++extra)
     for (int cols = 1; cols <= std::max (1, nKnobs); ++cols)
     {
         Geo g;
-        const int inner = std::max ({ cols * cell, seqWidth (i), nameW, std::min (3, std::max (2, nJacks)) * jackW });   // up to three jacks always share a row
+        const int inner = std::max ({ cols * cell, seqWidth (i), nameW, std::min (3, std::max (2, nJacks)) * jackW }) + extra * jackW;   // up to three jacks always share a row
         g.cols = nKnobs == 0 ? 1 : std::max (cols, std::min (nKnobs, inner / cell));
-        if (i.perRow > 0 && i.perRow * cell <= inner) g.cols = std::min (g.cols, i.perRow);      // a unit that wants its knobs in rows of so many
+        if (i.perRow > 0 && g.cols % i.perRow != 0) continue;      // a unit whose knobs come in groups of so many keeps each group together in a row
         g.rows = nKnobs == 0 ? 0 : (nKnobs + g.cols - 1) / g.cols;
         // jacks: one row if they all fit; otherwise the inputs get their own rows above the outputs
         const int nIn = (int) i.ins.size(), nOut = (int) i.outs.size(), perRow = std::max (1, inner / jackW);
@@ -57,9 +60,16 @@ inline Geo geo (const Info& i)
             return best;
         }
     }
-    // More knobs than any width can fit at this height: as many columns as there are knobs, squeezed
-    best.cellH = cellMinH; best.cellW = cell;
+    best.cellH = cellMinH; best.cellW = cell;       // (never reached by any unit there is: a test checks every one fits)
     return best;
+}
+// Does everything on the panel have its own room: screen, then knobs, then jacks, inside the panel?
+inline bool fits (const Info& i)
+{
+    const auto g = geo (i);
+    const int nKnobs = (int) i.params.size();
+    return g.knobsY >= header + seqHeight (i) && g.knobsY + g.rows * g.cellH <= g.jacksY && g.cellH >= cellMinH && g.cellW >= cell - 2
+        && g.jacksY + g.jackRows * jackH <= panelH && g.cols * g.rows >= nKnobs && g.knobsX + g.cols * g.cellW <= g.w - pad + 1 && g.w >= seqWidth (i) + 2 * pad;
 }
 inline int width (const Info& i) { return geo (i).w; }
 inline int height (const Info&) { return panelH; }

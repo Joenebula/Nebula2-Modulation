@@ -5,8 +5,9 @@ Read this first. It's everything a new session needs to carry on.
 ## What it is
 
 A modular synth plugin for Joe (Nebula II): a VST3 instrument for Cubase (Windows and Mac), built in JUCE 8.
-Tabs along the top, one per sound. Each tab is its own Eurorack-style board of modules joined by cables. A menu
-adds units. A mixing desk along the bottom. Later stages load other VST3 plugins inside it as sound sources.
+A style bar makes a whole track in one press. Tabs along the top, one per sound, and an All tab that shows every
+sound on one board. Each sound is its own Eurorack-style board of modules joined by cables. A menu adds units. A
+timeline moves knobs through the song. A mixing desk along the bottom. Other VST3 plugins load inside it as sound sources.
 
 - The design: `docs/SPEC.md`
 - The order of work and what's done: `docs/BUILD-PLAN.md`. Tick things off there as they land.
@@ -21,7 +22,8 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - Discuss before big builds. One short multiple-choice question when there's a real choice.
 - Check it works before saying it's done (tests, snapshots). Then say plainly what you checked.
 - Everything stays in key.
-- Keep it tidy: one tab per sound, nothing from another sound on screen.
+- Keep it tidy: one tab per sound. The All tab shows every sound together, each in its own frame (Joe asked for this on 27 Nov 2026, after the Modurand video); a sound's units never mix with another's.
+- Keep our look: dark, text buttons, fixed window. Joe chose this over Modurand's light theme (27 Nov 2026).
 - The mixing desk is for mixing only (level, pan, mute, solo, output). Nothing that changes a sound goes there.
 
 ## Files
@@ -30,11 +32,12 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - `Source/ChordEngine.h`: the chord generator, copied unchanged from Nebula2 Chord. Don't edit it here; change it there and copy it over.
 - `Source/Modules.h`: every module type, and `registry()`, the list the Add menu is drawn from. No JUCE.
 - `Source/Presets.h`: the starting board for each kind of sound, pattern Ideas, in-style Random, Tidy, module sizes. No JUCE.
+- `Source/Styles.h`: styles. A style is a recipe (sounds, presets, pattern ideas, chord mood). `makeTrack`, `addTrack`, `varyPatterns`, `randomKnobs`, `makeStylePart`. No JUCE.
 - `Source/History.h`: undo and redo. The screen calls `history.before (board)` (or `beforeChords`, `tabAdded`, `tabRemoving`, `tabMoved`) just before a change. No JUCE.
 - `Source/PluginHost.*`: the Plugin slot (HostedModule): holds another VST3, feeds it notes from cables and the song position, saves its state. Registered through `extraTypes()` because the engine itself has no JUCE.
 - `Source/Sampler.*`: the Sample player (SampleModule). Also registered through `extraTypes()`.
 - `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
-- `Source/PluginEditor.*`: the screen. TabBar, BoardView (inside `boardHolder`, which is what makes zoom work), ModuleComp, ParamCell, SeqView, ChordView, HostView, SampleView, ScopeView, HostOverlay, MixerStrip, AddPanel, SongPanel.
+- `Source/PluginEditor.*`: the screen. StyleBar, TabBar, BoardView (inside `boardHolder`, which is what makes zoom work), AllView (one embedded BoardView per sound), ModuleComp, ParamCell, SeqView, ChordView, HostView, SampleView, ScopeView, HostOverlay, MixerStrip, AddPanel, SongPanel (the timeline).
 - `Source/Look.h`: design tokens and materials (ParaEQ design system, shared with Nebula2 Chord).
 - `tests/EngineTest.cpp`: the engine on its own (plain C++).
 - `tests/OfflineTest.cpp`: the plugin in a fake Cubase.
@@ -51,6 +54,10 @@ The screen draws it from `desc()`. No screen code is needed per module.
 Signals on cables: audio is -1..1; pitch is octaves from middle C; a gate is "above 0.5"; envelopes are 0..1; LFOs are -1..1.
 
 Rules that tests hold in place:
+- Styles: every preset and idea a style names must exist. The same seed makes the same track. Make track, Variation and Random knobs each call `history.beforeAll()` first (one Undo step for the whole project). Random knobs never touches tuning, levels, lengths or switches (`knobCanRandomise`).
+- Panels: every unit is `lay::panelH` high; `lay::geo (info)` says where its knobs and jacks go and `lay::fits (info)` must hold for every type, the plugin slot and sample player included. A unit with `perRow` keeps its knobs in groups of that many.
+- The All view: `proc.showAll`. `selectTab (i)` shows one sound alone; `showAllSounds()` shows them all; `reshow (i)` redraws whichever is up (use it after a change). `selectTab (-1)` / `reshow (-1)` lets go of the boards before the rack changes under them.
+- Timeline knob lines: `Board::autos` (`AutoLane`: unit id, knob, up to 64 points of bar and knob position). Points are atomics, so dragging one never takes the lock; adding or removing a line does (`Rack::addAuto` / `removeAuto`). Knobs are set on a fixed grid of song position (1/32 of a step) with chunks cut at its edges, so it never depends on block size. The song is `Rack::songBars()` long and goes round. Saved as `au` lines. A new line is flat at the knob's own position and changes nothing.
 - A knob at 0% does nothing at all (Drive at 0% is identical to no Drive). Every effect at Mix 0% passes its input through exactly, and gives silence for silence.
 - Anything rhythmic is stored as a note length and worked out from the tempo, never milliseconds.
 - Saves are text, named by id. Unknown modules and knobs are skipped on load, so never rename an id.
@@ -89,6 +96,7 @@ cmake --build build --target Nebula2Modulation_VST3 -j3
 ./build/OfflineTest_artefacts/Release/OfflineTest "build/Nebula2Modulation_artefacts/Release/VST3/Nebula2 Modulation.vst3" "../nebula2-chord/build/Nebula2Chord_artefacts/Release/VST3/Nebula2 Chord.vst3"
 ./build/Snapshot_artefacts/Release/Snapshot /tmp/snap           # ui.png, ui_playing.png, ui_add.png ...
 cp /tmp/snap/ui_playing.png docs/screenshot.png; cp /tmp/snap/ui_pad.png docs/screenshot-chords.png; cp /tmp/snap/ui_add.png docs/screenshot-add-units.png; cp /tmp/snap/ui_song.png docs/screenshot-song.png
+cp /tmp/snap/ui_all_trance.png docs/screenshot-all.png; cp /tmp/snap/ui_timeline.png docs/screenshot-timeline.png
 ```
 
 The engine test alone compiles in seconds without JUCE:
@@ -105,7 +113,10 @@ Push to main, then start the release through the API (pushing tags doesn't work 
 gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.22'
 ```
 
-The latest release is **v0.1.21**. Bump by one each time.
+The latest release is **v0.1.21**. Bump by one each time. The Modurand rework (styles, All view, rack panels,
+timeline) is on branch `claude/gallant-mendel-zh1u44` and has not been released: Joe hasn't asked for a release yet.
+
+Windows: don't name a variable `near`, `far` or `small`. The Windows headers define them and the build breaks.
 
 ## What can't be checked here
 

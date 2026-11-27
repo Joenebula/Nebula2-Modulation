@@ -70,10 +70,24 @@ void ParamCell::linkMenu()
         const int n = proc.rack.membersOf (g, false);
         m.addItem (g + 1, "Group " + groupLetter (g) + (n > 0 ? "   (" + juce::String (n) + (n == 1 ? " knob)" : " knobs)") : ""), true, cur == g);
     }
+    // ...or give it a line on the timeline, to move it through the song
+    auto* comp = dynamic_cast<ModuleComp*> (getParentComponent());
+    if (comp != nullptr && param.choices.empty())
+    {
+        m.addSeparator();
+        m.addItem (100, "Move this knob through the song (timeline)", true, comp->onTimeline (idx));
+    }
     juce::Component::SafePointer<ParamCell> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe] (int r)
     {
         if (safe == nullptr || r <= 0) return;
+        if (r == 100)
+        {
+            auto* mc = dynamic_cast<ModuleComp*> (safe->getParentComponent());
+            auto* view = safe->findParentComponentOfClass<BoardView>();
+            if (mc != nullptr && view != nullptr && view->onDrawKnob) view->onDrawKnob (mc->itsBoard(), safe->module.uid, safe->idx);
+            return;
+        }
         boardWillChange (*safe);
         safe->proc.rack.linkParam (safe->module, safe->idx, r - 1);
         safe->repaint();
@@ -98,6 +112,12 @@ void ParamCell::paint (juce::Graphics& g)
         g.drawText (groupLetter (group), badge.toNearestInt(), juce::Justification::centred, false);
     }
 
+    // A knob the timeline moves wears a small mark
+    if (auto* comp = dynamic_cast<ModuleComp*> (getParentComponent()); comp != nullptr && comp->onTimeline (idx))
+    {
+        g.setColour (noteAccent);
+        g.fillRoundedRectangle (1.0f, 13.0f, 9.0f, 3.0f, 1.5f);
+    }
     const float W = (float) getWidth(), H = (float) getHeight();
     if (! param.choices.empty())
     {
@@ -1527,8 +1547,11 @@ void BoardView::filesDropped (const juce::StringArray& files, int x, int y)
 
 void BoardView::tick()
 {
+    // knobs the timeline is moving are redrawn as they turn
+    const bool moving = board != nullptr && ! board->autos.empty() && proc.isPlaying();
     for (auto* c : comps)
     {
+        if (moving && c->anyOnTimeline()) c->repaint();
         if (c->seq != nullptr) c->seq->tick();
         if (c->chords != nullptr) c->chords->tick();
         if (c->sample != nullptr) c->sample->tick();
@@ -2637,6 +2660,7 @@ SongPanel::SongPanel (Nebula2ModulationProcessor& p) : proc (p)
 }
 
 void SongPanel::open() { sync(); setVisible (true); toFront (true); resized(); repaint(); }
+// (the panel is rebuilt from the rack each time it is drawn, so after Undo it only needs drawing again)
 void SongPanel::sync()
 {
     const bool on = proc.rack.song.on.load();
@@ -2682,25 +2706,57 @@ void SongPanel::fill (int kind)
     sync();
 }
 
-int SongPanel::rowH() const
+// ---- The timeline: bars along the top, a row per sound, and under a sound a row for each knob that moves ----
+int SongPanel::contentH() const
 {
-    const int rows = juce::jmax (1, (int) proc.rack.boards.size());
-    return juce::jlimit (12, 30, (getHeight() - 24 - 196) / rows);
+    int h = 0;
+    for (auto& b : proc.rack.boards) h += rowH + (int) b->autos.size() * laneH;
+    return juce::jmax (rowH, h);
 }
 juce::Rectangle<int> SongPanel::card() const
 {
-    const int rows = juce::jmax (1, (int) proc.rack.boards.size());
-    return juce::Rectangle<int> (1000, 196 + rows * rowH()).withCentre (getLocalBounds().getCentre());
+    const int w = juce::jmin (getWidth() - 40, 1180), h = juce::jmin (getHeight() - 40, 136 + contentH() + 60);
+    return juce::Rectangle<int> (w, h).withCentre (getLocalBounds().getCentre());
+}
+juce::Rectangle<int> SongPanel::rows() const { const auto c = card(); return { c.getX() + 20, c.getY() + 136, c.getWidth() - 40, c.getHeight() - 136 - 56 }; }
+int SongPanel::timeX() const { return card().getX() + 20 + labelW; }
+int SongPanel::timeW() const { return card().getWidth() - 40 - labelW; }
+float SongPanel::barW() const { return (float) timeW() / (float) juce::jmax (1, proc.rack.songBars()); }
+int SongPanel::rowY (int tab) const
+{
+    int y = rows().getY() - scroll;
+    for (int t = 0; t < tab && t < (int) proc.rack.boards.size(); ++t) y += rowH + (int) proc.rack.boards[(size_t) t]->autos.size() * laneH;
+    return y;
 }
 juce::Rectangle<int> SongPanel::cell (int tab, int section) const
 {
-    const auto c = card();
-    const int sections = proc.rack.song.sections.load();
-    const int left = c.getX() + 20 + 150, w = (c.getWidth() - 40 - 150) / juce::jmax (1, sections);
-    return { left + section * w, c.getY() + 136 + tab * rowH(), w, rowH() };
+    const float w = barW() * (float) proc.rack.song.bars.load();
+    const int x0 = timeX() + juce::roundToInt (w * (float) section), x1 = timeX() + juce::roundToInt (w * (float) (section + 1));
+    return { x0, rowY (tab), x1 - x0, rowH };
+}
+juce::Rectangle<int> SongPanel::laneArea (int tab, int lane) const { return { timeX(), rowY (tab) + rowH + lane * laneH, timeW(), laneH }; }
+juce::Rectangle<int> SongPanel::knobChip (int tab) const { return { timeX() - 8 - 62, rowY (tab) + 4, 62, rowH - 8 }; }
+juce::Rectangle<int> SongPanel::removeChip (int tab, int lane) const { return { timeX() - 8 - 20, laneArea (tab, lane).getCentreY() - 10, 20, 20 }; }
+juce::Point<int> SongPanel::pointAt (int tab, int lane, float bar, float value) const
+{
+    const auto a = laneArea (tab, lane);
+    return { a.getX() + juce::roundToInt (bar * barW()), a.getBottom() - 6 - juce::roundToInt (juce::jlimit (0.0f, 1.0f, value) * (float) (laneH - 12)) };
+}
+int SongPanel::pointNear (int tab, int lane, juce::Point<int> p) const
+{
+    if (tab < 0 || tab >= (int) proc.rack.boards.size() || lane < 0 || lane >= (int) proc.rack.boards[(size_t) tab]->autos.size()) return -1;
+    auto& a = *proc.rack.boards[(size_t) tab]->autos[(size_t) lane];
+    int best = -1; float bestD = 9.0f;
+    for (int k = 0; k < a.count.load(); ++k)
+    {
+        const float d = pointAt (tab, lane, a.bar[(size_t) k].load(), a.val[(size_t) k].load()).toFloat().getDistanceFrom (p.toFloat());
+        if (d < bestD) { bestD = d; best = k; }
+    }
+    return best;
 }
 bool SongPanel::hit (juce::Point<int> p, int& tab, int& section) const
 {
+    if (! rows().contains (p)) return false;
     const int sections = proc.rack.song.sections.load();
     for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
         for (int s = 0; s < sections; ++s)
@@ -2710,34 +2766,139 @@ bool SongPanel::hit (juce::Point<int> p, int& tab, int& section) const
 void SongPanel::resized()
 {
     const auto c = card();
-    const int y = c.getY() + 64;
-    onOff.setBounds (c.getX() + 20, y, 124, 28);
-    fewer.setBounds (c.getX() + 232, y, 28, 28);
-    more.setBounds (c.getX() + 296, y, 28, 28);
-    barsButton.setBounds (c.getX() + 340, y, 104, 28);
+    const int y = c.getY() + 62;
+    onOff.setBounds (c.getX() + 20, y, 140, 28);
+    fewer.setBounds (c.getX() + 252, y, 28, 28);
+    more.setBounds (c.getX() + 316, y, 28, 28);
+    barsButton.setBounds (c.getX() + 360, y, 104, 28);
     buildUp.setBounds (c.getRight() - 20 - 90, y, 90, 28);
     allOn.setBounds (buildUp.getX() - 8 - 76, y, 76, 28);
-    close.setBounds (c.getRight() - 20 - 84, c.getBottom() - 16 - 28, 84, 28);
+    close.setBounds (c.getRight() - 20 - 84, c.getBottom() - 14 - 28, 84, 28);
+    scroll = juce::jlimit (0, juce::jmax (0, contentH() - rows().getHeight()), scroll);
 }
+
+int SongPanel::addLane (int tab, int uid, int param)
+{
+    if (tab < 0 || tab >= (int) proc.rack.boards.size()) return -1;
+    auto& b = *proc.rack.boards[(size_t) tab];
+    proc.history.before (b);
+    const int lane = proc.rack.addAuto (b, uid, param);
+    proc.history.discardIfUnchanged();
+    resized(); repaint();
+    return lane;
+}
+void SongPanel::removeLane (int tab, int lane)
+{
+    if (tab < 0 || tab >= (int) proc.rack.boards.size()) return;
+    auto& b = *proc.rack.boards[(size_t) tab];
+    proc.history.before (b);
+    proc.rack.removeAuto (b, lane);
+    proc.history.discardIfUnchanged();
+    resized(); repaint();
+}
+// + Knob: every knob of that sound, unit by unit. Knobs that already have a line are ticked.
+void SongPanel::knobMenu (int tab)
+{
+    if (tab < 0 || tab >= (int) proc.rack.boards.size()) return;
+    auto& b = *proc.rack.boards[(size_t) tab];
+    juce::PopupMenu m;
+    m.addSectionHeader ("Move a knob of " + juce::String (b.name) + " through the song");
+    std::map<std::string, int> seen;
+    for (auto& mod : b.modules)
+    {
+        juce::PopupMenu sub;
+        for (int k = 0; k < (int) mod->info->params.size(); ++k)
+            if (mod->info->params[(size_t) k].choices.empty())
+                sub.addItem (mod->uid * 100 + k + 1, mod->info->params[(size_t) k].name, true, b.autoIndex (mod->uid, k) >= 0);
+        if (sub.getNumItems() == 0) continue;
+        const int nth = ++seen[mod->info->type];
+        m.addSubMenu (juce::String (mod->info->name) + (nth > 1 ? " " + juce::String (nth) : juce::String()), sub);
+    }
+    juce::Component::SafePointer<SongPanel> safe (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (knobChip (tab))), [safe, tab] (int r)
+    {
+        if (safe != nullptr && r > 0) safe->addLane (tab, r / 100, r % 100 - 1);
+    });
+}
+
 void SongPanel::mouseDown (const juce::MouseEvent& e)
 {
-    if (! card().contains (e.getPosition())) { setVisible (false); return; }
+    drag = {};
+    const auto p = e.getPosition();
+    if (! card().contains (p)) { setVisible (false); return; }
+    if (! rows().contains (p)) return;
+    for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
+    {
+        auto& b = *proc.rack.boards[(size_t) t];
+        if (knobChip (t).contains (p)) { knobMenu (t); return; }
+        for (int l = 0; l < (int) b.autos.size(); ++l)
+        {
+            if (removeChip (t, l).contains (p)) { removeLane (t, l); return; }
+            const auto area = laneArea (t, l);
+            if (! area.expanded (4, 0).contains (p)) continue;
+            auto& a = *b.autos[(size_t) l];
+            proc.history.before (b);
+            int point = pointNear (t, l, p);
+            if (e.mods.isPopupMenu())
+            {
+                // right-click a point: it goes (a line keeps at least one)
+                if (point >= 0 && a.count.load() > 1) a.remove (point);
+                proc.history.discardIfUnchanged();
+                repaint();
+                return;
+            }
+            if (point < 0)
+            {
+                // a click on the line's row puts a new point there, already in the hand
+                const float bar = juce::jlimit (0.0f, (float) proc.rack.songBars(), (float) (p.x - area.getX()) / barW());
+                const float value = juce::jlimit (0.0f, 1.0f, (float) (area.getBottom() - 6 - p.y) / (float) (laneH - 12));
+                point = a.add (e.mods.isShiftDown() ? bar : std::round (bar * 4.0f) / 4.0f, value);
+            }
+            if (point >= 0) drag = { 2, t, l, point };
+            repaint();
+            return;
+        }
+    }
     int t = 0, s = 0;
-    if (! hit (e.getPosition(), t, s)) return;
+    if (! hit (p, t, s)) return;
     proc.history.beforeSong();
     paintTo = ((proc.rack.boards[(size_t) t]->plays.load() >> s) & 1u) == 0;
+    drag.kind = 1;
     setCell (t, s, paintTo);
 }
 void SongPanel::mouseDrag (const juce::MouseEvent& e)
 {
-    int t = 0, s = 0;
-    if (hit (e.getPosition(), t, s)) setCell (t, s, paintTo);
+    if (drag.kind == 1)
+    {
+        int t = 0, s = 0;
+        if (hit (e.getPosition(), t, s)) setCell (t, s, paintTo);
+    }
+    if (drag.kind != 2 || drag.tab >= (int) proc.rack.boards.size() || drag.lane >= (int) proc.rack.boards[(size_t) drag.tab]->autos.size()) return;
+    // Dragging a point: sideways moves it through the song (to the nearest quarter bar; Shift for anywhere),
+    // up and down moves the knob
+    const auto area = laneArea (drag.tab, drag.lane);
+    const float bar = juce::jlimit (0.0f, (float) proc.rack.songBars(), (float) (e.x - area.getX()) / barW());
+    const float value = (float) (area.getBottom() - 6 - e.y) / (float) (laneH - 12);
+    proc.rack.boards[(size_t) drag.tab]->autos[(size_t) drag.lane]->move (drag.point, e.mods.isShiftDown() ? bar : std::round (bar * 4.0f) / 4.0f, value);
+    repaint();
+}
+void SongPanel::mouseUp (const juce::MouseEvent&)
+{
+    if (drag.kind == 2) proc.history.discardIfUnchanged();
+    drag = {};
+}
+void SongPanel::mouseMove (const juce::MouseEvent& e) { if (rows().contains (e.getPosition())) repaint (rows()); }
+void SongPanel::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
+{
+    scroll = juce::jlimit (0, juce::jmax (0, contentH() - rows().getHeight()), scroll - juce::roundToInt (w.deltaY * 200.0f));
+    repaint();
 }
 void SongPanel::tick()
 {
     if (! isVisible()) return;
     const int now = proc.rack.song.on.load() && proc.isPlaying() ? proc.rack.song.now.load() : -1;
-    if (now != shownSection) { shownSection = now; repaint(); }
+    const float bar = proc.isPlaying() ? proc.rack.song.bar.load() : -1.0f;
+    if (now != shownSection || std::abs (bar - shownBar) > 0.02f) { shownSection = now; shownBar = bar; repaint(); }
 }
 void SongPanel::paint (juce::Graphics& g)
 {
@@ -2745,64 +2906,142 @@ void SongPanel::paint (juce::Graphics& g)
     const auto c = card();
     raised (g, c.toFloat(), radiusPanel);
     const bool on = proc.rack.song.on.load();
-    const int sections = proc.rack.song.sections.load(), bars = proc.rack.song.bars.load();
+    const int sections = proc.rack.song.sections.load(), bars = proc.rack.song.bars.load(), total = proc.rack.songBars();
     g.setFont (titleFont());
     g.setColour (juce::Colours::white);
     g.drawText ("Song", c.getX() + 20, c.getY() + 14, 300, 20, juce::Justification::centredLeft, false);
     g.setFont (helpFont());
     g.setColour (n7);
-    g.drawText (on ? "A filled square means that sound plays in that section. Click or drag across squares to change them. After the last section the song goes round again."
-                   : "Off: every sound plays all the time. Switch it on to choose which sounds play in which part of the song.",
+    g.drawText (on ? "A filled block means that sound plays in that section: click or drag to change. + Knob gives a knob a line: click the line to add a point, drag points, right-click one to remove it."
+                   : "Sections are off: every sound plays all the time. + Knob gives a knob a line through the song: click the line to add a point, drag points, right-click one to remove it.",
                 c.getX() + 20, c.getY() + 34, c.getWidth() - 40, 16, juce::Justification::centredLeft, true);
-    caption (g, "Sections", { c.getX() + 160, c.getY() + 64, 68, 28 });
+    caption (g, "Sections", { c.getX() + 180, c.getY() + 62, 68, 28 });
     g.setFont (controlFont());
     g.setColour (n8);
     g.drawText (juce::String (sections), fewer.getRight(), fewer.getY(), more.getX() - fewer.getRight(), 28, juce::Justification::centred, false);
     g.setFont (helpFont());
     g.setColour (n7);
-    g.drawText ("The whole song: " + juce::String (sections * bars) + " bars", barsButton.getRight() + 14, barsButton.getY(), 200, 28, juce::Justification::centredLeft, false);
+    g.drawText ("The whole song: " + juce::String (total) + " bars, then round again", barsButton.getRight() + 14, barsButton.getY(), 280, 28, juce::Justification::centredLeft, false);
 
-    // Section numbers along the top, with the bar each one starts on
+    // The ruler: section numbers, and bar numbers under them
+    const int x0 = timeX(), ry = c.getY() + 100;
+    const float bw = barW();
+    const int every = bw >= 22.0f ? 1 : bw >= 11.0f ? 2 : 4;
     for (int s = 0; s < sections; ++s)
     {
-        const auto r = cell (0, s).withY (c.getY() + 108).withHeight (24);
-        const bool playing = s == shownSection;
+        const auto r = cell (0, s).withY (ry).withHeight (16);
         g.setFont (controlFont());
-        g.setColour (playing ? noteAccent : n8);
-        g.drawText (juce::String (s + 1), r.withHeight (13), juce::Justification::centred, false);
-        g.setFont (font (9.0f));
-        g.setColour (playing ? noteAccent : n7);
-        g.drawText ("bar " + juce::String (s * bars + 1), r.withTrimmedTop (12), juce::Justification::centred, false);
+        g.setColour (s == shownSection ? noteAccent : n8);
+        g.drawText (juce::String (s + 1), r.withTrimmedLeft (4), juce::Justification::centredLeft, false);
     }
-    const int h = rowH();
-    for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
+    for (int b = 0; b < total; ++b)
     {
-        auto& b = *proc.rack.boards[(size_t) t];
-        const auto col = boardColour (b.colour);
-        const auto first = cell (t, 0);
-        g.setColour (col);
-        g.fillEllipse ((float) c.getX() + 22.0f, (float) first.getCentreY() - 4.0f, 8.0f, 8.0f);
-        g.setFont (controlFont());
-        g.setColour (n8);
-        g.drawText (b.name, c.getX() + 38, first.getY(), 126, h, juce::Justification::centredLeft, true);
-        const uint32_t plays = b.plays.load();
-        for (int s = 0; s < sections; ++s)
+        const float x = (float) x0 + (float) b * bw;
+        const bool edge = b % bars == 0;
+        g.setColour (juce::Colours::white.withAlpha (edge ? 0.28f : 0.10f));
+        g.fillRect (x, (float) ry + (edge ? 2.0f : 18.0f), 1.0f, edge ? 30.0f : 14.0f);
+        if (b % every != 0) continue;
+        g.setFont (font (9.0f));
+        g.setColour (n7);
+        g.drawText (juce::String (b + 1), juce::roundToInt (x) + 3, ry + 18, 30, 12, juce::Justification::centredLeft, false);
+    }
+
+    const auto view = rows();
+    const auto mouse = getMouseXYRelative();
+    {
+        juce::Graphics::ScopedSaveState save (g);
+        g.reduceClipRegion (view);
+        for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
         {
-            const auto r = cell (t, s).toFloat().reduced (2.0f, h > 18 ? 3.0f : 1.0f);
-            if (((plays >> s) & 1u) != 0)
+            auto& b = *proc.rack.boards[(size_t) t];
+            const auto col = boardColour (b.colour);
+            const int y = rowY (t);
+            if (y > view.getBottom()) break;
+            g.setColour (col);
+            g.fillEllipse ((float) c.getX() + 22.0f, (float) y + (float) rowH * 0.5f - 4.0f, 8.0f, 8.0f);
+            g.setFont (controlFont());
+            g.setColour (n8);
+            g.drawText (b.name, c.getX() + 38, y, labelW - 38 - 78, rowH, juce::Justification::centredLeft, true);
             {
-                g.setColour (col.withAlpha (on ? (s == shownSection ? 1.0f : 0.78f) : 0.28f));
-                g.fillRoundedRectangle (r, radiusChip);
+                const auto chip = knobChip (t);
+                raised (g, chip.toFloat(), radiusChip, chip.contains (mouse));
+                g.setFont (font (10.5f, Weight::Medium));
+                g.setColour (n8);
+                g.drawText ("+ Knob", chip, juce::Justification::centred, false);
             }
-            else sunken (g, r, radiusChip);
+            const uint32_t plays = b.plays.load();
+            for (int s = 0; s < sections; ++s)
+            {
+                const auto r = cell (t, s).toFloat().reduced (1.5f, 3.0f);
+                if (((plays >> s) & 1u) != 0)
+                {
+                    g.setColour (col.withAlpha (on ? (s == shownSection ? 1.0f : 0.78f) : 0.28f));
+                    g.fillRoundedRectangle (r, radiusChip);
+                }
+                else sunken (g, r, radiusChip);
+            }
+            // its knob lines
+            for (int l = 0; l < (int) b.autos.size(); ++l)
+            {
+                auto& a = *b.autos[(size_t) l];
+                const auto area = laneArea (t, l);
+                auto* mod = b.find (a.uid);
+                sunken (g, area.toFloat().reduced (0.0f, 2.0f), radiusChip);
+                g.setFont (font (10.5f, Weight::SemiBold, 0.2f));
+                g.setColour (n8);
+                g.drawFittedText (mod != nullptr ? juce::String (mod->info->name).toUpperCase() : juce::String ("?"), c.getX() + 38, area.getY() + 10, labelW - 38 - 34, 14, juce::Justification::centredLeft, 1, 0.7f);
+                g.setFont (font (10.5f));
+                g.setColour (n7);
+                const bool ok = mod != nullptr && a.param >= 0 && a.param < (int) mod->info->params.size();
+                const float here = shownBar >= 0.0f ? a.at (shownBar) : (ok ? paramToNorm (mod->info->params[(size_t) a.param], mod->P (a.param)) : 0.0f);
+                if (ok) g.drawFittedText (juce::String (mod->info->params[(size_t) a.param].name) + "   " + minus (paramText (mod->info->params[(size_t) a.param], paramFromNorm (mod->info->params[(size_t) a.param], here))),
+                                          c.getX() + 38, area.getY() + 26, labelW - 38 - 34, 14, juce::Justification::centredLeft, 1, 0.7f);
+                {
+                    const auto chip = removeChip (t, l);
+                    if (chip.contains (mouse)) raised (g, chip.toFloat(), radiusChip, true);
+                    g.setFont (font (13.0f));
+                    g.setColour (chip.contains (mouse) ? juce::Colours::white : n7);
+                    g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")), chip, juce::Justification::centred, false);
+                }
+                // the line: held flat to both edges, straight between points, filled underneath
+                const int n = a.count.load();
+                if (n <= 0) continue;
+                juce::Path line;
+                line.startNewSubPath ((float) area.getX(), (float) pointAt (t, l, 0.0f, a.val[0].load()).y);
+                for (int k = 0; k < n; ++k) line.lineTo (pointAt (t, l, a.bar[(size_t) k].load(), a.val[(size_t) k].load()).toFloat());
+                line.lineTo ((float) area.getRight(), (float) pointAt (t, l, 0.0f, a.val[(size_t) (n - 1)].load()).y);
+                juce::Path fill (line);
+                fill.lineTo ((float) area.getRight(), (float) area.getBottom() - 3.0f); fill.lineTo ((float) area.getX(), (float) area.getBottom() - 3.0f); fill.closeSubPath();
+                g.setColour (col.withAlpha (0.14f));
+                g.fillPath (fill);
+                g.setColour (col);
+                g.strokePath (line, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                const int closest = area.expanded (4, 0).contains (mouse) ? pointNear (t, l, mouse) : -1;
+                for (int k = 0; k < n; ++k)
+                {
+                    const auto pt = pointAt (t, l, a.bar[(size_t) k].load(), a.val[(size_t) k].load()).toFloat();
+                    const bool hot = k == closest || (drag.kind == 2 && drag.tab == t && drag.lane == l && drag.point == k);
+                    g.setColour (sunkenLo);
+                    g.fillEllipse (juce::Rectangle<float> (hot ? 11.0f : 8.0f, hot ? 11.0f : 8.0f).withCentre (pt));
+                    g.setColour (hot ? juce::Colours::white : col);
+                    g.drawEllipse (juce::Rectangle<float> (hot ? 11.0f : 8.0f, hot ? 11.0f : 8.0f).withCentre (pt), 1.8f);
+                }
+            }
+        }
+        // where the song is now
+        if (shownBar >= 0.0f)
+        {
+            g.setColour (noteAccent);
+            g.fillRect ((float) x0 + shownBar * bw - 0.75f, (float) view.getY(), 1.5f, (float) juce::jmin (view.getHeight(), contentH()));
         }
     }
-    // The section playing now
-    if (shownSection >= 0 && shownSection < sections && ! proc.rack.boards.empty())
+    if (shownBar >= 0.0f)
     {
-        const auto top = cell (0, shownSection), bottom = cell ((int) proc.rack.boards.size() - 1, shownSection);
-        g.setColour (noteAccent.withAlpha (0.8f));
-        g.drawRoundedRectangle (top.getUnion (bottom).toFloat().reduced (0.5f), radiusChip, 1.0f);
+        juce::Path head;
+        const float x = (float) x0 + shownBar * bw;
+        head.addTriangle (x - 5.0f, (float) ry + 22.0f, x + 5.0f, (float) ry + 22.0f, x, (float) ry + 32.0f);
+        g.setColour (noteAccent);
+        g.fillPath (head);
     }
 }
 
@@ -2899,6 +3138,11 @@ void Nebula2ModulationEditor::configureBoard (BoardView& v)
     v.onAddMenu = [this] { addPanel.open(); };
     v.onAddTypes = [this] (const std::vector<std::string>& types) { addUnits (types); };
     v.onOpenPlugin = [this, &v] (HostedModule& m) { if (v.board != nullptr) hostOverlay.open (m, v.board->name); };
+    v.onDrawKnob = [this] (Board& b, int uid, int param)
+    {
+        for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
+            if (proc.rack.boards[(size_t) t].get() == &b) { songPanel.open(); songPanel.addLane (t, uid, param); boardView.repaintAll(); allView.repaintAll(); }
+    };
 }
 
 void Nebula2ModulationEditor::letGo() { boardView.setBoard (nullptr); allView.clear(); }

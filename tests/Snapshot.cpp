@@ -90,6 +90,13 @@ int main (int argc, char** argv)
     juce::ignoreUnused (b);
     shoot (*ed, dir + "/ui_added.png");
 
+    // the mixing desk opened up
+    p.rack.boards[1]->pan.store (-0.4f); p.rack.boards[3]->pan.store (0.6f);
+    e->desk().setTall (true);
+    shoot (*ed, dir + "/ui_desk_open.png");
+    e->desk().setTall (false);
+    p.rack.boards[1]->pan.store (0.0f); p.rack.boards[3]->pan.store (0.0f);
+
     // the song page: off, then built up
     e->songPanel.open();
     shoot (*ed, dir + "/ui_song_off.png");

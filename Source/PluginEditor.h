@@ -262,8 +262,15 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void tick();
     std::function<void (int)> onSelect;
+    std::function<void()> onResize;                 // MORE or LESS was pressed: the desk changes height
+    std::function<void (int)> onChangeSound;        // the SOUND button on a channel
+    static int heightFor (bool tall);
+    void setTall (bool tall);
+    void setPan (int channel, float pan);           // -1 left .. 1 right
 private:
-    juce::Rectangle<int> channel (int i) const, masterArea() const;
+    juce::Rectangle<int> channel (int i) const, masterArea() const, extra (int i) const, moreArea() const;
+    static juce::Rectangle<int> panIn (juce::Rectangle<int> extra), soundIn (juce::Rectangle<int> extra);
+    bool dragPan = false;
     static juce::Rectangle<int> faderIn (juce::Rectangle<int> ch), muteIn (juce::Rectangle<int> ch), soloIn (juce::Rectangle<int> ch), outIn (juce::Rectangle<int> ch);
     void outMenu (int channel);
     Nebula2ModulationProcessor& proc;
@@ -336,6 +343,7 @@ public:
     n2m::SongPanel songPanel;
     n2m::HostOverlay hostOverlay;
     n2m::BoardView& board() { return boardView; }   // for the tests
+    n2m::MixerStrip& desk() { return mixer; }
     void stepHistory (bool redo);                   // Undo (false) or Redo (true)
     void stepZoom (int direction);                  // +1 bigger, -1 smaller, 0 just apply
     void addUnits (const std::vector<std::string>& types);

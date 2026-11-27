@@ -917,6 +917,54 @@ int main (int argc, char** argv)
         CHECK (q.rack.save() == r.rack.save(), "a changed sound saves and reopens with the project");
     }
 
+    {
+        // The mixing desk opens up to show pan and more, and closes again
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        const int closed = ed->desk().getHeight(), boardH = ed->board().getParentComponent()->getParentComponent()->getHeight();
+        CHECK (! r.mixerTall.load() && closed == n2m::MixerStrip::heightFor (false), "the desk starts closed");
+        ed->desk().setTall (true);
+        CHECK (ed->desk().getHeight() == n2m::MixerStrip::heightFor (true) && ed->desk().getHeight() > closed + 60, "MORE makes the desk taller");
+        CHECK (ed->desk().getBottom() == ed->getHeight() && ed->desk().getY() >= 0, "it still sits at the bottom of the window");
+        // pan: all the way left leaves nothing on the right
+        for (auto& b : r.rack.boards) b->mute.store (true);
+        r.rack.boards[0]->mute.store (false);
+        auto sides = [&] (float& l, float& rr)
+        {
+            l = rr = 0; song.playing = true; song.ppq = 0;
+            for (int i = 0; i < 200; ++i) { juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m; r.processBlock (buf, m); song.ppq += 256 * song.bpm / 60.0 / 48000.0; l = juce::jmax (l, buf.getMagnitude (0, 0, 256)); rr = juce::jmax (rr, buf.getMagnitude (1, 0, 256)); }
+            song.playing = false;
+        };
+        float l = 0, rr = 0;
+        sides (l, rr);
+        CHECK (l > 0.05f && std::abs (l - rr) < 0.01f, "in the centre the kick is the same on both sides");
+        ed->desk().setPan (0, -1.0f);
+        sides (l, rr);
+        CHECK (l > 0.05f && rr < 0.001f, "panned left it is only on the left");
+        ed->desk().setPan (0, 0.5f);
+        sides (l, rr);
+        CHECK (rr > l * 1.5f && l > 0.01f, "panned half right it leans right");
+        ed->desk().setPan (0, 0.02f);
+        CHECK (r.rack.boards[0]->pan.load() == 0.0f, "near the middle it snaps to the centre");
+        ed->desk().setPan (99, 1.0f);
+        // saved with the project, and it closes again
+        ed->desk().setPan (0, -0.3f);
+        juce::MemoryBlock saved; r.getStateInformation (saved);
+        Nebula2ModulationProcessor q; q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        q.setStateInformation (saved.getData(), (int) saved.getSize());
+        CHECK (q.mixerTall.load() && std::abs (q.rack.boards[0]->pan.load() + 0.3f) < 1.0e-4f, "an opened desk and its pans come back with the project");
+        ed->desk().setTall (false);
+        CHECK (ed->desk().getHeight() == closed && ed->board().getParentComponent()->getParentComponent()->getHeight() == boardH, "LESS closes it and gives the board its room back");
+        juce::MemoryBlock old;
+        { juce::MemoryOutputStream o (old, false); o.writeString (juce::String (r.rack.save())); o.writeInt (0); o.writeFloat (1.0f); }
+        q.setStateInformation (old.getData(), (int) old.getSize());
+        CHECK (! q.mixerTall.load(), "a project from before this loads with the desk closed");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

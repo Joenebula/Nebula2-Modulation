@@ -169,5 +169,11 @@ int main (int argc, char** argv)
             e->hostOverlay.close();
         }
     }
+    // Make track: a whole track in a style, from the style bar
+    p.rack.style = "acid";
+    e->styles().onMake ("acid");
+    p.preview.store (true); run (p, 0.7);
+    shoot (*ed, dir + "/ui_style_acid.png");
+    p.preview.store (false);
     return 0;
 }

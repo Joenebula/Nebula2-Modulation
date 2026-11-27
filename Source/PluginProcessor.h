@@ -4,6 +4,7 @@
 #include "PluginHost.h"
 #include "Sampler.h"
 #include "History.h"
+#include "Styles.h"
 
 // The plugin as Cubase sees it: holds the rack, follows Cubase's tempo and transport, saves with the project.
 class Nebula2ModulationProcessor : public juce::AudioProcessor
@@ -70,6 +71,13 @@ public:
     bool changeToSample (int tab, const juce::File& audioFile);
     bool changeToPlugin (int tab, const juce::String& name, const juce::String& path = {});   // an instrument
     bool changeToSaved (int tab, const juce::File& soundFile);                              // a .n2msound
+
+    // Styles: a whole track in one go. Each can be undone as one step. The screen must let go of the boards first.
+    void makeTrack (const juce::String& style, bool add);      // every sound of the style: instead of what is there, or added to it
+    void variation();                                          // the sounds stay, every pattern is made again in the style
+    void randomiseKnobs();                                     // every sound-shaping knob moves a little
+    int remakePart (const juce::String& kind, bool add);       // one sound of the style, made again (or added). Returns its tab
+    std::atomic<bool> addMode { false };                       // the style bar's Replace / Add switch
 
     // Your own plugins as ready-made sounds: a new tab with the plugin already in a slot and cabled.
     // An instrument goes straight to the Output; an effect is fed by send bus A. Either way a MIDI keyboard unit

@@ -324,6 +324,63 @@ int Nebula2ModulationProcessor::addPluginSound (const juce::String& name, const 
     return (int) rack.boards.size() - 1;
 }
 
+void Nebula2ModulationProcessor::makeTrack (const juce::String& style, bool add)
+{
+    history.beforeAll();
+    if (add) n2m::addTrack (rack, style.toStdString(), nextSeed());
+    else n2m::makeTrack (rack, style.toStdString(), nextSeed());
+    selectedTab.store (add ? juce::jmax (0, selectedTab.load()) : 0);
+    chordsVersion.fetch_add (1);
+}
+
+void Nebula2ModulationProcessor::variation()
+{
+    history.beforeAll();
+    n2m::varyPatterns (rack, nextSeed());
+}
+
+void Nebula2ModulationProcessor::randomiseKnobs()
+{
+    history.beforeAll();
+    n2m::randomKnobs (rack, nextSeed());
+}
+
+int Nebula2ModulationProcessor::remakePart (const juce::String& kind, bool add)
+{
+    const auto& style = n2m::styleById (rack.style);
+    const auto k = kind.toStdString();
+    n2m::Rand r (nextSeed());
+    // The tab to make again: the one showing if it is this kind of sound, else the first that is
+    int tab = -1;
+    if (! add)
+    {
+        const int sel = selectedTab.load();
+        if (sel >= 0 && sel < (int) rack.boards.size() && rack.boards[(size_t) sel]->type == k) tab = sel;
+        for (int i = 0; tab < 0 && i < (int) rack.boards.size(); ++i) if (rack.boards[(size_t) i]->type == k) tab = i;
+    }
+    auto part = n2m::partFor (style, k);
+    if (tab >= 0) for (auto& p : style.parts) if (k == p.kind && rack.boards[(size_t) tab]->name == p.name) part = p;
+    auto fresh = n2m::makeStylePart (part, r, rack.sr);
+    if (tab < 0)
+    {
+        int same = 0;
+        for (auto& o : rack.boards) if (o->name == fresh->name || o->name.rfind (fresh->name + " ", 0) == 0) ++same;
+        if (same > 0) fresh->name += " " + std::to_string (same + 1);
+        rack.addBoard (std::move (fresh));
+        history.tabAdded ((int) rack.boards.size() - 1);
+        return (int) rack.boards.size() - 1;
+    }
+    // Made again in place: the tab's name and its mixer channel stay
+    auto& old = *rack.boards[(size_t) tab];
+    fresh->name = old.name; fresh->colour = old.colour;
+    fresh->level.store (old.level.load()); fresh->pan.store (old.pan.load());
+    fresh->mute.store (old.mute.load()); fresh->solo.store (old.solo.load());
+    fresh->out.store (old.out.load()); fresh->plays.store (old.plays.load());
+    history.before (old, -1);
+    rack.applyBoard (tab, n2m::Rack::boardText (*fresh));
+    return tab;
+}
+
 uint32_t Nebula2ModulationProcessor::nextSeed()
 {
     seed = seed * 1664525u + 1013904223u;

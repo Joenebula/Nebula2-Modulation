@@ -983,6 +983,66 @@ int main (int argc, char** argv)
         for (auto& t : before) n2m::AddPanel::setFavourite (t, true);
     }
 
+    // The style bar: Make track, Variation, Random knobs and the part chips, as the screen does them
+    {
+        Nebula2ModulationProcessor r;
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto click = [ed] (juce::Rectangle<int> area)
+        {
+            auto& bar = ed->styles();
+            const auto at = area.getCentre().toFloat();
+            bar.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys::leftButtonModifier, 0, 0, 0, 0, 0, &bar, &bar, juce::Time::getCurrentTime(), at, juce::Time::getCurrentTime(), 1, false));
+        };
+        const auto starter = r.rack.save();
+        int acid = 0;
+        for (int i = 0; i < (int) n2m::styles().size(); ++i) if (std::string (n2m::styles()[(size_t) i].id) == "acid") acid = i;
+        click (ed->styles().styleChip (acid));
+        CHECK (r.rack.style == "acid" && r.rack.save().find ("board kick|Kick|") != std::string::npos && r.rack.boards.size() == 5, "picking a style only chooses it");
+        const auto chosen = r.rack.save();
+        CHECK (chosen != starter, "the chosen style is part of the project");
+        click (ed->styles().makeArea());
+        CHECK (r.rack.boards.size() >= 4 && r.rack.save() != chosen, "Make track makes a new track");
+        bool acidBass = false;
+        for (auto& b : r.rack.boards) acidBass = acidBass || b->name == "Acid bass";
+        CHECK (acidBass, "the track is in the chosen style");
+        CHECK (ed->board().board == r.rack.boards[0].get(), "the first sound of the new track is showing");
+        const auto made = r.rack.save();
+        const size_t tabs = r.rack.boards.size();
+        click (ed->styles().variationArea());
+        CHECK (r.rack.save() != made && r.rack.boards.size() == tabs, "Variation changes the patterns and keeps the sounds");
+        ed->stepHistory (false);
+        CHECK (r.rack.save() == made, "Undo takes a Variation back");
+        click (ed->styles().knobsArea());
+        CHECK (r.rack.save() != made, "Random knobs moves knobs");
+        ed->stepHistory (false);
+        CHECK (r.rack.save() == made, "Undo takes Random knobs back");
+        // A part chip makes that sound again in place: same tab, same mixer channel
+        int kick = 0;
+        r.rack.boards[0]->level.store (0.33f);
+        click (ed->styles().partChip (kick));
+        CHECK (r.rack.boards.size() == tabs && r.rack.boards[0]->type == "kick" && std::abs (r.rack.boards[0]->level.load() - 0.33f) < 1.0e-6f, "a part chip makes that sound again and keeps its channel");
+        // In Add mode it adds another
+        click (ed->styles().modeArea (true));
+        CHECK (r.addMode.load(), "Add mode");
+        click (ed->styles().partChip (kick));
+        CHECK (r.rack.boards.size() == tabs + 1 && r.rack.boards.back()->name == "Kick 2", "in Add mode a part chip adds another");
+        click (ed->styles().makeArea());
+        CHECK (r.rack.boards.size() > tabs + 1, "in Add mode Make track adds to what is there");
+        click (ed->styles().modeArea (false));
+        click (ed->styles().makeArea());
+        CHECK (r.rack.boards.size() < tabs + 4, "in Replace mode it starts again");
+        ed->stepHistory (false); ed->stepHistory (false); ed->stepHistory (false); ed->stepHistory (false); ed->stepHistory (false);
+        CHECK (r.rack.save() == chosen && ! r.history.canUndo(), "undo walks all the way back");
+        juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer m;
+        r.preview.store (true);
+        float peak = 0;
+        for (int b = 0; b < 400; ++b) { r.processBlock (buf, m); peak = juce::jmax (peak, buf.getMagnitude (0, 256)); }
+        CHECK (peak > 0.05f, "the track plays");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

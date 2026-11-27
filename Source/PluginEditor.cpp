@@ -1419,6 +1419,107 @@ void BoardView::tick()
 }
 
 //==============================================================================
+StyleBar::StyleBar (Nebula2ModulationProcessor& p) : proc (p) {}
+
+const std::vector<std::pair<const char*, const char*>>& StyleBar::parts()
+{
+    static const std::vector<std::pair<const char*, const char*>> v {
+        { "kick", "Kick" }, { "snare", "Snare" }, { "clap", "Clap" }, { "hat", "Hat" }, { "perc", "Perc" }, { "bass", "Bass" },
+        { "lead", "Lead" }, { "arp", "Arp" }, { "stab", "Stab" }, { "pad", "Pad" }, { "strings", "Strings" } };
+    return v;
+}
+
+// Top row: the styles. Bottom row: Make track, Variation, Random knobs, then one chip per kind of sound, then the mode.
+juce::Rectangle<int> StyleBar::styleChip (int index) const
+{
+    const int n = (int) n2m::styles().size();
+    const int w = (getWidth() - 24) / juce::jmax (1, n);
+    return { 12 + index * w, 5, w - 4, 24 };
+}
+juce::Rectangle<int> StyleBar::makeArea() const { return { 12, 34, 150, 25 }; }
+juce::Rectangle<int> StyleBar::variationArea() const { return { 168, 34, 86, 25 }; }
+juce::Rectangle<int> StyleBar::knobsArea() const { return { 260, 34, 116, 25 }; }
+juce::Rectangle<int> StyleBar::modeArea (bool add) const { return { getWidth() - 12 - (add ? 58 : 132), 34, add ? 58 : 72, 25 }; }
+juce::Rectangle<int> StyleBar::partChip (int index) const
+{
+    const int x0 = 432, x1 = modeArea (false).getX() - 52;
+    const int w = (x1 - x0) / (int) parts().size();
+    return { x0 + index * w, 34, w - 4, 25 };
+}
+
+void StyleBar::paint (juce::Graphics& g)
+{
+    const auto mouse = getMouseXYRelative();
+    const auto& now = n2m::styleById (proc.rack.style);
+    int i = 0;
+    for (auto& st : n2m::styles())
+    {
+        const auto r = styleChip (i).toFloat();
+        const bool on = &st == &now, over = r.contains (mouse.toFloat());
+        const auto col = boardColour (i);
+        if (on) sunken (g, r, radiusControl); else if (over) raised (g, r, radiusControl, true);
+        g.setColour (col.withAlpha (on ? 1.0f : 0.55f));
+        g.fillRoundedRectangle (r.getX() + 7.0f, r.getCentreY() - 3.0f, 6.0f, 6.0f, 1.5f);
+        g.setFont (font (11.5f, on ? Weight::SemiBold : Weight::Medium));
+        g.setColour (on ? juce::Colours::white : over ? n8 : n7);
+        g.drawFittedText (st.name, styleChip (i).withTrimmedLeft (18).withTrimmedRight (2), juce::Justification::centredLeft, 1, 0.75f);
+        ++i;
+    }
+    // Make track: the one lit button on the screen
+    {
+        const auto r = makeArea().toFloat();
+        g.setColour (accent.withAlpha (r.contains (mouse.toFloat()) ? 1.0f : 0.88f));
+        g.fillRoundedRectangle (r, radiusControl);
+        g.setFont (font (12.0f, Weight::SemiBold));
+        g.setColour (n0);
+        g.drawFittedText (juce::String (proc.addMode.load() ? "Add " : "Make ") + now.name + " track", makeArea().reduced (6, 0), juce::Justification::centred, 1, 0.75f);
+    }
+    auto button = [&] (juce::Rectangle<int> area, const juce::String& text, bool lit)
+    {
+        const auto r = area.toFloat();
+        if (lit) sunken (g, r, radiusControl); else raised (g, r, radiusControl, r.contains (mouse.toFloat()));
+        g.setFont (controlFont());
+        g.setColour (lit ? accent : n8);
+        g.drawFittedText (text, area.reduced (4, 0), juce::Justification::centred, 1, 0.8f);
+    };
+    button (variationArea(), "Variation", false);
+    button (knobsArea(), "Random knobs", false);
+    caption (g, "Parts", { knobsArea().getRight() + 14, 34, 40, 25 });
+    // A part chip is lit when the track has that kind of sound
+    for (int k = 0; k < (int) parts().size(); ++k)
+    {
+        bool has = false; int colour = 0;
+        for (auto& b : proc.rack.boards) if (b->type == parts()[(size_t) k].first) { has = true; colour = b->colour; }
+        const auto area = partChip (k);
+        const auto r = area.toFloat();
+        raised (g, r, radiusControl, r.contains (mouse.toFloat()));
+        g.setColour (has ? boardColour (colour) : n5);
+        g.fillEllipse (r.getX() + 8.0f, r.getCentreY() - 3.0f, 6.0f, 6.0f);
+        g.setFont (font (11.5f, Weight::Medium));
+        g.setColour (has ? n8 : n7);
+        g.drawFittedText (parts()[(size_t) k].second, area.withTrimmedLeft (19).withTrimmedRight (2), juce::Justification::centredLeft, 1, 0.75f);
+    }
+    caption (g, "Mode", { modeArea (false).getX() - 44, 34, 40, 25 });
+    button (modeArea (false), "Replace", ! proc.addMode.load());
+    button (modeArea (true), "Add", proc.addMode.load());
+    dividerH (g, 0, getWidth(), getHeight() - 2);
+}
+
+void StyleBar::mouseDown (const juce::MouseEvent& e)
+{
+    const auto p = e.getPosition();
+    for (int i = 0; i < (int) n2m::styles().size(); ++i)
+        if (styleChip (i).contains (p)) { proc.rack.style = n2m::styles()[(size_t) i].id; repaint(); return; }     // picking a style only chooses it
+    if (makeArea().contains (p)) { if (onMake) onMake (proc.rack.style); return; }
+    if (variationArea().contains (p)) { if (onVariation) onVariation(); return; }
+    if (knobsArea().contains (p)) { if (onRandomKnobs) onRandomKnobs(); return; }
+    for (int k = 0; k < (int) parts().size(); ++k)
+        if (partChip (k).contains (p)) { if (onPart) onPart (parts()[(size_t) k].first); return; }
+    if (modeArea (false).contains (p)) { proc.addMode.store (false); repaint(); }
+    if (modeArea (true).contains (p)) { proc.addMode.store (true); repaint(); }
+}
+
+//==============================================================================
 TabBar::TabBar (Nebula2ModulationProcessor& p) : proc (p) {}
 
 int TabBar::totalWidth() const
@@ -2418,7 +2519,7 @@ void SongPanel::paint (juce::Graphics& g)
 }
 
 Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
-    : AudioProcessorEditor (p), songPanel (p), proc (p), tabs (p), boardView (p), mixer (p)
+    : AudioProcessorEditor (p), songPanel (p), proc (p), styleBar (p), tabs (p), boardView (p), mixer (p)
 {
     setLookAndFeel (&lookAndFeel);
     setWantsKeyboardFocus (true);
@@ -2436,6 +2537,13 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     // The key is shared by every tab. Changing it moves the notes and the chords with it.
     keyBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (keyBox.getSelectedId() - 1, proc.rack.scale.load()); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
     scaleBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (proc.rack.root.load(), scaleBox.getSelectedId() - 1); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
+
+    addAndMakeVisible (styleBar);
+    // Each of these changes many boards at once: let go of what is on screen, do it, then draw it all again
+    styleBar.onMake = [this] (const juce::String& style) { hostOverlay.close(); selectTab (-1); proc.makeTrack (style, proc.addMode.load()); afterWholeChange (proc.selectedTab.load()); };
+    styleBar.onVariation = [this] { selectTab (-1); proc.variation(); afterWholeChange (proc.selectedTab.load()); };
+    styleBar.onRandomKnobs = [this] { selectTab (-1); proc.randomiseKnobs(); afterWholeChange (proc.selectedTab.load()); };
+    styleBar.onPart = [this] (const juce::String& kind) { hostOverlay.close(); selectTab (-1); afterWholeChange (proc.remakePart (kind, proc.addMode.load())); };
 
     addAndMakeVisible (tabs);
     tabs.onSelect = [this] (int i) { selectTab (i); };
@@ -2501,6 +2609,17 @@ void Nebula2ModulationEditor::selectTab (int index)
     tabs.repaint(); mixer.repaint();
 }
 
+void Nebula2ModulationEditor::afterWholeChange (int showTab)
+{
+    selectTab (juce::jmax (0, showTab));
+    keyBox.setSelectedId (proc.rack.root.load() + 1, juce::dontSendNotification);
+    scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
+    proc.chordsVersion.fetch_add (1);
+    tabs.showSelected();
+    styleBar.repaint(); tabs.repaint(); mixer.repaint(); repaint();
+    if (songPanel.isVisible()) songPanel.open();
+}
+
 // Zoom steps: small enough to see a whole busy board, up to a little larger than life
 void Nebula2ModulationEditor::stepZoom (int direction)
 {
@@ -2556,7 +2675,7 @@ void Nebula2ModulationEditor::stepHistory (bool redo)
     scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
     proc.chordsVersion.fetch_add (1);
     tabs.showSelected();
-    tabs.repaint(); mixer.repaint(); repaint();
+    styleBar.repaint(); tabs.repaint(); mixer.repaint(); repaint();
     if (songPanel.isVisible()) songPanel.open();
 }
 
@@ -2655,15 +2774,17 @@ void Nebula2ModulationEditor::resized()
     scaleBox.setBounds (558, cy, 154, 28);
     tidyButton.setBounds (getWidth() - space4 - 70, cy, 70, 28);
     addUnitsButton.setBounds (tidyButton.getX() - 8 - 104, cy, 104, 28);
-    tabs.setBounds (0, topbarH, getWidth(), kTabsH);
+    const int top = topbarH + StyleBar::height;
+    styleBar.setBounds (0, topbarH, getWidth(), StyleBar::height);
+    tabs.setBounds (0, top, getWidth(), kTabsH);
     const int deskH = MixerStrip::heightFor (proc.mixerTall.load());
     mixer.setBounds (0, getHeight() - deskH, getWidth(), deskH);
-    viewport.setBounds (0, topbarH + kTabsH, getWidth(), getHeight() - topbarH - kTabsH - deskH);
+    viewport.setBounds (0, top + kTabsH, getWidth(), getHeight() - top - kTabsH - deskH);
     deskButton.setButtonText (proc.mixerTall.load() ? "Less" : "More");
     deskButton.setToggleState (proc.mixerTall.load(), juce::dontSendNotification);
     deskButton.setBounds (getWidth() - 14 - 76, mixer.getY() - 22, 76, 22);
     // Change sound sits at the top right of the board, over it, for whichever tab is showing
-    soundButton.setBounds (getWidth() - 14 - 10 - 118, topbarH + kTabsH + 8, 118, 26);
+    soundButton.setBounds (getWidth() - 14 - 10 - 118, top + kTabsH + 8, 118, 26);
     addPanel.setBounds (getLocalBounds());
     songPanel.setBounds (getLocalBounds());
     hostOverlay.setBounds (getLocalBounds());

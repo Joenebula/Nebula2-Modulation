@@ -255,6 +255,27 @@ private:
     std::unique_ptr<juce::TextEditor> editor;
 };
 
+// The style bar, under the top bar: pick a style, make a whole track in it, vary it, or make one sound again
+class StyleBar : public juce::Component
+{
+public:
+    explicit StyleBar (Nebula2ModulationProcessor&);
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
+    static constexpr int height = 64;
+    // What a click asks for. The editor does it, because the boards on screen have to be let go first.
+    std::function<void (const juce::String& style)> onMake;
+    std::function<void()> onVariation, onRandomKnobs;
+    std::function<void (const juce::String& kind)> onPart;
+    // Where things are, for the tests
+    juce::Rectangle<int> styleChip (int index) const, makeArea() const, variationArea() const, knobsArea() const, partChip (int index) const, modeArea (bool add) const;
+    static const std::vector<std::pair<const char*, const char*>>& parts();      // kind, label
+private:
+    Nebula2ModulationProcessor& proc;
+};
+
 // The mixing desk along the bottom: one small channel per tab, and the master
 class MixerStrip : public juce::Component
 {
@@ -359,6 +380,8 @@ public:
     void stepHistory (bool redo);                   // Undo (false) or Redo (true)
     void stepZoom (int direction);                  // +1 bigger, -1 smaller, 0 just apply
     void addUnits (const std::vector<std::string>& types);
+    n2m::StyleBar& styles() { return styleBar; }    // for the tests
+    void afterWholeChange (int showTab);            // after Make track and the like: draw everything again
 private:
     void timerCallback() override;
     n2m::Board* current() const;
@@ -371,6 +394,7 @@ private:
     std::map<std::string, juce::Image> previews;
     juce::Image previewOf (const n2m::Info&);
     juce::ComboBox keyBox, scaleBox;
+    n2m::StyleBar styleBar;
     n2m::TabBar tabs;
     juce::Viewport viewport;
     n2m::BoardView boardView;

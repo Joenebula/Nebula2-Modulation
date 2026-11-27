@@ -139,7 +139,9 @@ public:
     void open (HostedModule&, const juce::String& tabName);
     void close();
     HostedModule* showing = nullptr;
+    bool isOpen() const { return showing != nullptr; }
 private:
+    std::unique_ptr<juce::DocumentWindow> window;      // the plugin's window, floating beside ours
     juce::TextButton back { "Back" };
     juce::Viewport viewport;
     std::unique_ptr<juce::AudioProcessorEditor> pluginEditor;
@@ -182,6 +184,8 @@ public:
     void setBoard (Board*);
     void rebuild();              // after modules are added or removed
     void refreshLive();          // after cables change: dim what can't be heard
+    // While a cable is being dragged: could it be dropped on a jack of this kind on this module?
+    bool couldTake (int uid, bool jackIsOut) const { return drag.active && jackIsOut != drag.fromOut && uid != drag.uid; }
     void willChange (int removingUid = 0);   // call just before changing this board, so Undo can put it back
     void settled();              // call when a gesture ends: drops the undo step if nothing changed
     void repaintAll();           // after a linked knob or pattern changed others on this board
@@ -209,6 +213,8 @@ public:
     Board* board = nullptr;
     std::function<void()> onChanged;
     std::function<void (HostedModule&)> onOpenPlugin;
+    std::function<void()> onAddMenu;                                  // right-click on the board: open Add units
+    std::function<void (const std::vector<std::string>&)> onAddTypes;   // ...or add a favourite straight away
 private:
     bool findJack (juce::Point<int> at, ModuleComp*& comp, bool& isOut, int& port) const;
     void drawCable (juce::Graphics&, juce::Point<float> a, juce::Point<float> b, juce::Colour, bool ghost) const;
@@ -290,11 +296,18 @@ public:
     void mouseExit (const juce::MouseEvent&) override;
     void open();
     void hover (const Info* info) { hovered = info; repaint(); }      // for the snapshot tool
+    void setSearch (const juce::String& text);      // only units whose name, hint or heading has these letters
+    // Favourite units: starred in this menu, kept between sessions, offered on a right-click of the board
+    static std::vector<std::string> favourites();
+    static void setFavourite (const std::string& type, bool on);
     std::function<void (const std::vector<std::string>&)> onAdd;
     std::function<juce::Image (const Info&)> preview;     // a picture of a unit, shown beside the row the mouse is on
 private:
     const Info* hovered = nullptr;
-    struct Row { juce::Rectangle<int> r; const Info* info; };
+    struct Row { juce::Rectangle<int> r; const Info* info; juce::String heading; };
+    static juce::Rectangle<int> starIn (juce::Rectangle<int> row);
+    juce::TextEditor search;
+    juce::String query;
     juce::Rectangle<int> card() const;
     std::vector<Row> rows() const;
     std::vector<std::string> ticked;

@@ -151,6 +151,22 @@ change it with a preset or another VST or sample. I need a menu I can select fro
 - [ ] Plugins that keep their presets in their own browser (Nexus, HALion) won't show a list here: use Open
 - [ ] An effect plugin can't be a tab's sound (it makes none of its own): the menu refuses it quietly. It should say why
 
+## Joe's Cubase test of v0.1.20 (27 Nov 2026) and what v0.1.21 changed
+
+Worked for him: loads and follows Cubase, saves and reopens, presets under Change sound, the desk's More / Less and pan,
+the Song page, DRAG MIDI from a sequencer, Save this sound, the sound so far.
+
+- [x] A plugin's window replaced the whole board, and closing it left him lost. It now opens as its own window on top, beside the board, so Knobs and cables stay usable. **Joe to confirm on Windows**: this path can't run in the tests (no screen there), which still use the old in-window view
+- [x] Change sound did nothing when he picked some plugins. It now says why: not found on this computer, or it is an effect
+- [x] Change sound button was hard to see: now drawn lit
+- [x] The output menu listed all 16 outputs. Now only the ones switched on in Cubase, with a line saying where to switch more on
+- [x] "What are the groups?" The Link menu now says to pick the same letter on each sequencer, and names the tabs already on each letter
+- [x] Stereo cabling didn't seem to work, and he asked for the possible jacks to light up while dragging: they now do. Right into right also brings the left along
+- [x] "Playing" with a dead button read as a bug: it now says "With Cubase" while Cubase is running the transport
+- [x] Add units: text was too small to read; now bigger and brighter, with a search box, a star per unit for Favourites (kept between sessions), and a right-click on the board that offers the favourites and Add units
+- [ ] Still open from his list: the sample change "kept playing" (not clear yet what he saw), whether Drums / Voice are found by name on his PC, the whole window being small on his screen (a size setting for the whole plugin), DRAG AUDIO is easy to miss on the Output unit
+- Not a fault: DRAG MIDI is on our Chord generator unit; a hosted Nebula2 Chord plugin in a slot has no DRAG MIDI because its notes are its own
+
 ## Screen polish (Joe: "we can work the UI later")
 
 - [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". A More / Less tab sits on the desk's top edge above the master. Opened, the desk is about twice as tall: every fader, the master included, grows to fill it, and each channel shows Pan and its load figure (v0.1.19; Joe: "make it taller, the master level needs to grow also", and the More / Less was "badly placed" beside the master fader). Saved with the project. Change sound was there in v0.1.17 and came out in v0.1.18 (Joe: "this is mixing elements"): the desk is for mixing only

@@ -860,6 +860,8 @@ struct Rack
         auto* a = b.find (s); auto* c = b.find (d);
         const int sr2 = rightOf (a->info->outs, sp), dr2 = rightOf (c->info->ins, dp);
         if (sr2 >= 0 && dr2 >= 0 && ! c->inOn[(size_t) dr2]) b.connect (s, sr2, d, dr2);
+        // and the other way: right into right brings the left side along
+        if (sp > 0 && dp > 0 && rightOf (a->info->outs, sp - 1) == sp && rightOf (c->info->ins, dp - 1) == dp && ! c->inOn[(size_t) (dp - 1)]) b.connect (s, sp - 1, d, dp - 1);
         return true;
     }
     void disconnect (Board& b, int s, int sp, int d, int dp) { Hold h (lock); b.disconnect (s, sp, d, dp); }

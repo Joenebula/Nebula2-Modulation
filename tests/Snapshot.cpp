@@ -85,6 +85,12 @@ int main (int argc, char** argv)
     for (auto* t : n2m::allTypes()) if (std::string (t->type) == "tape") e->addPanel.hover (t);
     shoot (*ed, dir + "/ui_add_preview.png");                 // the picture shown beside the row the mouse is on
     e->addPanel.hover (nullptr);
+    n2m::AddPanel::setFavourite ("hall", true); n2m::AddPanel::setFavourite ("filter", true);
+    shoot (*ed, dir + "/ui_add_favs.png");
+    e->addPanel.setSearch ("rev");
+    shoot (*ed, dir + "/ui_add_search.png");
+    e->addPanel.setSearch ({});
+    n2m::AddPanel::setFavourite ("hall", false); n2m::AddPanel::setFavourite ("filter", false);
     e->addPanel.onAdd ({ "filter", "lfo" });
     e->addPanel.setVisible (false);
     juce::ignoreUnused (b);

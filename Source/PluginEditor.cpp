@@ -817,6 +817,20 @@ void SampleView::tick()
 }
 
 //==============================================================================
+// A hosted plugin's own window, floating beside ours so the board stays in view and usable
+struct PluginWindow : juce::DocumentWindow
+{
+    PluginWindow (const juce::String& name, std::function<void()> whenClosed)
+        : DocumentWindow (name, n2m::look::surface, DocumentWindow::closeButton), closed (std::move (whenClosed))
+    {
+        setUsingNativeTitleBar (true);
+        setAlwaysOnTop (true);
+        setResizable (false, false);
+    }
+    void closeButtonPressed() override { if (closed) closed(); }
+    std::function<void()> closed;
+};
+
 HostOverlay::HostOverlay()
 {
     addAndMakeVisible (back);
@@ -837,6 +851,18 @@ void HostOverlay::open (HostedModule& m, const juce::String& tabName)
     if (pluginEditor == nullptr) pluginEditor = std::make_unique<juce::GenericAudioProcessorEditor> (*inst);   // a plugin with no window of its own
     showing = &m;
     title = m.pluginName() + "   on " + tabName;
+    if (! juce::Desktop::getInstance().getDisplays().displays.isEmpty())
+    {
+        // Its own window, on top, next to ours: the board stays where it is. Closing that window is all "Back" was.
+        juce::Component::SafePointer<HostOverlay> safe (this);
+        window = std::make_unique<PluginWindow> (title, [safe] { juce::MessageManager::callAsync ([safe] { if (safe != nullptr) safe->close(); }); });
+        window->setContentNonOwned (pluginEditor.get(), true);
+        if (auto* top = getTopLevelComponent()) window->centreAroundComponent (top, window->getWidth(), window->getHeight());
+        window->setVisible (true);
+        window->toFront (true);
+        return;
+    }
+    // With no screen to open a window on (the tests), it is shown over the board instead
     back.setButtonText ("Back to " + tabName);
     viewport.setViewedComponent (pluginEditor.get(), false);
     setVisible (true);
@@ -847,6 +873,7 @@ void HostOverlay::open (HostedModule& m, const juce::String& tabName)
 void HostOverlay::close()
 {
     viewport.setViewedComponent (nullptr, false);
+    if (window != nullptr) { window->clearContentComponent(); window.reset(); }
     pluginEditor.reset();          // the window goes before the plugin can
     showing = nullptr;
     setVisible (false);
@@ -967,15 +994,20 @@ juce::Rectangle<int> ModuleComp::midiArea() const
 void ModuleComp::linkMenu()
 {
     juce::PopupMenu m;
-    m.addSectionHeader ("Link this pattern");
+    // A link is just a letter. Give two sequencers the same letter, on any tabs, and they are linked.
+    m.addSectionHeader ("Link: pick the same letter on each sequencer you want joined");
     m.addItem (1, "Not linked", true, module.patternLink == 0);
     for (int g = 1; g <= 4; ++g)
     {
-        const int n = proc.rack.membersOf (g, true);
-        m.addItem (g + 1, "Group " + groupLetter (g) + (n > 0 ? "   (" + juce::String (n) + (n == 1 ? " pattern)" : " patterns)") : ""), true, module.patternLink == g);
+        // name the tabs already using this letter
+        juce::StringArray who;
+        for (auto& b : proc.rack.boards)
+            for (auto& mm : b->modules)
+                if (mm->patternLink == g && mm.get() != &module) who.addIfNotAlreadyThere (b->name);
+        m.addItem (g + 1, "Link " + groupLetter (g) + (who.isEmpty() ? "   (nothing on it yet)" : "   with " + who.joinIntoString (", ")), true, module.patternLink == g);
     }
     m.addSeparator();
-    m.addSectionHeader ("Follow");
+    m.addSectionHeader ("How it is linked: follow");
     if (module.info->seq == Seq::Note)
         m.addItem (104, "Keep my pattern, move to match the others", true, module.patternShare == 4);
     m.addSectionHeader ("Or share the same pattern");
@@ -1053,6 +1085,14 @@ void ModuleComp::paint (juce::Graphics& g)
             g.drawText (juce::String (ports[(size_t) i].name).toUpperCase(), (int) c.x - lay::jackW / 2 - 4, jy + 4, lay::jackW + 8, 10, juce::Justification::centred, false);
             juce::Path ring; ring.addEllipse (juce::Rectangle<float> (20.0f, 20.0f).withCentre (c));
             sunken (g, ring, 20.0f);
+            // While a cable is being dragged, every jack it could go into lights up
+            if (owner.couldTake (module.uid, pass == 1))
+            {
+                g.setColour (accent.withAlpha (0.22f));
+                g.fillEllipse (juce::Rectangle<float> (30.0f, 30.0f).withCentre (c));
+                g.setColour (accent);
+                g.drawEllipse (juce::Rectangle<float> (22.0f, 22.0f).withCentre (c), 1.6f);
+            }
             // Outputs carry a ring in the sound's colour; inputs are plain
             g.setColour (pass == 1 ? col.withAlpha (0.9f) : n6);
             g.drawEllipse (juce::Rectangle<float> (15.0f, 15.0f).withCentre (c), 1.6f);
@@ -1303,8 +1343,25 @@ void BoardView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhee
 
 void BoardView::mouseDown (const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu())
+    {
+        // Right-click on the board: add a unit. Favourites can be added straight from here.
+        juce::PopupMenu m;
+        const auto favs = AddPanel::favourites();
+        if (! favs.empty()) m.addSectionHeader ("Add a favourite");
+        for (int i = 0; i < (int) favs.size(); ++i) if (auto* t = findType (favs[(size_t) i])) m.addItem (10 + i, t->info->name);
+        if (! favs.empty()) m.addSeparator();
+        m.addItem (1, "Add units...");
+        juce::Component::SafePointer<BoardView> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe, favs] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            if (r == 1) { if (safe->onAddMenu) safe->onAddMenu(); }
+            else if (r - 10 < (int) favs.size() && safe->onAddTypes) safe->onAddTypes ({ favs[(size_t) (r - 10)] });
+        });
+        return;
+    }
     if (auto* vp = findParentComponentOfClass<juce::Viewport>()) panStart = vp->getViewPosition();
-    juce::ignoreUnused (e);
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
 }
 
@@ -1586,9 +1643,11 @@ void TabBar::soundMenu (int index, juce::Component* target)
         if (safe == nullptr || r <= 0) return;
         auto& p = safe->proc;
         if (safe->onSelect) safe->onSelect (-1);                  // the board on screen is about to be rebuilt
-        if (r >= 8000) { if (r - 8000 < (int) installed.size()) p.changeToPlugin (index, installed[(size_t) (r - 8000)].first, installed[(size_t) (r - 8000)].second); }
+        p.problem.clear();
+        bool done = true;
+        if (r >= 8000) { if (r - 8000 < (int) installed.size()) done = p.changeToPlugin (index, installed[(size_t) (r - 8000)].first, installed[(size_t) (r - 8000)].second); }
         else if (r >= 7000) { if (r - 7000 < (int) saved.size()) p.changeToSaved (index, saved[(size_t) (r - 7000)]); }
-        else if (r >= 6000) { if (r - 6000 < mine.size()) p.changeToPlugin (index, mine[r - 6000]); }
+        else if (r >= 6000) { if (r - 6000 < mine.size()) done = p.changeToPlugin (index, mine[r - 6000]); }
         else if (r == 5000)
         {
             safe->chooser = std::make_unique<juce::FileChooser> ("Choose an audio file", juce::File::getSpecialLocation (juce::File::userMusicDirectory), SampleModule::wildcard());
@@ -1596,12 +1655,15 @@ void TabBar::soundMenu (int index, juce::Component* target)
             {
                 if (safe == nullptr || fc.getResult() == juce::File()) return;
                 if (safe->onSelect) safe->onSelect (-1);
-                safe->proc.changeToSample (index, fc.getResult());
+                if (! safe->proc.changeToSample (index, fc.getResult()))
+                    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Sound not changed", safe->proc.problem);
                 safe->added (index);
             });
         }
         else if (r <= kinds.size()) p.changeToPreset (index, kinds[r - 1], names[r - 1]);
         safe->added (index);
+        // Say why, rather than quietly doing nothing
+        if (! done && p.problem.isNotEmpty()) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Sound not changed", p.problem);
     });
 }
 
@@ -1734,8 +1796,17 @@ void MixerStrip::outMenu (int channel)
     juce::PopupMenu m;
     m.addSectionHeader ("Send " + juce::String (board->name) + " to");
     m.addItem (1, "Main mix", true, board->out.load() == 0);
+    // Only the outputs switched on in the host are offered (plus the one this sound is set to, if that is off)
+    int shown = 0;
     for (int k = 1; k < kOuts; ++k)
-        m.addItem (k + 1, "Out " + juce::String (k + 1) + ((on & (1 << k)) != 0 ? "" : "   (not switched on in Cubase)"), true, board->out.load() == k);
+    {
+        const bool active = (on & (1 << k)) != 0, mine = board->out.load() == k;
+        if (! active && ! mine) continue;
+        m.addItem (k + 1, "Out " + juce::String (k + 1) + (active ? "" : "   (not switched on in Cubase)"), true, mine);
+        if (active) ++shown;
+    }
+    m.addSeparator();
+    m.addItem (9999, shown == 0 ? "For more outputs, switch them on in Cubase: Activate Outputs on the instrument" : "More outputs: Activate Outputs in Cubase", false);
     juce::Component::SafePointer<MixerStrip> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetScreenArea (localAreaToGlobal (outIn (this->channel (channel)))), [safe, channel] (int r)
     {
@@ -1938,6 +2009,11 @@ void MixerStrip::tick()
 AddPanel::AddPanel()
 {
     addAndMakeVisible (add); addAndMakeVisible (cancel);
+    addAndMakeVisible (search);
+    search.setTextToShowWhenEmpty ("Search units...", n7);
+    search.setFont (font (14.0f));
+    search.onTextChange = [this] { setSearch (search.getText()); };
+    search.onEscapeKey = [this] { if (search.isEmpty()) setVisible (false); else search.clear(); };
     cancel.onClick = [this] { setVisible (false); };
     add.onClick = [this]
     {
@@ -1948,7 +2024,7 @@ AddPanel::AddPanel()
     setVisible (false);
 }
 
-void AddPanel::open() { hovered = nullptr; ticked.clear(); add.setEnabled (false); setVisible (true); toFront (true); repaint(); }
+void AddPanel::open() { hovered = nullptr; ticked.clear(); add.setEnabled (false); search.setText ({}, false); query.clear(); setVisible (true); toFront (true); search.grabKeyboardFocus(); repaint(); }
 
 static constexpr int kRowH = 35, kHeadH = 27, kCardW = 1216, kAddCols = 4;
 
@@ -1961,26 +2037,68 @@ juce::Rectangle<int> AddPanel::card() const
     return juce::Rectangle<int> (kCardW, h).withCentre (getLocalBounds().getCentre());
 }
 
+// Favourites live in a small text file beside the list of plugins used before
+static juce::File favouritesFile()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("Back2You").getChildFile ("Nebula2 Modulation").getChildFile ("favourites.txt");
+}
+std::vector<std::string> AddPanel::favourites()
+{
+    std::vector<std::string> out;
+    juce::StringArray lines;
+    lines.addLines (favouritesFile().loadFileAsString());
+    for (auto& l : lines) if (l.trim().isNotEmpty() && findType (l.trim().toStdString()) != nullptr) out.push_back (l.trim().toStdString());
+    return out;
+}
+void AddPanel::setFavourite (const std::string& type, bool on)
+{
+    auto now = favourites();
+    now.erase (std::remove (now.begin(), now.end(), type), now.end());
+    if (on) now.push_back (type);
+    juce::StringArray lines;
+    for (auto& t : now) lines.add (t);
+    favouritesFile().getParentDirectory().createDirectory();
+    favouritesFile().replaceWithText (lines.joinIntoString ("\n"));
+}
+juce::Rectangle<int> AddPanel::starIn (juce::Rectangle<int> row) { return { row.getRight() - 26, row.getY() + 6, 22, 22 }; }
+void AddPanel::setSearch (const juce::String& text) { query = text.trim(); hovered = nullptr; repaint(); }
+
 std::vector<AddPanel::Row> AddPanel::rows() const
 {
-    // Three columns of headings; a heading never splits across columns
+    // Columns of headings; a heading never splits across columns. Favourites come first.
+    // With letters typed in the search box, only units that have them in their name, hint or heading are listed.
     std::vector<Row> out;
     const auto c = card();
-    int total = 0;
     const auto types = allTypes();
-    for (auto* s : shelves()) { total += kHeadH; for (auto* t : types) if (std::string (t->shelf) == s) total += kRowH; }
-    const int colW = (kCardW - 40 - (kAddCols - 1) * 12) / kAddCols;
-    int col = 0, y = c.getY() + 56, used = 0;
+    const auto favs = favourites();
+    auto matches = [this] (const Info* t) { return query.isEmpty() || juce::String (t->name).containsIgnoreCase (query) || juce::String (t->hint).containsIgnoreCase (query) || juce::String (t->shelf).containsIgnoreCase (query); };
+    struct Block { juce::String heading; std::vector<const Info*> units; };
+    std::vector<Block> blocks;
+    if (! favs.empty())
+    {
+        Block f { "Favourites", {} };
+        for (auto& id : favs) for (auto* t : types) if (id == t->type && matches (t)) f.units.push_back (t);
+        if (! f.units.empty()) blocks.push_back (f);
+    }
     for (auto* s : shelves())
     {
-        int block = kHeadH;
-        for (auto* t : types) if (std::string (t->shelf) == s) block += kRowH;
-        if (col < kAddCols - 1 && used > 0 && used + block / 2 > total * (col + 1) / kAddCols) { ++col; y = c.getY() + 56; }
+        Block bl { s, {} };
+        for (auto* t : types) if (std::string (t->shelf) == s && matches (t)) bl.units.push_back (t);
+        if (! bl.units.empty()) blocks.push_back (bl);
+    }
+    int total = 0;
+    for (auto& bl : blocks) total += kHeadH + (int) bl.units.size() * kRowH;
+    const int colW = (kCardW - 40 - (kAddCols - 1) * 12) / kAddCols;
+    const int top = c.getY() + 62;
+    int col = 0, y = top, used = 0;
+    for (auto& bl : blocks)
+    {
+        const int block = kHeadH + (int) bl.units.size() * kRowH;
+        if (col < kAddCols - 1 && used > 0 && (used + block / 2 > total * (col + 1) / kAddCols || y + block > c.getBottom() - 56)) { ++col; y = top; }
         const int x = c.getX() + 20 + col * (colW + 12);
-        out.push_back ({ { x, y, colW, kHeadH }, nullptr });
+        out.push_back ({ { x, y, colW, kHeadH }, nullptr, bl.heading });
         y += kHeadH;
-        for (auto* t : types)
-            if (std::string (t->shelf) == s) { out.push_back ({ { x, y, colW, kRowH }, t }); y += kRowH; }
+        for (auto* t : bl.units) { out.push_back ({ { x, y, colW, kRowH }, t, bl.heading }); y += kRowH; }
         used += block;
     }
     return out;
@@ -1991,6 +2109,7 @@ void AddPanel::resized()
     const auto c = card();
     add.setBounds (c.getRight() - 20 - 130, c.getBottom() - 20 - 28, 130, 28);
     cancel.setBounds (add.getX() - 8 - 84, add.getY(), 84, 28);
+    search.setBounds (c.getRight() - 20 - 260, c.getY() + 14, 260, 30);
 }
 
 void AddPanel::paint (juce::Graphics& g)
@@ -2003,14 +2122,16 @@ void AddPanel::paint (juce::Graphics& g)
     g.drawText ("Add units", c.getX() + 20, c.getY() + 14, 300, 20, juce::Justification::centredLeft, false);
     g.setFont (helpFont());
     g.setColour (n7);
-    g.drawText ("Tick one or several. They arrive on the board unconnected, ready for you to cable in.", c.getX() + 20, c.getY() + 34, c.getWidth() - 40, 16, juce::Justification::centredLeft, true);
+    g.setFont (font (12.5f));
+    g.setColour (n8);
+    g.drawText ("Tick one or several, then Add. They arrive on the board unconnected. Click a star to keep a unit in Favourites.", c.getX() + 20, c.getY() + 34, c.getWidth() - 320, 18, juce::Justification::centredLeft, true);
 
-    size_t shelf = 0;
+    const auto favs = favourites();
     for (auto& r : rows())
     {
         if (r.info == nullptr)
         {
-            caption (g, shelves()[shelf++], r.r.withTrimmedTop (10).withTrimmedLeft (2));
+            caption (g, r.heading, r.r.withTrimmedTop (10).withTrimmedLeft (2));
             dividerH (g, r.r.getX(), r.r.getRight(), r.r.getBottom() - 3);
             continue;
         }
@@ -2027,12 +2148,21 @@ void AddPanel::paint (juce::Graphics& g)
             g.setColour (accent);
             g.strokePath (t, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
-        g.setFont (controlFont());
+        // (bigger and brighter than before: the names were hard to read)
+        g.setFont (font (13.5f, Weight::SemiBold));
+        g.setColour (juce::Colours::white.withAlpha (0.95f));
+        g.drawText (r.info->name, r.r.getX() + 32, r.r.getY() + 2, r.r.getWidth() - 62, 17, juce::Justification::centredLeft, true);
+        g.setFont (font (11.5f));
         g.setColour (n8);
-        g.drawText (r.info->name, r.r.getX() + 32, r.r.getY() + 3, r.r.getWidth() - 36, 15, juce::Justification::centredLeft, true);
-        g.setFont (font (10.0f));
-        g.setColour (n7);
-        g.drawText (r.info->hint, r.r.getX() + 32, r.r.getY() + 18, r.r.getWidth() - 34, 13, juce::Justification::centredLeft, true);
+        g.drawText (r.info->hint, r.r.getX() + 32, r.r.getY() + 18, r.r.getWidth() - 62, 14, juce::Justification::centredLeft, true);
+        // the favourite star, at the end of the row
+        {
+            const bool fav = std::find (favs.begin(), favs.end(), r.info->type) != favs.end();
+            juce::Path star;
+            star.addStar (starIn (r.r).toFloat().getCentre(), 5, 3.4f, 8.0f);
+            g.setColour (fav ? bandYellow : n5);
+            if (fav) g.fillPath (star); else g.strokePath (star, juce::PathStrokeType (1.2f));
+        }
     }
 
     // The unit under the mouse, pictured beside its row: to the right where there is room, otherwise to the left
@@ -2074,6 +2204,13 @@ void AddPanel::mouseDown (const juce::MouseEvent& e)
     for (auto& r : rows())
         if (r.info != nullptr && r.r.contains (e.getPosition()))
         {
+            if (starIn (r.r).contains (e.getPosition()))
+            {
+                const auto favs = favourites();
+                setFavourite (r.info->type, std::find (favs.begin(), favs.end(), r.info->type) == favs.end());
+                repaint();
+                return;
+            }
             auto it = std::find (ticked.begin(), ticked.end(), r.info->type);
             if (it == ticked.end()) ticked.push_back (r.info->type); else ticked.erase (it);
             add.setEnabled (! ticked.empty());
@@ -2308,6 +2445,8 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     boardHolder.addAndMakeVisible (boardView);
     viewport.setViewedComponent (&boardHolder, false);
     boardView.onZoomStep = [this] (int d) { stepZoom (d); };
+    boardView.onAddMenu = [this] { addPanel.open(); };
+    boardView.onAddTypes = [this] (const std::vector<std::string>& types) { addUnits (types); };
     for (auto* b : { &zoomOut, &zoomIn }) addAndMakeVisible (b);
     zoomOut.onClick = [this] { stepZoom (-1); };
     zoomIn.onClick = [this] { stepZoom (1); };
@@ -2316,6 +2455,7 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addAndMakeVisible (songButton);
     addAndMakeVisible (soundButton);
     soundButton.onClick = [this] { tabs.soundMenu (proc.selectedTab.load(), &soundButton); };
+    soundButton.setToggleState (true, juce::dontSendNotification);      // drawn lit, so it stands out on the board
     songButton.onClick = [this] { songPanel.open(); };
 
     addAndMakeVisible (mixer);
@@ -2461,7 +2601,7 @@ void Nebula2ModulationEditor::timerCallback()
     undoButton.setEnabled (proc.history.canUndo());
     redoButton.setEnabled (proc.history.canRedo());
     const bool host = proc.hostPlaying.load(), on = proc.isPlaying();
-    const juce::String text = host ? "Playing" : on ? "Stop" : "Play";
+    const juce::String text = host ? "With Cubase" : on ? "Stop" : "Play";
     if (play.getButtonText() != text || play.getToggleState() != on) { play.setButtonText (text); play.setToggleState (on, juce::dontSendNotification); }
     boardView.tick();
     mixer.tick();
@@ -2480,7 +2620,7 @@ bool Nebula2ModulationEditor::keyPressed (const juce::KeyPress& k)
     if (k == juce::KeyPress::spaceKey && ! proc.hostPlaying.load()) { proc.preview.store (! proc.preview.load()); return true; }
     if (k == juce::KeyPress::escapeKey && songPanel.isVisible()) { songPanel.setVisible (false); return true; }
     if (k == juce::KeyPress::escapeKey && addPanel.isVisible()) { addPanel.setVisible (false); return true; }
-    if (k == juce::KeyPress::escapeKey && hostOverlay.isVisible()) { hostOverlay.close(); return true; }
+    if (k == juce::KeyPress::escapeKey && hostOverlay.isOpen()) { hostOverlay.close(); return true; }
     return false;
 }
 

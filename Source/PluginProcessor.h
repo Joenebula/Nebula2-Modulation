@@ -65,6 +65,7 @@ public:
     // Changing a tab's sound. The pattern, the tab's name and its mixer channel stay; only the sound changes.
     // Each returns false, changing nothing, if it can't be done. All can be undone.
     bool changeSound (int tab, std::unique_ptr<n2m::Board> fresh);
+    juce::String problem;                           // why the last change couldn't be made, in plain words, for the screen
     bool changeToPreset (int tab, const juce::String& kind, const juce::String& preset);   // one of soundPresets()
     bool changeToSample (int tab, const juce::File& audioFile);
     bool changeToPlugin (int tab, const juce::String& name, const juce::String& path = {});   // an instrument

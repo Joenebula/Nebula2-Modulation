@@ -50,7 +50,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 9. **Key** at the top is shared by every tab. Notes and chords are always in key.
 10. **Your own plugins:** add a **Plugin slot** from Add units (under Your plugins), press **Load** and browse to
     a .vst3, pick one from **All installed plugins**, or drop a .vst3 file on the board. Plugins you've loaded before are listed first under Load. **Open** shows
-    the plugin's own window; **Back** returns to the board. Cable a sequencer's Pitch and Gate into the slot to
+    the plugin's own window beside the board; close that window when you're done. Cable a sequencer's Pitch and Gate into the slot to
     play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
     **Presets** lists the plugin's own presets, when it has a list.
     **Knobs** points the slot's Knob 1 to 4 at the plugin's own controls; cable an LFO or any mover into Mod 1 to 4

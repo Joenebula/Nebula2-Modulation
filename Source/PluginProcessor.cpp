@@ -210,7 +210,9 @@ bool Nebula2ModulationProcessor::changeToPreset (int tab, const juce::String& ki
 
 bool Nebula2ModulationProcessor::changeToSample (int tab, const juce::File& audioFile)
 {
+    problem = audioFile.getFileName() + " isn't an audio file this can read.";
     if (tab < 0 || tab >= (int) rack.boards.size() || ! audioFile.existsAsFile() || ! n2m::SampleModule::canRead (audioFile.getFullPathName())) return false;
+    problem.clear();
     auto fresh = n2m::makeCarrier (*rack.boards[(size_t) tab], "sample", rack.sr);
     if (fresh == nullptr) return false;
     for (auto& m : fresh->modules) if (auto* s = dynamic_cast<n2m::SampleModule*> (m.get())) s->load (audioFile);
@@ -229,14 +231,22 @@ bool Nebula2ModulationProcessor::changeToPlugin (int tab, const juce::String& na
             for (auto& p : n2m::installedPlugins())
                 if (file.isEmpty() && p.first.toLowerCase().removeCharacters (" -_") == w) file = p.second;
     }
+    problem = name + " wasn't found in this computer's VST3 folders. Add a Plugin slot and use Load to browse to it.";
     if (file.isEmpty()) return false;
     const auto found = n2m::pluginsInFile (file);
-    if (found.empty() || ! found[0].isInstrument) return false;      // an effect makes no sound of its own
+    problem = name + " couldn't be opened as a VST3 plugin.";
+    if (found.empty()) return false;
+    // an effect makes no sound of its own
+    problem = name + " is an effect, so it can't be a sound on its own. Use + > Your plugins to give it a tab that other sounds feed, or add a Plugin slot in a sound's path.";
+    if (! found[0].isInstrument) return false;
+    problem = name + " didn't load.";
     auto fresh = n2m::makeCarrier (*rack.boards[(size_t) tab], "plugin", rack.sr);
     if (fresh == nullptr) return false;
     bool loaded = false;
     for (auto& m : fresh->modules) if (auto* h = dynamic_cast<n2m::HostedModule*> (m.get())) loaded = h->load (found[0]).isEmpty();
-    return loaded && changeSound (tab, std::move (fresh));
+    if (! loaded) return false;
+    problem.clear();
+    return changeSound (tab, std::move (fresh));
 }
 
 bool Nebula2ModulationProcessor::changeToSaved (int tab, const juce::File& soundFile)

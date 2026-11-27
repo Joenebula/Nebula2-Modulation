@@ -900,8 +900,8 @@ int main (int argc, char** argv)
             CHECK (unit (0, "sample") != nullptr && unit (0, "plugin") == nullptr, "Undo goes back to the sample");
             CHECK (alone (0) > 0.02f, "with its file still loaded");
         }
-        if (argc > 3) CHECK (! r.changeToPlugin (0, "Nebula2 Glitch", argv[3]) && unit (0, "plugin") == nullptr, "an effect can't be a tab's sound: nothing changes");
-        CHECK (! r.changeToPlugin (0, "No Such Plugin Anywhere"), "a plugin that isn't installed changes nothing");
+        if (argc > 3) CHECK (! r.changeToPlugin (0, "Nebula2 Glitch", argv[3]) && unit (0, "plugin") == nullptr && r.problem.contains ("is an effect"), "an effect can't be a tab's sound: nothing changes, and it says why");
+        CHECK (! r.changeToPlugin (0, "No Such Plugin Anywhere") && r.problem.contains ("wasn't found"), "a plugin that isn't installed changes nothing, and it says so");
         // to a saved sound
         const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test-change.n2msound");
         r.saveSound (4, file);
@@ -963,6 +963,24 @@ int main (int argc, char** argv)
         { juce::MemoryOutputStream o (old, false); o.writeString (juce::String (r.rack.save())); o.writeInt (0); o.writeFloat (1.0f); }
         q.setStateInformation (old.getData(), (int) old.getSize());
         CHECK (! q.mixerTall.load(), "a project from before this loads with the desk closed");
+    }
+
+    {
+        // Favourite units are remembered, and only real units count
+        const auto before = n2m::AddPanel::favourites();
+        n2m::AddPanel::setFavourite ("hall", true);
+        n2m::AddPanel::setFavourite ("lfo", true);
+        n2m::AddPanel::setFavourite ("no-such-unit", true);
+        auto now = n2m::AddPanel::favourites();
+        auto has = [&now] (const char* t) { return std::find (now.begin(), now.end(), t) != now.end(); };
+        CHECK (has ("hall") && has ("lfo") && ! has ("no-such-unit"), "starred units are kept as favourites; made-up ones are not");
+        n2m::AddPanel::setFavourite ("hall", true);
+        now = n2m::AddPanel::favourites();
+        CHECK (std::count (now.begin(), now.end(), std::string ("hall")) == 1, "starring one twice keeps it once");
+        n2m::AddPanel::setFavourite ("hall", false); n2m::AddPanel::setFavourite ("lfo", false);
+        now = n2m::AddPanel::favourites();
+        CHECK (! has ("hall") && ! has ("lfo"), "un-starring removes it");
+        for (auto& t : before) n2m::AddPanel::setFavourite (t, true);
     }
 
     if (failures == 0) std::printf ("All passed\n");

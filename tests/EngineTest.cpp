@@ -1539,6 +1539,11 @@ int main()
         CHECK (! has (chorus->uid, chorus->outIndex ("outr"), out->uid, 1), "a right input that already has a plug in it is left alone");
         rack.connectStereo (b, hall->uid, hall->outIndex ("outr"), out->uid, 1);
         CHECK (allFinite (render (rack, 1).l), "plugging a right jack on its own is just one cable");
+        // right into right brings the left along, when the left input is free
+        auto* plate = rack.addModule (b, "plate", 0, 0);
+        auto* room = rack.addModule (b, "room", 0, 0);
+        rack.connectStereo (b, plate->uid, plate->outIndex ("outr"), room->uid, room->inIndex ("inr"));
+        CHECK (has (plate->uid, plate->outIndex ("outl"), room->uid, room->inIndex ("inl")), "Out R into In R brings Out L into In L");
     }
 
     // 53. Each sound reports how much of the computer it uses

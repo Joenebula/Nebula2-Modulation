@@ -168,7 +168,7 @@ the Song page, DRAG MIDI from a sequencer, Save this sound, the sound so far.
 - [ ] Still open from his list: the sample change "kept playing" (not clear yet what he saw), whether Drums / Voice are found by name on his PC, the whole window being small on his screen (a size setting for the whole plugin), DRAG AUDIO is easy to miss on the Output unit
 - Not a fault: DRAG MIDI is on our Chord generator unit; a hosted Nebula2 Chord plugin in a slot has no DRAG MIDI because its notes are its own
 
-## The Modurand rework (27 Nov 2026, not released yet: branch `claude/gallant-mendel-zh1u44`)
+## The Modurand rework (27 Nov 2026, released as v0.1.22)
 
 Joe sent a video of Modurand: "This is where we need to be." Of the five differences, he chose: keep our look
 (dark, text buttons, fixed window) and rework the other four.

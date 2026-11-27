@@ -99,7 +99,7 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [ ] Pointing a knob isn't undoable, and Nexus / HALion controls can only be tried on Joe's PC
 - [x] Notes out of a hosted plugin (v0.1.14): a slot has Note 1 to 4 and Gate outputs carrying whatever notes the plugin sends out, so Nebula2 Chord in a slot can play an oscillator or another slot. Tested with Nebula2 Chord
 - [ ] Latency of hosted plugins isn't compensated yet
-- [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% once a sound uses 2% or more of the computer; orange from 40%
+- [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% when the desk is opened with More; orange from 40%
 
 This is the stage that can only be checked on Joe's PC in Cubase with his own plugins.
 
@@ -153,7 +153,7 @@ change it with a preset or another VST or sample. I need a menu I can select fro
 
 ## Screen polish (Joe: "we can work the UI later")
 
-- [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". MORE (by the master fader) adds a second row per channel: Pan and the load figure. LESS closes it. Saved with the project. Change sound was there in v0.1.17 and came out in v0.1.18 (Joe: "this is mixing elements"): the desk is for mixing only
+- [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". A More / Less tab sits on the desk's top edge above the master. Opened, the desk is about twice as tall: every fader, the master included, grows to fill it, and each channel shows Pan and its load figure (v0.1.19; Joe: "make it taller, the master level needs to grow also", and the More / Less was "badly placed" beside the master fader). Saved with the project. Change sound was there in v0.1.17 and came out in v0.1.18 (Joe: "this is mixing elements"): the desk is for mixing only
 
 - [x] Drag the board background to move around; the board always has spare room to the right and below (v0.1.4)
 - [x] Zoom: 50% to 125%, with - and + at the top or Ctrl + wheel; saved with the project (v0.1.9)

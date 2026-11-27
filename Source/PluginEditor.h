@@ -267,8 +267,8 @@ public:
     void setTall (bool tall);
     void setPan (int channel, float pan);           // -1 left .. 1 right
 private:
-    juce::Rectangle<int> channel (int i) const, masterArea() const, extra (int i) const, moreArea() const;
-    static juce::Rectangle<int> panIn (juce::Rectangle<int> extra);
+    juce::Rectangle<int> channel (int i) const, masterArea() const;
+    static juce::Rectangle<int> panIn (juce::Rectangle<int> channel);
     bool dragPan = false;
     static juce::Rectangle<int> faderIn (juce::Rectangle<int> ch), muteIn (juce::Rectangle<int> ch), soloIn (juce::Rectangle<int> ch), outIn (juce::Rectangle<int> ch);
     void outMenu (int channel);
@@ -353,7 +353,7 @@ private:
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
     juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
-    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" }, deskButton { "More" };
     juce::Component boardHolder;                 // the board sits in this so it can be drawn bigger or smaller
     std::map<std::string, juce::Image> previews;
     juce::Image previewOf (const n2m::Info&);

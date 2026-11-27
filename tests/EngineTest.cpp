@@ -1,3 +1,4 @@
+#include <map>
 // Checks the rack engine on its own (no Cubase, no JUCE). Prints "All passed" or what failed.
 #include "Presets.h"
 #include "History.h"
@@ -1538,6 +1539,76 @@ int main()
         CHECK (! has (chorus->uid, chorus->outIndex ("outr"), out->uid, 1), "a right input that already has a plug in it is left alone");
         rack.connectStereo (b, hall->uid, hall->outIndex ("outr"), out->uid, 1);
         CHECK (allFinite (render (rack, 1).l), "plugging a right jack on its own is just one cable");
+    }
+
+    // 53. Each sound reports how much of the computer it uses
+    {
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("empty", 48000));
+        rack.addBoard (makeBoard ("pad", 48000));
+        render (rack, 4);
+        const float quiet = rack.boards[0]->load.load(), busy = rack.boards[1]->load.load();
+        CHECK (busy > 0.0f && busy < 1.0f && quiet >= 0.0f && quiet < busy, "a pad with reverb takes more of the computer than an empty board, and far less than all of it");
+    }
+
+    // 54. Sound presets: every one sets real knobs, sounds, and stays clean
+    {
+        std::map<std::string, int> perKind;
+        for (auto& p : soundPresets())
+        {
+            int missed = 0;
+            auto b = makePreset (p.kind, p.name, 48000, &missed);
+            if (b == nullptr || missed != 0) { ++failures; std::printf ("FAIL: preset %s / %s has %d settings that match nothing\n", p.kind, p.name, missed); continue; }
+            ++perKind[p.kind];
+            Rack rack; rack.prepare (48000);
+            rack.addBoard (std::move (b));
+            const auto x = render (rack, 4);
+            if (! (peakOf (x.l) > 0.02f && peakOf (x.l) < 1.0f && allFinite (x.l))) { ++failures; std::printf ("FAIL: preset %s / %s is silent or clips (peak %.3f)\n", p.kind, p.name, (double) peakOf (x.l)); }
+        }
+        for (const char* k : { "kick", "snare", "hat", "perc", "clap", "bass", "lead", "arp", "stab", "pad", "strings" }) CHECK (perKind[k] >= 4, "every kind of sound has at least four presets");
+        CHECK (makePreset ("kick", "No such") == nullptr, "a preset that doesn't exist gives nothing");
+        // two presets of one kind really are different sounds
+        Rack a, b2; a.prepare (48000); b2.prepare (48000);
+        a.addBoard (makePreset ("kick", "Standard")); b2.addBoard (makePreset ("kick", "Long boom"));
+        const auto xa = render (a, 1), xb = render (b2, 1);
+        float diff = 0; for (size_t i = 0; i < xa.l.size(); ++i) diff = std::max (diff, std::abs (xa.l[i] - xb.l[i]));
+        CHECK (diff > 0.05f, "a different preset is a different sound");
+    }
+
+    // 55. Changing a tab's sound keeps its pattern and its mixer channel
+    {
+        auto old = makeBoard ("kick", 48000);
+        auto* seq = firstOf (*old, "drumseq");
+        setDrum (*seq, "X..x..x...x..x.X"); seq->set ("bars", 1); seq->data[20].store (2.0f);
+        old->name = "My kick"; old->level.store (0.33f); old->pan.store (-0.4f); old->mute.store (true); old->out.store (3); old->plays.store (5u);
+        auto fresh = makePreset ("kick", "Deep");
+        keepPattern (*old, *fresh);
+        auto* ns = firstOf (*fresh, "drumseq");
+        bool same = true; for (int s = 0; s < kMaxSteps; ++s) same = same && ns->data[(size_t) s].load() == seq->data[(size_t) s].load();
+        CHECK (same && ns->P (ns->paramIndex ("bars")) == 1.0f, "another preset plays the same pattern, bars and all");
+        CHECK (fresh->name == "My kick" && fresh->level.load() == 0.33f && fresh->pan.load() == -0.4f && fresh->mute.load() && fresh->out.load() == 3 && fresh->plays.load() == 5u, "and keeps its name, level, pan, mute, output and song sections");
+        CHECK (firstOf (*fresh, "osc")->P (firstOf (*fresh, "osc")->paramIndex ("coarse")) == -31.0f, "but it is the new sound");
+        // drums to a bass: the hits become notes on the key note
+        auto bass = makeBoard ("bass", 48000);
+        keepPattern (*old, *bass);
+        auto* bs = firstOf (*bass, "noteseq");
+        CHECK (bs->data[0].load() == 1.0f && bs->data[1].load() == 0.0f && bs->data[3].load() == 1.0f && bs->data[(size_t) kMaxSteps].load() == 0.0f, "a drum pattern given to a bass keeps its rhythm");
+        // a bass line to a kick keeps its rhythm; a bass to a lead keeps the notes too
+        auto line = makeBoard ("bass", 48000);
+        auto* ls = firstOf (*line, "noteseq");
+        setNotes (*ls, "x..x..x...x.x...", noteIdeas ("bass")[4].deg);
+        auto kick = makeBoard ("kick", 48000);
+        keepPattern (*line, *kick);
+        CHECK (firstOf (*kick, "drumseq")->data[3].load() == 1.0f && firstOf (*kick, "drumseq")->data[4].load() == 0.0f, "notes given to a drum keep their rhythm");
+        auto lead = makeBoard ("lead", 48000);
+        keepPattern (*line, *lead);
+        auto* le = firstOf (*lead, "noteseq");
+        CHECK (le->data[(size_t) (kMaxSteps + 6)].load() == ls->data[(size_t) (kMaxSteps + 6)].load() && le->P (le->paramIndex ("octave")) == ls->P (ls->paramIndex ("octave")), "a bass line given to a lead keeps its notes and octave");
+        // a pad keeps its chord rhythm
+        auto pad = makeBoard ("stab", 48000), strings = makeBoard ("strings", 48000);
+        keepPattern (*pad, *strings);
+        CHECK (firstOf (*strings, "chords")->P (0) == firstOf (*pad, "chords")->P (0), "a chord sound keeps its chord rhythm");
+        CHECK (old->type == "kick" && fresh->type == "kick", "the kind of sound follows the new sound");
     }
 
     if (failures == 0) std::printf ("All passed\n");

@@ -239,6 +239,9 @@ private:
     void tabMenu (int index);
     void rename (int index);
     void added (int index);      // after a tab has been added: show it
+public:
+    void soundMenu (int index, juce::Component* target = nullptr);   // Change sound: presets, a sample, a plugin, a saved sound
+private:
     Nebula2ModulationProcessor& proc;
     int scroll = 0;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -342,7 +345,7 @@ private:
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
     juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
-    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" };
     juce::Component boardHolder;                 // the board sits in this so it can be drawn bigger or smaller
     std::map<std::string, juce::Image> previews;
     juce::Image previewOf (const n2m::Info&);

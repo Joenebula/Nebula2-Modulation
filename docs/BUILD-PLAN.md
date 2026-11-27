@@ -99,7 +99,7 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [ ] Pointing a knob isn't undoable, and Nexus / HALion controls can only be tried on Joe's PC
 - [x] Notes out of a hosted plugin (v0.1.14): a slot has Note 1 to 4 and Gate outputs carrying whatever notes the plugin sends out, so Nebula2 Chord in a slot can play an oscillator or another slot. Tested with Nebula2 Chord
 - [ ] Latency of hosted plugins isn't compensated yet
-- [ ] Per-tab load meter
+- [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% once a sound uses 2% or more of the computer; orange from 40%
 
 This is the stage that can only be checked on Joe's PC in Cubase with his own plugins.
 
@@ -135,6 +135,20 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 - [ ] Freeze a tab (swap it for its audio inside the plugin)
 - [x] Save and load a sound (v0.1.12): right-click a tab, Save this sound. Saved sounds are listed under + (Your saved sounds), from any project. They live in Documents / Nebula2 Modulation / Sounds. A plugin in a slot is saved with its settings
 - [ ] A sound's sample file isn't copied with it; no pictures or tags in the list
+
+## Change sound (done, v0.1.15)
+
+Joe: "say for a kick, I need to be able to select presets or load in samples, and that's the same for every tab. I can
+change it with a preset or another VST or sample. I need a menu I can select from for each."
+
+- [x] A **Change sound** button at the top right of every board, and Change sound in the tab's right-click menu
+- [x] Presets: 4 to 6 for every kind of sound (kick, snare, hi-hat, percussion, clap, bass, lead, arp, stab, pad, strings), 55 in all. Any tab can take any kind
+- [x] A sample from a file: the same pattern plays it; a note pattern plays it at pitch
+- [x] A plugin (instrument): yours, or any installed. The same pattern plays it; a drum pattern becomes notes on the key note
+- [x] One of your saved sounds
+- [x] The pattern, the tab's name, level, pan, mute, solo, output and song sections all stay. Undo brings the old sound back, plugin or sample included
+- [ ] Presets for a sample or plugin tab themselves (stepping through a plugin's own presets from here)
+- [ ] An effect plugin can't be a tab's sound (it makes none of its own): the menu refuses it quietly. It should say why
 
 ## Screen polish (Joe: "we can work the UI later")
 

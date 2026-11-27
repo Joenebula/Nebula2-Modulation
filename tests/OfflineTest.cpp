@@ -835,6 +835,73 @@ int main (int argc, char** argv)
         }
     }
 
+    {
+        // Change sound: the tab's sound changes, its pattern and mixer channel stay
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto unit = [&] (int tab, const char* type) { n2m::Module* f = nullptr; for (auto& m : r.rack.boards[(size_t) tab]->modules) if (f == nullptr && std::string (m->info->type) == type) f = m.get(); return f; };
+        auto pattern = [&] (int tab) { std::string p; for (auto* m : n2m::patternUnits (*r.rack.boards[(size_t) tab])) for (int s = 0; s < 16; ++s) p += m->data[(size_t) s].load() > 0.5f ? 'x' : '.'; return p; };
+        auto alone = [&] (int tab) { for (auto& b : r.rack.boards) b->mute.store (true); r.rack.boards[(size_t) tab]->mute.store (false); song.playing = true; song.ppq = 0; const float v = run (r, song, 2.0); song.playing = false; run (r, song, 1.0); return v; };
+        n2m::setDrum (*unit (0, "drumseq"), "X..x..x...x..x..");
+        r.rack.boards[0]->level.store (0.7f);
+        const auto was = pattern (0);
+        const float tuneBefore = unit (0, "osc")->P (unit (0, "osc")->paramIndex ("coarse"));
+        ed->selectTab (-1);
+        CHECK (r.changeToPreset (0, "kick", "Deep"), "a kick can be changed to another kick preset");
+        ed->selectTab (0);
+        CHECK (pattern (0) == was && r.rack.boards[0]->name == "Kick" && std::abs (r.rack.boards[0]->level.load() - 0.7f) < 1.0e-4f, "its pattern, name and level stay");
+        CHECK (unit (0, "osc")->P (unit (0, "osc")->paramIndex ("coarse")) != tuneBefore && alone (0) > 0.05f, "and it is a different kick that still plays");
+        ed->stepHistory (false);
+        CHECK (unit (0, "osc")->P (unit (0, "osc")->paramIndex ("coarse")) == tuneBefore && pattern (0) == was, "Undo brings the old sound back");
+        // to a different kind of sound altogether
+        ed->selectTab (-1);
+        CHECK (r.changeToPreset (0, "perc", "Bongo") && r.rack.boards[0]->type == "perc" && pattern (0) == was, "a kick can become percussion and keep its pattern");
+        CHECK (! r.changeToPreset (0, "kick", "No such preset") && ! r.changeToPreset (99, "kick", "Deep"), "a preset or tab that isn't there changes nothing");
+        // to a sample
+        const auto wav = r.renderTab (0, 1);      // (this tab's own sound: it starts with a hit, so every retrigger is heard)
+        CHECK (r.changeToSample (0, wav), "a sound can be changed to a sample");
+        CHECK (unit (0, "sample") != nullptr && unit (0, "drumseq") != nullptr && pattern (0) == was && r.rack.boards[0]->type == "perc", "the sample is played by the same pattern, and the tab keeps its kind for pattern Ideas");
+        CHECK (alone (0) > 0.02f, "and the sample is heard");
+        CHECK (! r.changeToSample (0, juce::File ("/no/such/file.wav")) && ! r.changeToSample (0, juce::File ("/tmp/notaudio.txt")), "a file that isn't audio changes nothing");
+        // a bass line to a sample: the notes play the sample at pitch
+        const auto bassWas = pattern (3);
+        CHECK (r.changeToSample (3, wav) && unit (3, "noteseq") != nullptr && pattern (3) == bassWas, "a bass line changed to a sample keeps its notes");
+        bool pitched = false; for (auto& c : r.rack.boards[3]->cables) pitched = pitched || (c.src == unit (3, "noteseq")->uid && c.dst == unit (3, "sample")->uid && c.dstPort == unit (3, "sample")->inIndex ("pitch"));
+        CHECK (pitched, "and they are cabled to the sample's Pitch");
+        if (argc > 2)
+        {
+            // to a plugin (Nebula2 Chord, built here)
+            CHECK (r.changeToPlugin (0, "Nebula2 Chord", argv[2]), "a sound can be changed to a plugin");
+            auto* slot = dynamic_cast<n2m::HostedModule*> (unit (0, "plugin"));
+            CHECK (slot != nullptr && slot->hasPlugin() && slot->live && pattern (0) == was, "the plugin is loaded, cabled, and played by the same pattern");
+            const int sent = slot != nullptr ? slot->notesSent.load() : 0;
+            alone (0);
+            CHECK (slot != nullptr && slot->notesSent.load() >= sent + 4, "the pattern's hits reach the plugin as notes");
+            ed->stepHistory (false);
+            CHECK (unit (0, "sample") != nullptr && unit (0, "plugin") == nullptr, "Undo goes back to the sample");
+            CHECK (alone (0) > 0.02f, "with its file still loaded");
+        }
+        if (argc > 3) CHECK (! r.changeToPlugin (0, "Nebula2 Glitch", argv[3]) && unit (0, "plugin") == nullptr, "an effect can't be a tab's sound: nothing changes");
+        CHECK (! r.changeToPlugin (0, "No Such Plugin Anywhere"), "a plugin that isn't installed changes nothing");
+        // to a saved sound
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test-change.n2msound");
+        r.saveSound (4, file);
+        const auto before4 = pattern (0);
+        CHECK (r.changeToSaved (0, file) && unit (0, "multiosc") != nullptr && r.rack.boards[0]->name == "Kick", "a sound can be changed to one of your saved sounds");
+        CHECK (! r.changeToSaved (0, wav), "a file that isn't a saved sound changes nothing");
+        juce::ignoreUnused (before4);
+        file.deleteFile(); wav.deleteFile();
+        // and it all survives a save
+        juce::MemoryBlock saved; r.getStateInformation (saved);
+        Nebula2ModulationProcessor q; q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        q.setStateInformation (saved.getData(), (int) saved.getSize());
+        CHECK (q.rack.save() == r.rack.save(), "a changed sound saves and reopens with the project");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

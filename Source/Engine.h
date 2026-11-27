@@ -8,6 +8,7 @@
 //   gate    above 0.5 is "on"; a trigger is the moment it goes on
 //   control 0 .. 1 for envelopes, -1 .. 1 for LFOs
 // Any output can be patched to any input.
+#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -324,6 +325,8 @@ struct Board
     std::atomic<float> level { 0.8f }, pan { 0.0f }, peak { 0.0f };
     std::atomic<bool> mute { false }, solo { false };
     std::atomic<int> out { 0 };       // which output this sound goes to: 0 = the main mix, 1.. = Out 2, Out 3 ...
+    std::atomic<float> load { 0.0f };  // how much of the computer's time this sound takes: 1 = all of it. For the mixer
+    double spent = 0;                 // audio thread only
     std::atomic<uint32_t> plays { 0xffffffffu };   // the song page: one bit per section, set = this sound plays in it
     std::vector<std::unique_ptr<Module>> modules;
     std::vector<Cable> cables;
@@ -760,6 +763,7 @@ struct Rack
             return (int) ((bar / secBars) % nSec);
         };
         Ctx resting = c; resting.playing = false;
+        for (auto& b : boards) b->spent = 0;
         int sec = -1;
         for (int pos = 0, len = 0; pos < n; pos += len)
         {
@@ -788,10 +792,14 @@ struct Rack
                     const int k = b->out.load();
                     const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
                     const bool sitsOut = songOn && ((b->plays.load() >> sec) & 1u) == 0;
+                    const auto began = std::chrono::steady_clock::now();
                     b->process (len, sitsOut ? resting : c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
+                    b->spent += std::chrono::duration<double> (std::chrono::steady_clock::now() - began).count();
                 }
         }
         if (midi != nullptr) while (ev < midi->count) keys.apply (midi->events[ev++]);
+        // Each sound's share of the time there was to make this block, smoothed for the mixer's load figure
+        for (auto& b : boards) { const float now = (float) (b->spent * sr / std::max (1, n)); const float was = b->load.load(); b->load.store (was + (now > was ? 0.3f : 0.02f) * (now - was)); }
         lock.unlock();
         song.now.store (sec);
         // Separate outputs skip the master fader (the host's own channel fader does that job) but keep the safety limiter

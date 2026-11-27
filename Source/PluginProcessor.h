@@ -61,6 +61,14 @@ public:
     // shared-effects tab is rendered with what feeds it. bars = 0: as long as the chords (4 to 64 bars).
     juce::File renderTab (int tab, int bars = 0);
 
+    // Changing a tab's sound. The pattern, the tab's name and its mixer channel stay; only the sound changes.
+    // Each returns false, changing nothing, if it can't be done. All can be undone.
+    bool changeSound (int tab, std::unique_ptr<n2m::Board> fresh);
+    bool changeToPreset (int tab, const juce::String& kind, const juce::String& preset);   // one of soundPresets()
+    bool changeToSample (int tab, const juce::File& audioFile);
+    bool changeToPlugin (int tab, const juce::String& name, const juce::String& path = {});   // an instrument
+    bool changeToSaved (int tab, const juce::File& soundFile);                              // a .n2msound
+
     // Your own plugins as ready-made sounds: a new tab with the plugin already in a slot and cabled.
     // An instrument goes straight to the Output; an effect is fed by send bus A. Either way a MIDI keyboard unit
     // is cabled in, so keys or a MIDI track reach the plugin. If the plugin isn't on this computer the tab is

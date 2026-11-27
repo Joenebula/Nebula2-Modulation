@@ -1509,11 +1509,75 @@ void TabBar::added (int index)
     showSelected();
 }
 
+// Change sound: swap what a tab sounds like while its pattern keeps playing
+void TabBar::soundMenu (int index, juce::Component* target)
+{
+    if (index < 0 || index >= (int) proc.rack.boards.size()) return;
+    const std::string kind = proc.rack.boards[(size_t) index]->type;
+    juce::PopupMenu m;
+    m.addSectionHeader ("Change this sound (the pattern stays)");
+    // presets of the same kind first, then every other kind
+    juce::StringArray kinds, names;
+    for (auto& p : soundPresets()) if (kind == p.kind) { kinds.add (p.kind); names.add (p.name); }
+    const int own = kinds.size();
+    for (int k = 0; k < own; ++k) m.addItem (1 + k, names[k]);
+    if (own > 0) m.addSeparator();
+    juce::PopupMenu others;
+    for (auto& t : boardTypes())
+    {
+        if (kind == t.id) continue;
+        juce::PopupMenu sub;
+        for (auto& p : soundPresets()) if (std::string (t.id) == p.kind) { kinds.add (p.kind); names.add (p.name); sub.addItem (kinds.size(), p.name); }
+        if (sub.getNumItems() > 0) others.addSubMenu (t.name, sub);
+    }
+    m.addSubMenu (own > 0 ? "Another kind of sound" : "A ready-made sound", others);
+    m.addItem (5000, "A sample from a file...");
+    const auto mine = Nebula2ModulationProcessor::ownPlugins();
+    const auto installed = installedPlugins();
+    juce::PopupMenu plugs, all;
+    for (int k = 0; k < mine.size(); ++k) plugs.addItem (6000 + k, mine[k]);
+    for (int k = 0; k < (int) installed.size() && k < 2000; ++k) all.addItem (8000 + k, installed[(size_t) k].first);
+    if (! installed.empty()) { plugs.addSeparator(); plugs.addSubMenu ("All installed plugins (" + juce::String ((int) installed.size()) + ")", all); }
+    m.addSubMenu ("A plugin (instrument)", plugs);
+    const auto saved = Nebula2ModulationProcessor::savedSounds();
+    if (! saved.empty())
+    {
+        juce::PopupMenu sv;
+        for (int k = 0; k < (int) saved.size() && k < 900; ++k) sv.addItem (7000 + k, saved[(size_t) k].getFileNameWithoutExtension());
+        m.addSubMenu ("One of your saved sounds", sv);
+    }
+    juce::Component::SafePointer<TabBar> safe (this);
+    auto options = target != nullptr ? juce::PopupMenu::Options().withTargetComponent (target) : juce::PopupMenu::Options().withMousePosition();
+    m.showMenuAsync (options, [safe, index, kinds, names, mine, installed, saved] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        auto& p = safe->proc;
+        if (safe->onSelect) safe->onSelect (-1);                  // the board on screen is about to be rebuilt
+        if (r >= 8000) { if (r - 8000 < (int) installed.size()) p.changeToPlugin (index, installed[(size_t) (r - 8000)].first, installed[(size_t) (r - 8000)].second); }
+        else if (r >= 7000) { if (r - 7000 < (int) saved.size()) p.changeToSaved (index, saved[(size_t) (r - 7000)]); }
+        else if (r >= 6000) { if (r - 6000 < mine.size()) p.changeToPlugin (index, mine[r - 6000]); }
+        else if (r == 5000)
+        {
+            safe->chooser = std::make_unique<juce::FileChooser> ("Choose an audio file", juce::File::getSpecialLocation (juce::File::userMusicDirectory), SampleModule::wildcard());
+            safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, index] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr || fc.getResult() == juce::File()) return;
+                if (safe->onSelect) safe->onSelect (-1);
+                safe->proc.changeToSample (index, fc.getResult());
+                safe->added (index);
+            });
+        }
+        else if (r <= kinds.size()) p.changeToPreset (index, kinds[r - 1], names[r - 1]);
+        safe->added (index);
+    });
+}
+
 void TabBar::tabMenu (int index)
 {
     juce::PopupMenu m;
     const int n = (int) proc.rack.boards.size();
     m.addItem (1, "Rename");
+    m.addItem (7, "Change sound...");
     m.addItem (2, "Duplicate");
     m.addItem (6, "Save this sound...");
     m.addSeparator();
@@ -1529,6 +1593,7 @@ void TabBar::tabMenu (int index)
         if (index >= (int) rack.boards.size()) return;
         int select = index;
         if (r == 1) { safe->rename (index); return; }
+        if (r == 7) { safe->soundMenu (index); return; }
         if (r == 6)
         {
             const auto start = Nebula2ModulationProcessor::soundsFolder().getChildFile (juce::File::createLegalFileName (rack.boards[(size_t) index]->name) + ".n2msound");
@@ -1704,6 +1769,14 @@ void MixerStrip::paint (juce::Graphics& g)
             g.setColour (out > 0 ? n0 : n7);
             g.drawText (dragChannel == i ? juce::String ((int) std::lround (b.level.load() * 100)) + "%" : out > 0 ? "OUT " + juce::String (out + 1) : juce::String ("MAIN"),
                         ob, juce::Justification::centred, false);
+            // How much of the computer this sound is using, once it is enough to matter. Orange when it is a lot.
+            const int load = (int) std::lround (b.load.load() * 100.0f);
+            if (load >= 2)
+            {
+                g.setFont (font (8.5f, Weight::Medium, 0.3f));
+                g.setColour (load >= 40 ? bandOrange : n7);
+                g.drawText ("LOAD " + juce::String (juce::jmin (999, load)) + "%", ch.getX() + 36, soloIn (ch).getBottom() + 5, 50, 11, juce::Justification::centred, false);
+            }
         }
     }
     const auto m = masterArea();
@@ -2162,6 +2235,8 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addPanel.preview = [this] (const Info& i) { return previewOf (i); };
     viewport.setScrollBarThickness (10);
     addAndMakeVisible (songButton);
+    addAndMakeVisible (soundButton);
+    soundButton.onClick = [this] { tabs.soundMenu (proc.selectedTab.load(), &soundButton); };
     songButton.onClick = [this] { songPanel.open(); };
 
     addAndMakeVisible (mixer);
@@ -2359,6 +2434,8 @@ void Nebula2ModulationEditor::resized()
     tabs.setBounds (0, topbarH, getWidth(), kTabsH);
     mixer.setBounds (0, getHeight() - kMixerH, getWidth(), kMixerH);
     viewport.setBounds (0, topbarH + kTabsH, getWidth(), getHeight() - topbarH - kTabsH - kMixerH);
+    // Change sound sits at the top right of the board, over it, for whichever tab is showing
+    soundButton.setBounds (getWidth() - 14 - 10 - 118, topbarH + kTabsH + 8, 118, 26);
     addPanel.setBounds (getLocalBounds());
     songPanel.setBounds (getLocalBounds());
     hostOverlay.setBounds (getLocalBounds());

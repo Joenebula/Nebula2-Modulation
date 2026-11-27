@@ -20,7 +20,7 @@ public:
     void before (const Board& board, int removing = 0)
     {
         Entry e; e.kind = Kind::Boards;
-        const auto wantExtra = std::function<bool (int)> ([removing] (int uid) { return uid == removing; });
+        const auto wantExtra = std::function<bool (int)> ([removing] (int uid) { return removing < 0 || uid == removing; });   // -1: every unit is about to go
         const auto none = std::function<bool (int)> ([] (int) { return false; });
         std::vector<int> groups, patternGroups;
         for (auto& m : board.modules)

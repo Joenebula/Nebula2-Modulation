@@ -614,4 +614,172 @@ inline void loadStarter (Rack& rack)
     rack.boards[3]->level.store (0.6f);
     rack.boards[4]->level.store (0.5f);
 }
+
+// ---- Changing a tab's sound while its pattern keeps playing ----
+// A preset is one of the starting sounds with some knobs set differently. nth: which unit of that type (0 = first).
+struct Tweak { const char* type; int nth; const char* param; float value; };
+struct SoundPreset { const char* kind; const char* name; std::vector<Tweak> tweaks; };
+inline const std::vector<SoundPreset>& soundPresets()
+{
+    static const std::vector<SoundPreset> p {
+        { "kick", "Standard", {} },
+        { "kick", "Deep", { { "osc", 0, "coarse", -31 }, { "hitenv", 0, "decay", 0.5f }, { "drive", 0, "drive", 0.15f } } },
+        { "kick", "Punchy", { { "hitenv", 0, "decay", 0.2f }, { "hitenv", 1, "decay", 0.03f }, { "osc", 0, "modamt", 36 }, { "drive", 0, "drive", 0.5f } } },
+        { "kick", "Hard", { { "hitenv", 0, "decay", 0.26f }, { "osc", 0, "modamt", 40 }, { "drive", 0, "drive", 0.85f } } },
+        { "kick", "Long boom", { { "osc", 0, "coarse", -30 }, { "hitenv", 0, "decay", 0.9f }, { "osc", 0, "modamt", 18 }, { "drive", 0, "drive", 0.25f } } },
+        { "kick", "Tight click", { { "hitenv", 0, "decay", 0.12f }, { "hitenv", 1, "decay", 0.02f }, { "osc", 0, "modamt", 44 } } },
+        { "snare", "Standard", {} },
+        { "snare", "Short", { { "hitenv", 0, "decay", 0.08f }, { "hitenv", 1, "decay", 0.1f } } },
+        { "snare", "Long", { { "hitenv", 1, "decay", 0.4f } } },
+        { "snare", "Bright", { { "filter", 0, "cutoff", 0.8f } } },
+        { "snare", "Dark", { { "filter", 0, "cutoff", 0.38f }, { "osc", 0, "coarse", -10 } } },
+        { "snare", "Rim", { { "hitenv", 0, "decay", 0.05f }, { "hitenv", 1, "decay", 0.03f }, { "osc", 0, "coarse", 2 }, { "mixer", 0, "l2", 0.3f } } },
+        { "hat", "Closed", {} },
+        { "hat", "Open", { { "hitenv", 0, "decay", 0.35f } } },
+        { "hat", "Tick", { { "hitenv", 0, "decay", 0.02f }, { "filter", 0, "cutoff", 0.95f } } },
+        { "hat", "Shaker", { { "hitenv", 0, "decay", 0.12f }, { "filter", 0, "cutoff", 0.7f }, { "filter", 0, "res", 0.05f } } },
+        { "perc", "Standard", {} },
+        { "perc", "Tom", { { "osc", 0, "coarse", -8 }, { "hitenv", 0, "decay", 0.3f } } },
+        { "perc", "Bongo", { { "osc", 0, "coarse", 8 }, { "hitenv", 0, "decay", 0.1f } } },
+        { "perc", "Blip", { { "osc", 0, "coarse", 15 }, { "hitenv", 0, "decay", 0.06f }, { "osc", 0, "modamt", 2 } } },
+        { "perc", "Zap", { { "osc", 0, "modamt", 30 }, { "hitenv", 1, "decay", 0.08f } } },
+        { "perc", "Woodblock", { { "osc", 0, "coarse", 12 }, { "osc", 0, "wave", 1 }, { "hitenv", 0, "decay", 0.05f } } },
+        { "clap", "Standard", {} },
+        { "clap", "Tight", { { "room", 0, "mix", 0.0f } } },
+        { "clap", "Big room", { { "room", 0, "mix", 0.45f } } },
+        { "clap", "Dark", { { "filter", 0, "cutoff", 0.45f } } },
+        { "bass", "Standard", {} },
+        { "bass", "Sub", { { "osc", 0, "wave", 0 }, { "filter", 0, "cutoff", 0.5f }, { "drive", 0, "drive", 0.0f } } },
+        { "bass", "Square", { { "osc", 0, "wave", 3 } } },
+        { "bass", "Acid", { { "filter", 0, "res", 0.75f }, { "filter", 0, "modamt", 5.0f }, { "hitenv", 0, "decay", 0.12f }, { "drive", 0, "drive", 0.5f } } },
+        { "bass", "Pluck", { { "hitenv", 0, "decay", 0.1f }, { "filter", 0, "cutoff", 0.3f }, { "adsr", 0, "sustain", 0.3f } } },
+        { "bass", "Growl", { { "drive", 0, "drive", 0.8f }, { "filter", 0, "cutoff", 0.45f } } },
+        { "lead", "Standard", {} },
+        { "lead", "Soft", { { "filter", 0, "cutoff", 0.45f }, { "filter", 0, "res", 0.1f }, { "adsr", 0, "attack", 0.05f } } },
+        { "lead", "Bright", { { "filter", 0, "cutoff", 0.85f } } },
+        { "lead", "Hollow", { { "osc", 0, "wave", 3 } } },
+        { "lead", "Wide", { { "osc", 1, "fine", 22 } } },
+        { "arp", "Standard", {} },
+        { "arp", "Soft", { { "filter", 0, "cutoff", 0.35f } } },
+        { "arp", "Bright", { { "filter", 0, "cutoff", 0.7f } } },
+        { "arp", "Dry", { { "pingpong", 0, "mix", 0.0f } } },
+        { "stab", "Standard", {} },
+        { "stab", "Short", { { "hitenv", 0, "decay", 0.1f } } },
+        { "stab", "Bright", { { "filter", 0, "cutoff", 0.7f } } },
+        { "stab", "Big", { { "plate", 0, "mix", 0.45f }, { "plate", 0, "decay", 0.7f } } },
+        { "pad", "Standard", {} },
+        { "pad", "Dark", { { "filter", 0, "cutoff", 0.35f } } },
+        { "pad", "Bright", { { "filter", 0, "cutoff", 0.75f } } },
+        { "pad", "Slow swell", { { "adsr", 0, "attack", 1.2f } } },
+        { "pad", "Lush", { { "multiosc", 0, "detune", 24 }, { "chorus", 0, "mix", 0.6f }, { "hall", 0, "mix", 0.5f } } },
+        { "strings", "Standard", {} },
+        { "strings", "Dark", { { "filter", 0, "cutoff", 0.45f } } },
+        { "strings", "Quick", { { "adsr", 0, "attack", 0.08f } } },
+        { "strings", "Huge", { { "hall", 0, "mix", 0.6f }, { "hall", 0, "decay", 0.9f } } } };
+    return p;
+}
+
+// A starting sound with a preset's knobs. Returns nothing if there is no such preset.
+// missed (if given) counts tweaks that found no unit or knob to set: it must stay 0.
+inline std::unique_ptr<Board> makePreset (const std::string& kind, const std::string& name, double sr = 48000, int* missed = nullptr)
+{
+    for (auto& p : soundPresets())
+    {
+        if (kind != p.kind || name != p.name) continue;
+        auto b = makeBoard (kind, sr);
+        for (auto& t : p.tweaks)
+        {
+            int seen = 0; bool done = false;
+            for (auto& m : b->modules)
+                if (std::string (m->info->type) == t.type && seen++ == t.nth)
+                {
+                    const int k = m->paramIndex (t.param);
+                    if (k >= 0) { const auto& pr = m->info->params[(size_t) k]; m->params[(size_t) k].store (std::min (pr.hi, std::max (pr.lo, t.value))); done = true; }
+                }
+            if (! done && missed != nullptr) ++*missed;
+        }
+        return b;
+    }
+    return nullptr;
+}
+
+// The units that hold a tab's pattern: its drum sequencers, note sequencers and chord units, in order
+inline std::vector<Module*> patternUnits (const Board& b)
+{
+    std::vector<Module*> v;
+    for (auto& m : b.modules) if (std::string (m->info->type) == "drumseq" || m->info->seq == Seq::Note || m->info->seq == Seq::Chord) v.push_back (m.get());
+    return v;
+}
+
+// Carries a tab's pattern and its mixer channel over to a new sound, so only the sound changes.
+// Like goes to like. A drum pattern going to a note sequencer keeps its hits on the key note;
+// notes going to a drum sequencer keep their rhythm.
+inline void keepPattern (const Board& old, Board& fresh)
+{
+    fresh.name = old.name; fresh.colour = old.colour;
+    fresh.level.store (old.level.load()); fresh.pan.store (old.pan.load());
+    fresh.mute.store (old.mute.load()); fresh.solo.store (old.solo.load());
+    fresh.out.store (old.out.load()); fresh.plays.store (old.plays.load());
+    if (fresh.type == "sample" || fresh.type == "empty") fresh.type = old.type;       // so its pattern Ideas stay the right kind
+    const auto from = patternUnits (old), to = patternUnits (fresh);
+    for (size_t k = 0; k < to.size() && k < from.size(); ++k)
+    {
+        const Module& a = *from[k]; Module& b = *to[k];
+        const bool aChord = a.info->seq == Seq::Chord, bChord = b.info->seq == Seq::Chord;
+        if (aChord || bChord)
+        {
+            if (aChord && bChord) for (size_t p = 0; p < b.params.size(); ++p) b.params[p].store (a.params[p].load());
+            continue;                                   // the chords themselves belong to the song, not the tab
+        }
+        for (const char* id : { "length", "bars", "octave", "gatelen", "follow" })
+        {
+            const int ia = a.paramIndex (id), ib = b.paramIndex (id);
+            if (ia >= 0 && ib >= 0) b.params[(size_t) ib].store (a.params[(size_t) ia].load());
+        }
+        const bool aDrum = a.info->seq == Seq::Drum, bDrum = b.info->seq == Seq::Drum;
+        for (int s = 0; s < kMaxSteps; ++s)
+        {
+            const float hit = a.data[(size_t) s].load();
+            if (aDrum == bDrum) { b.data[(size_t) s].store (hit); b.data[(size_t) (kMaxSteps + s)].store (a.data[(size_t) (kMaxSteps + s)].load()); }
+            else if (bDrum) { b.data[(size_t) s].store (hit > 0.5f ? 1.0f : 0.0f); b.data[(size_t) (kMaxSteps + s)].store (0.0f); }
+            else { b.data[(size_t) s].store (hit > 0.5f ? 1.0f : 0.0f); b.data[(size_t) (kMaxSteps + s)].store (0.0f); }
+        }
+    }
+}
+
+// An empty sound with the same kind of pattern unit as the old one, cabled into "source" (a sample player or a
+// plugin slot): trig / gate, and the pitch where the source takes one. The source goes to the Output in stereo.
+inline std::unique_ptr<Board> makeCarrier (const Board& old, const char* sourceType, double sr)
+{
+    auto b = makeBoard ("empty", sr);
+    auto* out = b->modules[0].get();
+    auto* src = b->add (sourceType, 0, 0, sr);
+    if (src == nullptr) return nullptr;
+    auto cable = [&b] (Module* a, const char* o, Module* c, const char* i) { const int oi = a->outIndex (o), ii = c->inIndex (i); if (oi >= 0 && ii >= 0) b->connect (a->uid, oi, c->uid, ii); };
+    const auto had = patternUnits (old);
+    const bool plugin = std::string (sourceType) == "plugin";
+    const Seq kind = had.empty() ? Seq::Drum : had[0]->info->seq;
+    if (kind == Seq::Chord)
+    {
+        auto* ch = b->add ("chords", 0, 0, sr);
+        if (plugin) { cable (ch, "v1", src, "p1"); cable (ch, "v2", src, "p2"); cable (ch, "v3", src, "p3"); cable (ch, "v4", src, "p4"); cable (ch, "gate", src, "gate"); }
+        else { cable (ch, "bass", src, "pitch"); cable (ch, "gate", src, "trig"); }
+    }
+    else if (kind == Seq::Note || plugin)
+    {
+        // (a plugin needs a note to play, so a drum pattern becomes notes on the key note)
+        auto* seq = b->add ("noteseq", 0, 0, sr);
+        seq->set ("octave", 0); seq->set ("follow", 0);
+        if (plugin) { cable (seq, "pitch", src, "p1"); cable (seq, "gate", src, "gate"); }
+        else { cable (seq, "pitch", src, "pitch"); cable (seq, "gate", src, "trig"); }
+    }
+    else
+    {
+        auto* seq = b->add ("drumseq", 0, 0, sr);
+        cable (seq, "trig", src, "trig"); cable (seq, "vel", src, "vel");
+    }
+    cable (src, "outl", out, "left"); cable (src, "outr", out, "right");
+    tidy (*b);
+    return b;
+}
 } // namespace n2m

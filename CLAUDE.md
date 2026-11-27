@@ -71,6 +71,7 @@ Rules that tests hold in place:
 - Stereo cabling: the screen calls `Rack::connectStereo`, which adds the right-hand cable when both jacks have a partner (`rightOf`: ids ending l / r, or left / right).
 - Audio out: `renderTab (tab)` renders a private copy of the whole project with that tab soloed; it must leave the real rack untouched.
 - Ideas lists: only ever add to the end. Tests and snapshots pick ideas by position.
+- Change sound: `soundPresets()` (a starting sound plus knob tweaks; a test checks every tweak lands), `keepPattern (old, fresh)` and `makeCarrier` in `Presets.h`; `changeSound` and `changeTo...` on the processor. The screen must let go of the board (`selectTab (-1)`) before a change and show it again after.
 - Links: `Module::patternLink` / `patternShare` and `paramLink`, pushed by `Rack::pushPattern` / `pushParam` when the screen edits something. Knobs link by position, not value. `patternShare` 4 is a follower: it keeps its own pattern and is shifted at play time by `leaderShift()`.
 
 ## Build and test (Linux)
@@ -100,10 +101,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.15'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.16'
 ```
 
-The latest release is **v0.1.14**. Bump by one each time.
+The latest release is **v0.1.15**. Bump by one each time.
 
 ## What can't be checked here
 

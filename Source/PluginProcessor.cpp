@@ -193,6 +193,62 @@ juce::File Nebula2ModulationProcessor::writeMidi (const n2m::Module& m, const ju
     return out;
 }
 
+bool Nebula2ModulationProcessor::changeSound (int tab, std::unique_ptr<n2m::Board> fresh)
+{
+    if (fresh == nullptr || tab < 0 || tab >= (int) rack.boards.size()) return false;
+    auto& old = *rack.boards[(size_t) tab];
+    n2m::keepPattern (old, *fresh);
+    history.before (old, -1);                          // everything on it is about to go: keep it all for Undo
+    rack.applyBoard (tab, n2m::Rack::boardText (*fresh));
+    return true;
+}
+
+bool Nebula2ModulationProcessor::changeToPreset (int tab, const juce::String& kind, const juce::String& preset)
+{
+    return changeSound (tab, n2m::makePreset (kind.toStdString(), preset.toStdString(), rack.sr));
+}
+
+bool Nebula2ModulationProcessor::changeToSample (int tab, const juce::File& audioFile)
+{
+    if (tab < 0 || tab >= (int) rack.boards.size() || ! audioFile.existsAsFile() || ! n2m::SampleModule::canRead (audioFile.getFullPathName())) return false;
+    auto fresh = n2m::makeCarrier (*rack.boards[(size_t) tab], "sample", rack.sr);
+    if (fresh == nullptr) return false;
+    for (auto& m : fresh->modules) if (auto* s = dynamic_cast<n2m::SampleModule*> (m.get())) s->load (audioFile);
+    return changeSound (tab, std::move (fresh));
+}
+
+bool Nebula2ModulationProcessor::changeToPlugin (int tab, const juce::String& name, const juce::String& path)
+{
+    if (tab < 0 || tab >= (int) rack.boards.size()) return false;
+    juce::String file = path;
+    if (file.isEmpty())
+    {
+        juce::StringArray wanted { name.toLowerCase().removeCharacters (" -_") };
+        if (wanted[0] == "nebula2drums") wanted.add ("nebula2");
+        for (auto& w : wanted)
+            for (auto& p : n2m::installedPlugins())
+                if (file.isEmpty() && p.first.toLowerCase().removeCharacters (" -_") == w) file = p.second;
+    }
+    if (file.isEmpty()) return false;
+    const auto found = n2m::pluginsInFile (file);
+    if (found.empty() || ! found[0].isInstrument) return false;      // an effect makes no sound of its own
+    auto fresh = n2m::makeCarrier (*rack.boards[(size_t) tab], "plugin", rack.sr);
+    if (fresh == nullptr) return false;
+    bool loaded = false;
+    for (auto& m : fresh->modules) if (auto* h = dynamic_cast<n2m::HostedModule*> (m.get())) loaded = h->load (found[0]).isEmpty();
+    return loaded && changeSound (tab, std::move (fresh));
+}
+
+bool Nebula2ModulationProcessor::changeToSaved (int tab, const juce::File& soundFile)
+{
+    const auto text = soundFile.loadFileAsString();
+    if (! text.startsWith ("N2MSOUND ")) return false;
+    auto made = n2m::Rack::readBoards (text.toStdString(), rack.sr);
+    if (made.empty()) return false;
+    for (auto& m : made[0]->modules) { m->patternLink = 0; m->patternShare = 3; std::fill (m->paramLink.begin(), m->paramLink.end(), 0); }
+    return changeSound (tab, std::move (made[0]));
+}
+
 // Names are compared without spaces, hyphens or capitals: "Nebula2-Glitch" is "Nebula2 Glitch"
 static juce::String plainName (const juce::String& s) { return s.toLowerCase().removeCharacters (" -_"); }
 

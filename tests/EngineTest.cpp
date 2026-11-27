@@ -1707,6 +1707,110 @@ int main()
         CHECK (peakOf (a.l) > 0.05f && allFinite (a.l), "a track with randomised knobs plays");
     }
 
+    // ---- Knob movement drawn on the timeline ----
+    {
+        AutoLane a;
+        CHECK (a.at (3.0) == 0.0f, "an empty line is nothing");
+        a.add (4.0f, 1.0f); a.add (0.0f, 0.2f); a.add (2.0f, 0.6f);
+        CHECK (a.count.load() == 3 && a.bar[0].load() == 0.0f && a.bar[1].load() == 2.0f && a.bar[2].load() == 4.0f, "points stay in order");
+        CHECK (std::abs (a.at (1.0) - 0.4f) < 1.0e-6f && std::abs (a.at (3.0) - 0.8f) < 1.0e-6f, "straight lines between points");
+        CHECK (a.at (-1.0) == 0.2f && a.at (0.0) == 0.2f && a.at (9.0) == 1.0f, "held before the first point and after the last");
+        a.move (1, 7.0f, 2.0f);
+        CHECK (a.bar[1].load() == 4.0f && a.val[1].load() == 1.0f, "a point can't pass its neighbour or leave the knob's range");
+        a.remove (1);
+        CHECK (a.count.load() == 2 && a.bar[1].load() == 4.0f && std::abs (a.at (2.0) - 0.6f) < 1.0e-6f, "removing a point joins its neighbours");
+        for (int k = 0; k < 100; ++k) a.add ((float) k, 0.5f);
+        CHECK (a.count.load() == kAutoPoints, "a line holds only so many points");
+
+        // A bass whose filter opens over four bars
+        auto build = [] (bool withLine, float from, float to)
+        {
+            auto* rack = one ("bass");
+            rack->song.sections.store (2); rack->song.bars.store (2);          // the song is four bars
+            auto& b = *rack->boards[0];
+            auto* f = firstOf (b, "filter");
+            f->set ("modamt", 0.0f);
+            if (withLine)
+            {
+                const int lane = rack->addAuto (b, f->uid, f->paramIndex ("cutoff"));
+                b.autos[(size_t) lane]->move (0, 0.0f, from);
+                b.autos[(size_t) lane]->move (1, 4.0f, to);
+            }
+            return rack;
+        };
+        {
+            std::unique_ptr<Rack> rack (build (true, 0.2f, 0.9f));
+            auto& b = *rack->boards[0];
+            auto* f = firstOf (b, "filter");
+            const int cut = f->paramIndex ("cutoff");
+            CHECK (b.autos.size() == 1 && b.autoIndex (f->uid, cut) == 0, "a knob gets a line");
+            CHECK (rack->addAuto (b, f->uid, cut) == 0 && b.autos.size() == 1, "and only one");
+            CHECK (rack->addAuto (b, f->uid, f->paramIndex ("type")) == -1 && rack->addAuto (b, 9999, 0) == -1, "a switch can't have a line, nor a unit that isn't there");
+            f->set ("cutoff", 0.5f);
+            render (*rack, 1, false);
+            CHECK (f->P (cut) == 0.5f, "stopped, the line leaves the knob alone");
+            auto x = render (*rack, 2);                                         // bars 0 to 2: the knob is half way up its line
+            CHECK (std::abs (f->P (cut) - 0.55f) < 0.01f, "playing, the knob follows its line");
+            CHECK (std::abs (rack->song.bar.load() - 2.0f) < 0.05f, "the timeline knows where the song is");
+            // the sound really opens: the last half bar has far more top than the first
+            // (how much the wave bends from sample to sample: small for a dull sound, large for a bright one)
+            auto bright = [] (const std::vector<float>& v, size_t from, size_t to) { double e = 0; for (size_t i = from + 2; i < to; ++i) e += std::abs ((double) v[i] - 2.0 * v[i - 1] + v[i - 2]); return e / (double) (to - from); };
+            std::unique_ptr<Rack> whole (build (true, 0.2f, 0.9f));
+            auto y = render (*whole, 4);
+            const size_t q = y.l.size() / 8;
+            CHECK (bright (y.l, 7 * q, 8 * q) > 3.0 * bright (y.l, 0, q), "the filter opens as the line rises");
+            // the song goes round: bar 5 is bar 1 again
+            std::unique_ptr<Rack> round (build (true, 0.2f, 0.9f));
+            render (*round, 5);
+            CHECK (std::abs (firstOf (*round->boards[0], "filter")->P (cut) - (0.2f + 0.7f * 0.25f)) < 0.01f, "after the last bar the line starts again");
+        }
+        // The same whatever block size the host uses
+        {
+            std::unique_ptr<Rack> a1 (build (true, 0.2f, 0.9f)), a2 (build (true, 0.2f, 0.9f));
+            auto x = render (*a1, 2, true, 64), y = render (*a2, 2, true, 441);
+            float diff = 0;
+            for (size_t i = 0; i < x.l.size(); ++i) diff = std::max (diff, std::abs (x.l[i] - y.l[i]));
+            CHECK (diff < 1.0e-4f, "knob movement doesn't depend on the block size");
+        }
+        // A flat line at the knob's own position changes nothing
+        {
+            std::unique_ptr<Rack> with (build (false, 0, 0)), without (build (false, 0, 0));
+            auto& b = *with->boards[0];
+            with->addAuto (b, firstOf (b, "filter")->uid, firstOf (b, "filter")->paramIndex ("cutoff"));
+            auto x = render (*with, 2), y = render (*without, 2);
+            float diff = 0;
+            for (size_t i = 0; i < x.l.size(); ++i) diff = std::max (diff, std::abs (x.l[i] - y.l[i]));
+            CHECK (diff < 1.0e-3f, "a new line is flat where the knob is, and changes nothing");
+        }
+        // Saved with the project, undone with Undo, and gone when its unit goes
+        {
+            std::unique_ptr<Rack> rack (build (true, 0.2f, 0.9f));
+            auto& b = *rack->boards[0];
+            b.autos[0]->add (1.0f, 0.75f);
+            const auto text = rack->save();
+            CHECK (text.find ("\nau ") != std::string::npos, "lines are written to the save");
+            Rack loaded; loaded.prepare (48000);
+            CHECK (loaded.load (text) && loaded.boards[0]->autos.size() == 1 && loaded.boards[0]->autos[0]->count.load() == 3 && loaded.save() == text, "lines are saved with the project");
+            CHECK (loaded.boards[0]->autos.size() == 1 && std::abs (loaded.boards[0]->autos[0]->at (1.0) - 0.75f) < 1.0e-6f, "and say the same thing after loading");
+            History history (*rack);
+            history.before (b);
+            b.autos[0]->move (1, 1.0f, 0.1f);
+            history.discardIfUnchanged();
+            CHECK (history.canUndo(), "moving a point is a step Undo knows");
+            history.undo();
+            CHECK (rack->save() == text, "Undo puts the line back");
+            history.before (b);
+            rack->removeAuto (b, 0);
+            CHECK (b.autos.empty(), "a line can be taken off");
+            history.undo();
+            CHECK (rack->save() == text, "and Undo brings it back");
+            auto copy = rack->copyBoard (b);
+            CHECK (copy->autos.size() == 1, "a duplicated sound keeps its lines");
+            rack->removeModule (b, firstOf (b, "filter")->uid);
+            CHECK (b.autos.empty(), "deleting a unit takes its lines with it");
+        }
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

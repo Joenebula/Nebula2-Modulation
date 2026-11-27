@@ -276,6 +276,58 @@ struct Module
 
 struct Cable { int src, srcPort, dst, dstPort; };
 
+// A knob's movement drawn on the timeline: points of (where in the song, in bars from the start; knob position
+// 0..1) joined by straight lines. Before the first point and after the last the knob holds that point's position.
+// The points are plain numbers the audio thread can read at any moment, so dragging one never makes audio wait.
+constexpr int kAutoPoints = 64;
+struct AutoLane
+{
+    int uid = 0, param = 0;                       // which unit on the board, and which of its knobs
+    std::atomic<int> count { 0 };
+    std::array<std::atomic<float>, kAutoPoints> bar {}, val {};
+    float at (double barPos) const
+    {
+        const int n = std::min (kAutoPoints, count.load (std::memory_order_relaxed));
+        if (n <= 0) return 0.0f;
+        float b0 = bar[0].load (std::memory_order_relaxed), v0 = val[0].load (std::memory_order_relaxed);
+        if (barPos <= b0) return v0;
+        for (int i = 1; i < n; ++i)
+        {
+            const float b1 = bar[(size_t) i].load (std::memory_order_relaxed), v1 = val[(size_t) i].load (std::memory_order_relaxed);
+            if (barPos < b1) return b1 > b0 ? v0 + (v1 - v0) * (float) ((barPos - b0) / (b1 - b0)) : v1;
+            b0 = b1; v0 = v1;
+        }
+        return v0;
+    }
+    // Puts a point in, keeping them in order. Returns where it went, or -1 if the lane is full.
+    int add (float atBar, float v)
+    {
+        const int n = count.load();
+        if (n >= kAutoPoints) return -1;
+        int i = n;
+        while (i > 0 && bar[(size_t) (i - 1)].load() > atBar) { bar[(size_t) i].store (bar[(size_t) (i - 1)].load()); val[(size_t) i].store (val[(size_t) (i - 1)].load()); --i; }
+        bar[(size_t) i].store (atBar); val[(size_t) i].store (std::min (1.0f, std::max (0.0f, v)));
+        count.store (n + 1);
+        return i;
+    }
+    void remove (int i)
+    {
+        const int n = count.load();
+        if (i < 0 || i >= n) return;
+        for (int k = i; k + 1 < n; ++k) { bar[(size_t) k].store (bar[(size_t) (k + 1)].load()); val[(size_t) k].store (val[(size_t) (k + 1)].load()); }
+        count.store (n - 1);
+    }
+    // Moves a point. It can't pass its neighbours, so the line never doubles back.
+    void move (int i, float atBar, float v)
+    {
+        const int n = count.load();
+        if (i < 0 || i >= n) return;
+        const float lo = i > 0 ? bar[(size_t) (i - 1)].load() : 0.0f, hi = i + 1 < n ? bar[(size_t) (i + 1)].load() : 1.0e9f;
+        bar[(size_t) i].store (std::min (hi, std::max (lo, atBar)));
+        val[(size_t) i].store (std::min (1.0f, std::max (0.0f, v)));
+    }
+};
+
 // The Output module: whatever is plugged into it is what the board sends to the mixer
 struct OutputModule : Module
 {
@@ -330,7 +382,15 @@ struct Board
     std::atomic<uint32_t> plays { 0xffffffffu };   // the song page: one bit per section, set = this sound plays in it
     std::vector<std::unique_ptr<Module>> modules;
     std::vector<Cable> cables;
+    std::vector<std::unique_ptr<AutoLane>> autos;   // knob movement drawn on the timeline
     int nextUid = 1;
+
+    // The timeline lane moving this knob, or -1
+    int autoIndex (int uid, int param) const
+    {
+        for (size_t i = 0; i < autos.size(); ++i) if (autos[i]->uid == uid && autos[i]->param == param) return (int) i;
+        return -1;
+    }
 
     Module* find (int uid) const
     {
@@ -355,6 +415,7 @@ struct Board
     {
         cables.erase (std::remove_if (cables.begin(), cables.end(), [uid] (const Cable& c) { return c.src == uid || c.dst == uid; }), cables.end());
         modules.erase (std::remove_if (modules.begin(), modules.end(), [uid] (const std::unique_ptr<Module>& m) { return m->uid == uid; }), modules.end());
+        autos.erase (std::remove_if (autos.begin(), autos.end(), [uid] (const std::unique_ptr<AutoLane>& a) { return a->uid == uid; }), autos.end());   // its knobs go with it
         rebuild();
     }
 
@@ -438,6 +499,15 @@ struct Board
         for (size_t i = 0; i < n; ++i) modules[i]->live = heard[i] != 0;
     }
 
+    // Sets every knob that has a line on the timeline to where its line is at this point of the song
+    void applyAutos (double barPos)
+    {
+        for (auto& a : autos)
+            if (auto* m = find (a->uid))
+                if (a->param >= 0 && a->param < (int) m->params.size() && a->count.load (std::memory_order_relaxed) > 0)
+                    m->params[(size_t) a->param].store (paramFromNorm (m->info->params[(size_t) a->param], a->at (barPos)));
+    }
+
     // Adds this board's sound into l and r
     void process (int n, const Ctx& c, float* l, float* r, bool audible)
     {
@@ -515,6 +585,7 @@ struct Song
     std::atomic<bool> on { false };
     std::atomic<int> sections { 8 }, bars { 4 };
     std::atomic<int> now { -1 };      // the section playing, for the screen (-1 = none)
+    std::atomic<float> bar { -1.0f }; // where the song is, in bars from its start, for the timeline (-1 = stopped)
 };
 
 // The separate outputs, for one call to process. A null pair means the host hasn't switched that output on.
@@ -766,6 +837,14 @@ struct Rack
         Ctx resting = c; resting.playing = false;
         for (auto& b : boards) b->spent = 0;
         int sec = -1;
+        // Knob movement drawn on the timeline. The song is so many bars long and goes round; knobs are set on a
+        // fine fixed grid of song position (1/32 of a step) and chunks are cut at its edges, so the sample a knob
+        // moves on never depends on the host's block size.
+        bool anyAuto = false;
+        if (playing) for (auto& b : boards) anyAuto = anyAuto || ! b->autos.empty();
+        const double songBars = (double) (nSec * secBars);
+        auto gridAt = [] (double q) { return (long) std::floor (q * 128.0 + 1.0e-9); };
+        double barNow = -1.0;
         for (int pos = 0, len = 0; pos < n; pos += len)
         {
             len = std::min (kBlock, n - pos);
@@ -783,6 +862,16 @@ struct Rack
                 int k = 1;
                 while (k < len && sectionAt (c.ppq + k * c.ppqPerSample) == sec) ++k;
                 len = k;
+            }
+            if (playing) barNow = std::fmod (std::max (0.0, c.ppq) / 4.0, songBars);
+            if (anyAuto)
+            {
+                const long cellNow = gridAt (c.ppq);
+                int k = 1;
+                while (k < len && gridAt (c.ppq + k * c.ppqPerSample) == cellNow) ++k;
+                len = k;
+                const double at = std::fmod (std::max (0.0, (double) cellNow / 128.0) / 4.0, songBars);
+                for (auto& b : boards) if (! b->autos.empty()) b->applyAutos (at);
             }
             for (int k = 0; k < 2; ++k) { std::fill (buses.l[k].begin(), buses.l[k].begin() + len, 0.0f); std::fill (buses.r[k].begin(), buses.r[k].begin() + len, 0.0f); }
             // Tabs that play a send bus run after the tabs that feed it, wherever they sit in the tab row
@@ -803,6 +892,7 @@ struct Rack
         for (auto& b : boards) { const float now = (float) (b->spent * sr / std::max (1, n)); const float was = b->load.load(); b->load.store (was + (now > was ? 0.3f : 0.02f) * (now - was)); }
         lock.unlock();
         song.now.store (sec);
+        song.bar.store ((float) barNow);
         // Separate outputs skip the master fader (the host's own channel fader does that job) but keep the safety limiter
         for (int k = 1; k < kOuts; ++k)
             if ((on & (1 << k)) != 0)
@@ -874,6 +964,31 @@ struct Rack
     void disconnect (Board& b, int s, int sp, int d, int dp) { Hold h (lock); b.disconnect (s, sp, d, dp); }
     void disconnectAll (Board& b, int uid) { Hold h (lock); b.disconnectAll (uid); }
 
+    // ---- Knob movement on the timeline ----
+    int songBars() const { return std::min (kSongSections, std::max (1, song.sections.load())) * std::max (1, song.bars.load()); }
+    // A new line for a knob: flat at where the knob is now, so nothing changes until it is drawn. Returns its
+    // position in the board's list (the one already there, if the knob has one), or -1.
+    int addAuto (Board& b, int uid, int param)
+    {
+        auto* m = b.find (uid);
+        if (m == nullptr || param < 0 || param >= (int) m->params.size() || ! m->info->params[(size_t) param].choices.empty()) return -1;
+        const int had = b.autoIndex (uid, param);
+        if (had >= 0) return had;
+        auto a = std::make_unique<AutoLane>();
+        a->uid = uid; a->param = param;
+        const float v = paramToNorm (m->info->params[(size_t) param], m->P (param));
+        a->add (0.0f, v); a->add ((float) songBars(), v);
+        Hold h (lock);
+        b.autos.push_back (std::move (a));
+        return (int) b.autos.size() - 1;
+    }
+    void removeAuto (Board& b, int index)
+    {
+        if (index < 0 || index >= (int) b.autos.size()) return;
+        std::unique_ptr<AutoLane> gone;
+        { Hold h (lock); gone = std::move (b.autos[(size_t) index]); b.autos.erase (b.autos.begin() + index); }
+    }
+
     // ---- Saving: plain text, one thing per line, named by id so old saves keep loading ----
     static std::string clean (std::string s)
     {
@@ -910,6 +1025,14 @@ struct Rack
                     o << '\n';
                 }
         }
+        for (auto& a : b.autos)
+            if (auto* m = b.find (a->uid))
+                if (a->param >= 0 && a->param < (int) m->info->params.size())
+                {
+                    o << "au " << a->uid << ' ' << m->info->params[(size_t) a->param].id;
+                    for (int k = 0; k < std::min (kAutoPoints, a->count.load()); ++k) o << ' ' << a->bar[(size_t) k].load() << ' ' << a->val[(size_t) k].load();
+                    o << '\n';
+                }
         for (auto& c : b.cables)
         {
             auto* s = b.find (c.src); auto* d = b.find (c.dst);
@@ -1042,6 +1165,22 @@ struct Rack
                         for (int bar = 0; bar < kMaxBars; ++bar) m->data[(size_t) (kMaxSteps + bar * kSteps + k)].store (v[(size_t) (kSteps + k)]);
                 }
             }
+            else if (tag == "au")
+            {
+                int uid = 0; std::string id; ls >> uid >> id;
+                if (auto* m = b->find (uid))
+                {
+                    const int k = m->paramIndex (id);
+                    if (k >= 0 && b->autoIndex (uid, k) < 0)
+                    {
+                        auto a = std::make_unique<AutoLane>();
+                        a->uid = uid; a->param = k;
+                        float at = 0, v = 0;
+                        while (ls >> at >> v) a->add (std::max (0.0f, at), v);
+                        if (a->count.load() > 0) b->autos.push_back (std::move (a));
+                    }
+                }
+            }
             else if (tag == "cable")
             {
                 int s = 0, d = 0; std::string sp, dp; ls >> s >> sp >> d >> dp;
@@ -1105,6 +1244,7 @@ struct Rack
         auto& src = *made[0];
         auto& dst = *boards[(size_t) index];
         std::vector<std::unique_ptr<Module>> gone;        // destroyed after the lock is released
+        std::vector<std::unique_ptr<AutoLane>> gone_autos;
         {
             Hold h (lock);
             std::vector<std::unique_ptr<Module>> next;
@@ -1123,6 +1263,8 @@ struct Rack
             }
             for (auto& lm : dst.modules) if (lm != nullptr) gone.push_back (std::move (lm));
             dst.modules = std::move (next);
+            gone_autos.swap (dst.autos);
+            dst.autos = std::move (src.autos);
             dst.cables = src.cables;
             dst.nextUid = std::max (dst.nextUid, src.nextUid);
             dst.type = src.type; dst.name = src.name; dst.colour = src.colour;

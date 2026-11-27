@@ -599,13 +599,46 @@ HostView::HostView (BoardView& o, HostedModule& m) : owner (o), module (m)
     addAndMakeVisible (load); addAndMakeVisible (open); addAndMakeVisible (knobs);
     load.onClick = [this] { showLoadMenu(); };
     knobs.onClick = [this] { showKnobMenu(); };
+    addChildComponent (presets);
+    presets.onClick = [this] { showPresetMenu(); };
     open.onClick = [this] { if (module.hasPlugin() && owner.onOpenPlugin) owner.onOpenPlugin (module); };
     setSize (lay::hostW, lay::hostSeqH);
     refresh();
 }
 
-void HostView::refresh() { open.setEnabled (module.hasPlugin()); knobs.setEnabled (module.hasPlugin() && module.numControls() > 0); repaint(); }
-void HostView::resized() { load.setBounds (0, 30, 72, 24); open.setBounds (78, 30, 72, 24); knobs.setBounds (156, 30, 72, 24); }
+void HostView::refresh()
+{
+    open.setEnabled (module.hasPlugin()); knobs.setEnabled (module.hasPlugin() && module.numControls() > 0);
+    presets.setVisible (module.hasPlugin() && module.presetNames().size() > 1);     // only for plugins that offer a list
+    repaint();
+}
+void HostView::resized() { load.setBounds (0, 30, 72, 24); open.setBounds (78, 30, 72, 24); knobs.setBounds (156, 30, 72, 24); presets.setBounds (234, 30, 78, 24); }
+
+// Presets: the plugin's own list of presets
+void HostView::showPresetMenu()
+{
+    const auto names = module.presetNames();
+    if (names.size() < 2) return;
+    juce::PopupMenu menu;
+    menu.addSectionHeader (module.pluginName() + " presets");
+    const int now = module.currentPreset(), page = 40;
+    if (names.size() <= page) for (int i = 0; i < names.size(); ++i) menu.addItem (1 + i, names[i], true, i == now);
+    else
+        for (int from = 0; from < names.size(); from += page)
+        {
+            juce::PopupMenu part;
+            const int to = juce::jmin (names.size(), from + page);
+            for (int i = from; i < to; ++i) part.addItem (1 + i, names[i], true, i == now);
+            menu.addSubMenu (names[from] + "  ...  " + names[to - 1], part, true, nullptr, now >= from && now < to);
+        }
+    juce::Component::SafePointer<HostView> safe (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presets), [safe] (int r)
+    {
+        if (safe == nullptr || r <= 0) return;
+        safe->module.choosePreset (r - 1);
+        safe->repaint();
+    });
+}
 
 void HostView::paint (juce::Graphics& g)
 {
@@ -622,7 +655,7 @@ void HostView::paint (juce::Graphics& g)
     g.drawText (pointed, 196, 2, getWidth() - 196, 18, juce::Justification::centredRight, true);
     g.setColour (failed ? bandOrange : n7);
     g.drawFittedText (failed ? module.status : module.hasPlugin() ? "Open shows its own window. Knobs points Knob 1 to 4 at its controls" : "Load a plugin, or drop a .vst3 file on the board",
-                      236, 30, getWidth() - 236, 24, juce::Justification::centredLeft, 2, 0.8f);
+                      presets.isVisible() ? 320 : 236, 30, getWidth() - (presets.isVisible() ? 320 : 236), 24, juce::Justification::centredLeft, 2, 0.8f);
 }
 
 // Knobs: point each of the slot's four knobs at one of the plugin's own controls

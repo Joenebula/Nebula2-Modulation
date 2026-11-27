@@ -101,10 +101,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.16'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.17'
 ```
 
-The latest release is **v0.1.15**. Bump by one each time.
+The latest release is **v0.1.16**. Bump by one each time.
 
 ## What can't be checked here
 

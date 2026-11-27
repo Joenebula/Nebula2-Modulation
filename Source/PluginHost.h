@@ -51,6 +51,11 @@ public:
     int knobTarget (int knob) const { return knob >= 0 && knob < kKnobs ? target[knob].load() : -1; }
     int lastTouched() const { return touched.load(); } // the control last moved in the plugin's own window, or -1
 
+    // The plugin's own presets, where it offers a list of them. Message thread.
+    juce::StringArray presetNames() const;
+    int currentPreset() const;
+    void choosePreset (int index);
+
 private:
     juce::Optional<PositionInfo> getPosition() const override;
     void parameterValueChanged (int index, float) override { touched.store (index); }

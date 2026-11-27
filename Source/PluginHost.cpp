@@ -173,6 +173,25 @@ void HostedModule::unload()
     touched.store (-1);
 }
 
+juce::StringArray HostedModule::presetNames() const
+{
+    juce::StringArray names;
+    if (plugin == nullptr || plugin->getNumPrograms() < 2) return names;
+    for (int i = 0; i < plugin->getNumPrograms() && i < 2000; ++i)
+    {
+        const auto n = plugin->getProgramName (i);
+        names.add (n.isNotEmpty() ? n : "Preset " + juce::String (i + 1));
+    }
+    return names;
+}
+int HostedModule::currentPreset() const { return plugin != nullptr ? plugin->getCurrentProgram() : -1; }
+void HostedModule::choosePreset (int index)
+{
+    if (plugin == nullptr || index < 0 || index >= plugin->getNumPrograms()) return;
+    plugin->setCurrentProgram (index);
+    for (auto& s : sent) s = -1;          // the preset moved the controls: the knobs must not push them straight back
+}
+
 int HostedModule::numControls() const { return plugin != nullptr ? plugin->getParameters().size() : 0; }
 juce::String HostedModule::controlName (int index) const
 {

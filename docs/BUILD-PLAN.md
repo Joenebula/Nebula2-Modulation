@@ -147,7 +147,8 @@ change it with a preset or another VST or sample. I need a menu I can select fro
 - [x] A plugin (instrument): yours, or any installed. The same pattern plays it; a drum pattern becomes notes on the key note
 - [x] One of your saved sounds
 - [x] The pattern, the tab's name, level, pan, mute, solo, output and song sections all stay. Undo brings the old sound back, plugin or sample included
-- [ ] Presets for a sample or plugin tab themselves (stepping through a plugin's own presets from here)
+- [x] A plugin's own presets (v0.1.16): a slot shows a Presets button when the plugin offers a list (Nebula2 Glitch's 8 show up). Tested with Nebula2 Glitch
+- [ ] Plugins that keep their presets in their own browser (Nexus, HALion) won't show a list here: use Open
 - [ ] An effect plugin can't be a tab's sound (it makes none of its own): the menu refuses it quietly. It should say why
 
 ## Screen polish (Joe: "we can work the UI later")

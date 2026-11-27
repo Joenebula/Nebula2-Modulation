@@ -104,9 +104,10 @@ public:
 private:
     void showLoadMenu();
     void showKnobMenu();
+    void showPresetMenu();
     void refresh();
     BoardView& owner; HostedModule& module;
-    juce::TextButton load { "Load" }, open { "Open" }, knobs { "Knobs" };
+    juce::TextButton load { "Load" }, open { "Open" }, knobs { "Knobs" }, presets { "Presets" };
     std::unique_ptr<juce::FileChooser> chooser;
 };
 

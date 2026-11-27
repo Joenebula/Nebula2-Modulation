@@ -811,6 +811,21 @@ int main (int argc, char** argv)
             auto* slot = slotOf (tab);
             CHECK (slot != nullptr && slot->hasPlugin() && slot->live && has (tab, "return"), "an effect arrives loaded, with a Return feeding it");
             std::printf ("effect: %s loaded in a slot\n", slot != nullptr ? slot->pluginName().toRawUTF8() : "?");
+            if (slot != nullptr)
+            {
+                // the plugin's own presets can be picked from the slot
+                const auto names = slot->presetNames();
+                std::printf ("its own presets: %d%s%s\n", names.size(), names.size() > 0 ? ", first: " : "", names.size() > 0 ? names[0].toRawUTF8() : "");
+                if (names.size() > 1)
+                {
+                    slot->choosePreset (names.size() - 1);
+                    CHECK (slot->currentPreset() == names.size() - 1, "picking one of a plugin's own presets selects it");
+                    slot->choosePreset (0);
+                    CHECK (slot->currentPreset() == 0, "and another");
+                }
+                slot->choosePreset (-1); slot->choosePreset (99999);
+                CHECK (slot->hasPlugin(), "a preset that isn't there is ignored");
+            }
             // the kick, sent to bus A, comes out of the effect's tab
             for (auto& b : r.rack.boards) b->mute.store (true);
             r.rack.boards[(size_t) tab]->mute.store (false);

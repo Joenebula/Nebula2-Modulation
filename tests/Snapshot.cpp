@@ -98,6 +98,15 @@ int main (int argc, char** argv)
     juce::ignoreUnused (b);
     shoot (*ed, dir + "/ui_added.png");
 
+    // more room for the board: Focus, and Full screen
+    e->setFocus (true);
+    shoot (*ed, dir + "/ui_focus.png");
+    e->setBigWindow (true);
+    shoot (*ed, dir + "/ui_full_focus.png");
+    e->setFocus (false);
+    shoot (*ed, dir + "/ui_full.png");
+    e->setBigWindow (false);
+
     // the mixing desk opened up
     p.rack.boards[1]->pan.store (-0.4f); p.rack.boards[3]->pan.store (0.6f);
     e->desk().setTall (true);
@@ -193,7 +202,7 @@ int main (int argc, char** argv)
                 if (std::string (m->info->type) == "filter" && (b->type == "bass" || b->type == "lead"))
                 {
                     const int lane = e->songPanel.addLane (at, m->uid, m->paramIndex ("cutoff"));
-                    if (lane >= 0) { auto& a = *b->autos[(size_t) lane]; a.move (0, 0.0f, 0.25f); a.add (8.0f, 0.4f); a.add (16.0f, 0.9f); a.add (24.0f, 0.5f); }
+                    if (lane >= 0) { auto& a = *b->autos[(size_t) lane]; a.move (0, 0.0f, 0.25f); a.add (8.0f, 0.4f); a.add (16.0f, 0.9f); a.add (24.0f, 0.5f); a.bend (1, -0.6f); a.bend (2, 0.6f); }      // two stretches bent, one each way
                 }
             ++at;
         }

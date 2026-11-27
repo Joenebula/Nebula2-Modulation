@@ -177,12 +177,50 @@ Joe sent a video of Modurand: "This is where we need to be." Of the five differe
 - [x] **Everything on one board.** An All tab, first in the tab row, shows every sound in its own frame on one board, fitted to the window. Zoom 20% to 150%; click the zoom figure to fit again. Each frame is an ordinary board, so cables, knobs and Undo work as on a tab. A new project opens on it; an older project opens on its tab as it was saved
 - [x] **Modules look like hardware.** Every unit is a rack panel of the same height: knobs as big as the room allows, a screw in each corner, the name printed on the plate over a line in the colour of its kind, a black screen behind patterns and chords, jacks in a strip along the bottom with outputs on a light pad. Tidy lines panels up side by side in two rows. A test checks every unit fits its panel
 - [x] **A timeline with knob movement.** The Song page is now a timeline: bars along the top, a row per sound, the section blocks as before, a playhead. + Knob (or right-click a knob) gives a knob a line; click to add points, drag them, right-click to remove. Knobs follow their lines as the song plays and go round with it. Saved, undoable, and the same at any block size
+- [x] **Curves on knob lines** (v0.1.23; Joe: "can the arranger automation have curves?", and he chose bending each stretch over one Smooth switch). A small diamond sits half way along each stretch: drag it up or down and the middle of the stretch follows the mouse, so the knob moves early and eases in, or holds back and moves late. Double-click the diamond to go straight again. Saved on an `ac` line, written only when there is a bend, so older projects and older versions are untouched
 - [ ] **Joe to test in Cubase**: all four. None of it can be heard or clicked here beyond the tests and snapshots
 - [ ] A style doesn't set the tempo (Cubase owns it). Drum & bass at 124 isn't drum & bass until Cubase is at 174
 - [ ] Old projects keep their unit positions, which were laid out for the bigger panels: press Tidy
 - [ ] A knob with a line can still be turned by hand, but the line takes it back while the song plays
 - [ ] Change sound drops that sound's knob lines (the units they pointed at are gone)
 - [ ] Not done: their light theme, icon side rail and floating toolbar (Joe: keep ours)
+
+## More room for the board (done, v0.1.24)
+
+Joe: "can we make an option to view full plugin screen so I can see more of the workspace".
+
+- [x] **Full screen**: a button at the right of the tab row grows the plugin's window to fill the monitor it is on (leaving room for Cubase's own frame). It then reads Normal size, which puts it back
+- [x] **Focus**: hides the style bar and the mixing desk so the board takes their room. Press again to bring them back
+- [x] Both together leave only the top bar and the tabs above the board. Both are saved with the project
+- [ ] **Joe to test in Cubase**: that the window really grows there, and to the right monitor. Here there is no screen, so the tests use a stand-in size
+
+## Next: the Notes and rhythm units, from Joe's design (28 Nov 2026)
+
+Joe sent a picture of the Notes and rhythm units redrawn and asked for it to go on the plan. Not started. What it shows:
+
+- [ ] **Units as wide rack rows on rails**, several to a row, rather than tall panels: the name centred over a green line, screws in the corners, empty rail showing where a row isn't full
+- [ ] **Jacks grouped**: inputs plain along the bottom left, outputs together on a raised pad at the bottom right
+- [ ] **Drum sequencer**: bar buttons (1 bar, 2, 4, 8) and the pattern idea as a drop-down in the unit's top line, Random beside it; a row of velocity bars under the steps, one per hit; DRAG MIDI at the bottom left
+- [ ] **Note sequencer**: the same top line; the notes drawn piano-roll style on a grid, with the playing step shaded
+- [ ] **MIDI keyboard**: a picture of a keyboard that lights the keys being held
+- [ ] **Arpeggiator**: a small screen drawing the order the notes will play in, with the pattern name and rate on it; Rate and Pattern as drop-downs
+- [ ] **Chord generator**: the chord tiles, each with its length, above a keyboard that lights the notes of the chord playing; Mood and Rhythm as drop-downs, Generate, More, DRAG MIDI
+- [ ] **Euclidean rhythm**: a ring showing the hits round the bar with "5 / 16" in the middle; an Accent knob (new: we have Steps, Hits and Turn today)
+- [ ] **Ratchet** and **Swing**: a small screen with a row of dots going in and the row coming out, so the effect can be seen
+- To settle with Joe before building: is this one long scrolling rack for the whole sound, or does it replace the panels only in the Notes and rhythm heading; and whether the other headings get the same treatment
+
+## Units that would gain from a bigger view (ideas, not started)
+
+Joe: "do any of the modules need to expand? Open a bigger view? So you can do more". Proposed, in order of how much they would gain:
+
+- [ ] **Note sequencer**: a full piano roll. All 8 bars at once, note lengths you can drag, more than one octave in view
+- [ ] **Drum sequencer**: all 8 bars at once with velocity per hit, and copy / paste of a bar
+- [ ] **Chord generator**: every chord of the song in one view, with its notes on a keyboard, and the choices that are in menus today laid out to click
+- [ ] **Sample player**: a large waveform to set start and length by dragging, with zoom
+- [ ] **Parametric EQ**: the curve drawn large, with the bands as points to drag
+- [ ] **Step modulator**: all its bars at once, with a pencil to draw shapes
+- [ ] **Scope and tuner**: a large scope
+- Already has one: the plugin slot (Open). No need: single-knob units (VCA, attenuator, pan and the like)
 
 ## Screen polish (Joe: "we can work the UI later")
 

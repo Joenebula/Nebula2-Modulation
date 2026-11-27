@@ -1819,6 +1819,61 @@ int main()
         CHECK (lay::height (*t) == lay::panelH, "every panel is the same height");
     }
 
+    // Curves on timeline knob lines: a stretch can be bent, and a straight one is exactly as it was
+    {
+        AutoLane a;
+        a.add (0.0f, 0.2f); a.add (4.0f, 1.0f); a.add (8.0f, 0.0f);
+        CHECK (std::abs (a.at (2.0) - 0.6f) < 1.0e-6f && std::abs (a.at (1.0) - 0.4f) < 1.0e-6f, "with no bend the line is straight, as before");
+        a.bend (0, 0.5f);
+        CHECK (a.at (2.0) > 0.75f && a.at (2.0) < 1.0f, "bent up, the knob has gone most of the way by half time");
+        CHECK (std::abs (a.at (0.0) - 0.2f) < 1.0e-6f && std::abs (a.at (4.0) - 1.0f) < 1.0e-5f, "and it still starts and ends on its points");
+        bool rising = true; for (double b = 0.1; b < 4.0; b += 0.1) rising = rising && a.at (b) >= a.at (b - 0.1) - 1.0e-6f;
+        CHECK (rising, "a bent stretch never doubles back");
+        CHECK (std::abs (a.at (6.0) - 0.5f) < 1.0e-6f, "bending one stretch leaves the next one straight");
+        a.bend (0, -0.5f);
+        CHECK (a.at (2.0) < 0.4f && a.at (2.0) > 0.2f, "bent the other way it holds back, then moves late");
+        // the bend that puts the middle where the mouse is
+        for (float half : { 0.1f, 0.3f, 0.7f, 0.9f })
+            CHECK (std::abs (AutoLane::shape (0.5f, AutoLane::curveFor (half)) - half) < 0.01f, "the middle of the stretch follows the handle");
+        CHECK (AutoLane::curveFor (0.5f) == 0.0f && AutoLane::curveFor (0.505f) == 0.0f, "near the middle it snaps back to straight");
+        CHECK (std::abs (AutoLane::curveFor (5.0f)) <= 1.0f && std::abs (AutoLane::curveFor (-5.0f)) <= 1.0f, "dragging far past the line can't over-bend it");
+        // a point added inside a bent stretch, and one removed, keep the bends with the right stretches
+        a.bend (0, 0.5f); a.bend (1, -0.3f);
+        a.add (6.0f, 0.5f);
+        CHECK (a.curve[0].load() == 0.5f && a.curve[1].load() == -0.3f && a.curve[2].load() == 0.0f, "a new point starts a straight stretch and the others keep their bends");
+        a.remove (2);
+        CHECK (a.count.load() == 3 && a.curve[0].load() == 0.5f && a.curve[1].load() == -0.3f, "removing it puts things back");
+        // saved with the project, undoable, and old saves are untouched
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("bass", 48000));
+        auto& b = *rack.boards[0];
+        auto* filt = firstOf (b, "filter");
+        const int lane = rack.addAuto (b, filt->uid, filt->paramIndex ("cutoff"));
+        CHECK (lane >= 0, "a knob can be given a line");
+        b.autos[(size_t) lane]->add (4.0f, 0.9f);
+        const auto straight = rack.save();
+        CHECK (straight.find ("\nac ") == std::string::npos, "a project with no bends saves exactly as it did before");
+        History history (rack);
+        history.before (b);
+        b.autos[(size_t) lane]->bend (0, 0.6f);
+        const auto text = rack.save();
+        CHECK (text.find ("\nac ") != std::string::npos, "bends are written to the save");
+        Rack loaded; loaded.prepare (48000);
+        CHECK (loaded.load (text) && loaded.boards[0]->autos.size() == 1 && std::abs (loaded.boards[0]->autos[0]->curve[0].load() - 0.6f) < 1.0e-5f && loaded.save() == text, "and come back with the project");
+        CHECK (history.undo() && rack.boards[0]->autos[0]->curve[0].load() == 0.0f && rack.save() == straight, "Undo takes a bend away");
+        CHECK (history.redo() && std::abs (rack.boards[0]->autos[0]->curve[0].load() - 0.6f) < 1.0e-5f, "and Redo puts it back");
+        // heard: the filter is further open half way through a stretch that is bent up
+        auto cutoffAt = [&] (float bendAmount)
+        {
+            Rack r2; r2.prepare (48000); r2.load (straight);
+            r2.boards[0]->autos[0]->bend (0, bendAmount);
+            render (r2, 2.0);                               // play to the middle of the four-bar stretch
+            auto* f2 = firstOf (*r2.boards[0], "filter");
+            return f2->P (f2->paramIndex ("cutoff"));
+        };
+        CHECK (cutoffAt (0.8f) > cutoffAt (0.0f) && cutoffAt (0.0f) > cutoffAt (-0.8f), "the knob itself follows the curve while the song plays");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

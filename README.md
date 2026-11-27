@@ -46,7 +46,8 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
    Everything works there as on a tab: knobs, cables, dragging. **-** and **+** zoom in and out (20% to 150%);
    click the zoom figure to fit everything in again. Click a sound to select it for Add units, Change sound and
    Tidy. Double-click a sound's name, or click its tab, to see it alone.
-4. Each **tab** is one sound. Click a tab to see only that sound's modules. **Change sound** (right of the tab row)
+4. Each **tab** is one sound. Click a tab to see only that sound's modules. **Full screen** (right of the tab row)
+   makes the plugin's window fill your monitor, and **Focus** hides the style bar and mixing desk so the board gets the room. **Change sound** (right of the tab row)
    swaps it for another preset, a sample, a plugin or one of your saved sounds, and the pattern keeps playing.
 5. **+** adds a sound: kick, snare, clap, hi-hat, percussion, bass, lead, arp, stab, pad, strings, sample, or an empty board.
    It arrives cabled and playing.

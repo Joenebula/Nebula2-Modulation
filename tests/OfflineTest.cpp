@@ -1206,6 +1206,38 @@ int main (int argc, char** argv)
         CHECK (peak > 0.05f, "the track plays");
     }
 
+    {
+        // More room for the board: Focus, and Full screen
+        Nebula2ModulationProcessor r;
+        r.setRateAndBufferSizeDetails (48000, 256); r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        const int w0 = ed->getWidth(), h0 = ed->getHeight();
+        const auto board0 = ed->boardArea();
+        CHECK (! r.focusView.load() && ! r.bigWindow.load(), "a new project starts at the normal size with everything showing");
+        ed->setFocus (true);
+        CHECK (! ed->desk().isVisible() && ed->boardArea().getHeight() > board0.getHeight() + 150 && ed->boardArea().getBottom() == ed->getHeight(), "Focus hides the style bar and the mixing desk and gives the board their room");
+        CHECK (ed->getWidth() == w0 && ed->getHeight() == h0, "without changing the window's size");
+        ed->setFocus (false);
+        CHECK (ed->desk().isVisible() && ed->boardArea() == board0, "Focus off puts everything back exactly");
+        ed->setBigWindow (true);
+        CHECK (ed->getWidth() > w0 + 300 && ed->getHeight() > h0 + 100, "Full screen makes the plugin's window much bigger");
+        CHECK (ed->boardArea().getWidth() == ed->getWidth() && ed->boardArea().getHeight() > board0.getHeight() + 100, "and the board fills the extra room");
+        CHECK (ed->desk().getBottom() == ed->getHeight() && ed->desk().getWidth() == ed->getWidth(), "the mixing desk stays along the bottom, full width");
+        ed->setFocus (true);
+        const auto biggest = ed->boardArea();
+        CHECK (biggest.getHeight() > ed->getHeight() - 120, "both together: nearly the whole window is board");
+        // saved with the project
+        juce::MemoryBlock saved; r.getStateInformation (saved);
+        Nebula2ModulationProcessor q; q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        q.setStateInformation (saved.getData(), (int) saved.getSize());
+        CHECK (q.focusView.load() && q.bigWindow.load(), "Focus and Full screen come back with the project");
+        std::unique_ptr<juce::AudioProcessorEditor> holder2 (q.createEditor());
+        CHECK (holder2->getWidth() == ed->getWidth() && holder2->getHeight() == ed->getHeight(), "and the window reopens at that size");
+        ed->setFocus (false); ed->setBigWindow (false);
+        CHECK (ed->getWidth() == w0 && ed->getHeight() == h0 && ed->boardArea() == board0, "Normal size puts the window back as it was");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -531,6 +531,7 @@ struct Rack
     TryLock lock;
     Harmony harmony;
     Song song;
+    std::string style = "techno";  // the style Make track last used; Variation and the part buttons stay in it
     Timeline timeline;            // swapped in whole, under the lock
     Buses buses;                  // audio thread only
     Keys keys;                    // audio thread only
@@ -825,6 +826,12 @@ struct Rack
         boards.push_back (std::move (b));
         return boards.back().get();
     }
+    // Every board at once, for Make track. The old ones are let go after the lock is released.
+    void replaceBoards (std::vector<std::unique_ptr<Board>> fresh)
+    {
+        for (auto& b : fresh) for (auto& m : b->modules) m->prepare (sr);
+        { Hold h (lock); boards.swap (fresh); }
+    }
     void removeBoard (int i)
     {
         if (i < 0 || i >= (int) boards.size()) return;
@@ -913,6 +920,7 @@ struct Rack
     {
         std::ostringstream o;
         o << "N2M 1\n" << "key " << root.load() << ' ' << scale.load() << '\n' << "master " << master.load() << '\n';
+        o << "style " << style << '\n';
         o << "song " << (song.on.load() ? 1 : 0) << ' ' << song.sections.load() << ' ' << song.bars.load() << '\n';
         o << "harmony " << harmony.mood << ' ' << harmony.seed << ' ' << harmony.lenBars << ' ' << harmony.chordBars << ' ' << harmony.strange << ' ' << harmony.variation << ' ' << harmony.lift << '\n';
         for (auto& c : harmony.seq)
@@ -923,7 +931,7 @@ struct Rack
     }
 
     // Reads boards from saved text. Unknown module types and lines are skipped, not fatal.
-    static std::vector<std::unique_ptr<Board>> readBoards (const std::string& text, double sampleRate, int* rootOut = nullptr, int* scaleOut = nullptr, float* masterOut = nullptr, Harmony* harmonyOut = nullptr, int* songOut = nullptr)
+    static std::vector<std::unique_ptr<Board>> readBoards (const std::string& text, double sampleRate, int* rootOut = nullptr, int* scaleOut = nullptr, float* masterOut = nullptr, Harmony* harmonyOut = nullptr, int* songOut = nullptr, std::string* styleOut = nullptr)
     {
         bool sawHarmony = false;
         std::vector<std::unique_ptr<Board>> made;
@@ -937,6 +945,7 @@ struct Rack
             if (tag == "key") { int r = 2, s = 0; ls >> r >> s; if (rootOut) *rootOut = ((r % 12) + 12) % 12; if (scaleOut) *scaleOut = std::min ((int) scales().size() - 1, std::max (0, s)); }
             else if (tag == "master") { float m = 0.8f; ls >> m; if (masterOut) *masterOut = m; }
             else if (tag == "song") { if (songOut) ls >> songOut[0] >> songOut[1] >> songOut[2]; }
+            else if (tag == "style") { if (styleOut) ls >> *styleOut; }
             else if (tag == "harmony")
             {
                 if (harmonyOut == nullptr) continue;
@@ -1054,7 +1063,9 @@ struct Rack
         int r = root.load(), s = scale.load(); float m = master.load();
         Harmony hm;
         int sg[3] = { 0, 8, 4 };                                  // a save from before the song page: off
-        auto made = readBoards (text, sr, &r, &s, &m, &hm, sg);
+        std::string st = style;
+        auto made = readBoards (text, sr, &r, &s, &m, &hm, sg, &st);
+        style = st;
         std::vector<std::unique_ptr<Board>> old;
         { Hold h (lock); old.swap (boards); boards.swap (made); }
         root.store (r); scale.store (s); master.store (m);

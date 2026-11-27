@@ -48,6 +48,9 @@ public:
     // Before changing the song page: on or off, its sections, which tabs play where
     void beforeSong() { push (songNow()); }
 
+    // Before something that changes the whole project at once (Make track, Variation, Random knobs)
+    void beforeAll() { Entry e; e.kind = Kind::Whole; e.text = rack.save(); push (std::move (e)); }
+
     // After a tab has been added at this position
     void tabAdded (int index) { Entry e; e.kind = Kind::TabAdded; e.a = index; push (std::move (e)); }
     // Just before the tab at this position is deleted
@@ -82,7 +85,7 @@ public:
     int showTab = -1;          // after an undo or redo: the tab it happened on, for the screen to show
 
 private:
-    enum class Kind { Boards, Chords, TabAdded, TabRemoved, TabMoved, Song };
+    enum class Kind { Boards, Chords, TabAdded, TabRemoved, TabMoved, Song, Whole };
     struct Entry
     {
         Kind kind = Kind::Boards;
@@ -161,6 +164,11 @@ private:
                 back = songNow();
                 rack.song.on.store (e.songOn); rack.song.sections.store (e.sections); rack.song.bars.store (e.bars);
                 for (size_t i = 0; i < e.plays.size() && i < rack.boards.size(); ++i) rack.boards[i]->plays.store (e.plays[i]);
+                break;
+            case Kind::Whole:
+                back.kind = Kind::Whole; back.text = rack.save();
+                rack.load (e.text);
+                showTab = 0;
                 break;
             case Kind::TabMoved:
                 back.kind = Kind::TabMoved; back.a = e.b; back.b = e.a;

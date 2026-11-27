@@ -1,6 +1,6 @@
 #include <map>
 // Checks the rack engine on its own (no Cubase, no JUCE). Prints "All passed" or what failed.
-#include "Presets.h"
+#include "Styles.h"
 #include "History.h"
 #include <cstdio>
 #include <cstring>
@@ -1614,6 +1614,97 @@ int main()
         keepPattern (*pad, *strings);
         CHECK (firstOf (*strings, "chords")->P (0) == firstOf (*pad, "chords")->P (0), "a chord sound keeps its chord rhythm");
         CHECK (old->type == "kick" && fresh->type == "kick", "the kind of sound follows the new sound");
+    }
+
+    // ---- Styles: Make track, Variation, Random knobs ----
+    {
+        for (auto& st : styles())
+        {
+            // every preset and idea a style names really exists
+            for (auto& part : st.parts)
+            {
+                for (auto* name : part.presets) CHECK (makePreset (part.kind, name) != nullptr, "a style names a preset that exists");
+                const std::string kind = part.kind;
+                const bool notes = kind == "bass" || kind == "lead";
+                for (int i : part.ideas) CHECK (i >= 0 && i < (int) (notes ? noteIdeas (kind).size() : drumIdeas (kind).size()), "a style names an idea that exists");
+            }
+            Rack rack; rack.prepare (48000);
+            makeTrack (rack, st.id, 12345);
+            CHECK (rack.boards.size() >= 4, "a style makes a whole track");
+            CHECK (rack.style == st.id, "the rack remembers its style");
+            for (auto& b : rack.boards) for (auto& m : b->modules) CHECK (m->live, "every unit of a made track is heard");
+            auto a = render (rack, 4);
+            CHECK (peakOf (a.l) > 0.05f, st.name);
+            CHECK (allFinite (a.l) && allFinite (a.r) && peakOf (a.l) <= 1.0f && peakOf (a.r) <= 1.0f, "a made track is clean");
+            // each sound on its own is heard too
+            for (auto& b : rack.boards)
+            {
+                for (auto& o : rack.boards) o->solo.store (o == b);
+                CHECK (peakOf (render (rack, 2).l) > 0.005f, "every sound of a made track plays");
+            }
+            for (auto& o : rack.boards) o->solo.store (false);
+            // the same seed is the same track; another seed is another
+            Rack same; same.prepare (48000); makeTrack (same, st.id, 12345);
+            Rack other; other.prepare (48000); makeTrack (other, st.id, 999);
+            CHECK (same.save() == rack.save(), "the same seed makes the same track");
+            CHECK (other.save() != rack.save(), "another seed makes another track");
+        }
+        Rack rack; rack.prepare (48000);
+        loadStarter (rack);
+        History history (rack);
+        const auto before = rack.save();
+        history.beforeAll();
+        makeTrack (rack, "acid", 77);
+        CHECK (rack.save() != before && rack.style == "acid", "Make track replaces the project");
+        const auto made = rack.save();
+        history.undo();
+        CHECK (rack.save() == before, "Undo brings the old project back whole");
+        history.redo();
+        CHECK (rack.save() == made, "Redo makes the track again");
+        // the style travels with the save
+        Rack loaded; loaded.prepare (48000);
+        CHECK (loaded.load (made) && loaded.style == "acid" && loaded.save() == made, "the style is saved with the project");
+        // a save from before styles existed still loads, and keeps the default
+        std::string older = made;
+        CHECK (older.find ("style acid\n") != std::string::npos, "the save names its style");
+        if (older.find ("style acid\n") != std::string::npos) older.erase (older.find ("style acid\n"), 11);
+        Rack old; old.prepare (48000);
+        CHECK (old.load (older) && old.style == "techno" && old.boards.size() == rack.boards.size(), "a save with no style line loads");
+
+        // Variation: the sounds stay, the patterns change
+        auto knobsOf = [] (Rack& r) { std::string t; for (auto& b : r.boards) for (auto& m : b->modules) if (m->info->seq == Seq::None) for (auto& p : m->params) t += std::to_string (p.load()) + ' '; return t; };
+        const auto knobs = knobsOf (rack);
+        const size_t tabs = rack.boards.size();
+        varyPatterns (rack, 4242);
+        CHECK (rack.boards.size() == tabs && knobsOf (rack) == knobs, "Variation keeps every sound");
+        CHECK (rack.save() != made, "Variation changes the patterns");
+        CHECK (peakOf (render (rack, 2).l) > 0.05f, "a varied track plays");
+        // Add: the old sounds stay and the style's are added
+        addTrack (rack, "house", 5);
+        CHECK (rack.boards.size() > tabs && rack.style == "house", "Add keeps what is there");
+
+        // Random knobs: tuning, levels and switches stay; shaping knobs move, a little, and stay in range
+        Rack k; k.prepare (48000); makeTrack (k, "trance", 3);
+        std::vector<float> was;
+        for (auto& b : k.boards) for (auto& m : b->modules) for (auto& p : m->params) was.push_back (p.load());
+        randomKnobs (k, 99, 0.12f);
+        size_t at = 0; int moved = 0;
+        for (auto& b : k.boards)
+            for (auto& m : b->modules)
+                for (size_t i = 0; i < m->params.size(); ++i, ++at)
+                {
+                    const auto& p = m->info->params[i];
+                    const float now = m->params[i].load();
+                    if (! knobCanRandomise (*m, p)) { CHECK (now == was[at], "Random knobs leaves tuning, levels and switches alone"); continue; }
+                    CHECK (now >= p.lo && now <= p.hi, "a randomised knob stays in range");
+                    CHECK (std::abs (paramToNorm (p, now) - paramToNorm (p, was[at])) <= 0.1201f, "a randomised knob moves only a little");
+                    if (now != was[at]) ++moved;
+                }
+        CHECK (moved > 10, "Random knobs moves the shaping knobs");
+        for (auto& b : k.boards) for (auto& m : b->modules) for (auto& p : m->info->params)
+            if (std::string (p.id) == "coarse" || std::string (p.id) == "fine" || std::string (p.id) == "level") CHECK (! knobCanRandomise (*m, p), "tuning and level knobs are never randomised");
+        auto a = render (k, 2);
+        CHECK (peakOf (a.l) > 0.05f && allFinite (a.l), "a track with randomised knobs plays");
     }
 
     if (failures == 0) std::printf ("All passed\n");

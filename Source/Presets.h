@@ -306,13 +306,10 @@ inline void randomDrumBar (const std::string& boardType, Rand& r, char* p)
     }
 }
 
-// A whole pattern: bar 1 sets the idea, the other bars repeat it with small changes,
+// Bar 1 sets the idea, the other bars repeat it with small changes,
 // and bars 4 and 8 end with a fill, so a longer pattern goes somewhere.
-inline void randomDrum (const std::string& boardType, uint32_t seed, Module& m)
+inline void evolveDrum (const std::string& boardType, Rand& r, const char* base, Module& m)
 {
-    Rand r (seed);
-    char base[17] = "................";
-    randomDrumBar (boardType, r, base);
     for (int bar = 0; bar < kMaxBars; ++bar)
     {
         char p[17];
@@ -337,6 +334,15 @@ inline void randomDrum (const std::string& boardType, uint32_t seed, Module& m)
         }
         setDrumBar (m, bar, p);
     }
+}
+
+// A whole pattern, made up in the style of the sound
+inline void randomDrum (const std::string& boardType, uint32_t seed, Module& m)
+{
+    Rand r (seed);
+    char base[17] = "................";
+    randomDrumBar (boardType, r, base);
+    evolveDrum (boardType, r, base, m);
 }
 
 inline void randomNotesBar (const std::string& boardType, Rand& r, char* g, int* d)
@@ -369,12 +375,8 @@ inline void randomNotesBar (const std::string& boardType, Rand& r, char* g, int*
 }
 
 // Bar 1 sets the tune; later bars keep its rhythm and change a few notes, so it develops instead of looping
-inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
+inline void evolveNotes (Rand& r, const char* g, const int* d, Module& m)
 {
-    Rand r (seed);
-    char g[17] = "................";
-    int d[16] {};
-    randomNotesBar (boardType, r, g, d);
     static const int moves[5] = { -2, -1, 1, 2, 4 };
     for (int bar = 0; bar < kMaxBars; ++bar)
     {
@@ -392,6 +394,15 @@ inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
         }
         setNotesBar (m, bar, gg, dd);
     }
+}
+
+inline void randomNotes (const std::string& boardType, uint32_t seed, Module& m)
+{
+    Rand r (seed);
+    char g[17] = "................";
+    int d[16] {};
+    randomNotesBar (boardType, r, g, d);
+    evolveNotes (r, g, d, m);
 }
 
 // Random values for the step modulator: each bar its own, some steps held

@@ -227,6 +227,7 @@ int main (int argc, char** argv)
         r.prepareToPlay (48000, 256);
         std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
         auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        ed->selectTab (r.selectedTab.load());           // these checks are about one sound on its own tab
         CHECK (ed != nullptr, "the screen opens");
         auto& view = ed->board();
         auto& kick = *r.rack.boards[0];
@@ -317,10 +318,14 @@ int main (int argc, char** argv)
             view.endCable (c2->getPosition() + c2->jackCentre (true, 0));
             CHECK (kick.cables.size() == n0 + 1, "cables can be made while zoomed out");
             ed->stepHistory (false);
-            for (int k = 0; k < 6; ++k) ed->stepZoom (1);
-            CHECK (std::abs (r.zoom.load() - 1.25f) < 0.01f, "zoom stops at 125%");
-            ed->stepZoom (-1);
+            for (int k = 0; k < 8; ++k) ed->stepZoom (1);
+            CHECK (std::abs (r.zoom.load() - 1.5f) < 0.01f, "zoom stops at 150%");
+            ed->stepZoom (-1); ed->stepZoom (-1);
             CHECK (r.zoom.load() == 1.0f, "and steps back to 100%");
+            for (int k = 0; k < 8; ++k) ed->stepZoom (-1);
+            CHECK (std::abs (r.zoom.load() - 0.5f) < 0.01f, "one sound alone stops at 50%");
+            for (int k = 0; k < 3; ++k) ed->stepZoom (1);
+            CHECK (r.zoom.load() == 1.0f, "and comes back to 100%");
             // zoom is kept with the project
             ed->stepZoom (-1);
             juce::MemoryBlock z; r.getStateInformation (z);
@@ -421,6 +426,7 @@ int main (int argc, char** argv)
             // Its own window opens inside ours and closes again
             std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
             auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        ed->selectTab (r.selectedTab.load());           // these checks are about one sound on its own tab
             ed->hostOverlay.open (*slot, "Sound");
             CHECK (ed->hostOverlay.isVisible() && ed->hostOverlay.showing == slot && slot->instance()->getActiveEditor() != nullptr, "Open shows the plugin's own window");
             ed->hostOverlay.close();
@@ -583,6 +589,7 @@ int main (int argc, char** argv)
         r.prepareToPlay (48000, 256);
         std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
         auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        ed->selectTab (r.selectedTab.load());           // these checks are about one sound on its own tab
         const int tabsNow = (int) r.rack.boards.size();
         CHECK (tabsNow >= 3 && ! r.rack.song.on.load(), "a new project starts with the song page off");
         ed->songPanel.open();
@@ -858,6 +865,7 @@ int main (int argc, char** argv)
         r.prepareToPlay (48000, 256);
         std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
         auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        ed->selectTab (r.selectedTab.load());           // these checks are about one sound on its own tab
         auto unit = [&] (int tab, const char* type) { n2m::Module* f = nullptr; for (auto& m : r.rack.boards[(size_t) tab]->modules) if (f == nullptr && std::string (m->info->type) == type) f = m.get(); return f; };
         auto pattern = [&] (int tab) { std::string p; for (auto* m : n2m::patternUnits (*r.rack.boards[(size_t) tab])) for (int s = 0; s < 16; ++s) p += m->data[(size_t) s].load() > 0.5f ? 'x' : '.'; return p; };
         auto alone = [&] (int tab) { for (auto& b : r.rack.boards) b->mute.store (true); r.rack.boards[(size_t) tab]->mute.store (false); song.playing = true; song.ppq = 0; const float v = run (r, song, 2.0); song.playing = false; run (r, song, 1.0); return v; };
@@ -925,6 +933,7 @@ int main (int argc, char** argv)
         r.prepareToPlay (48000, 256);
         std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
         auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        ed->selectTab (r.selectedTab.load());           // these checks are about one sound on its own tab
         const int closed = ed->desk().getHeight(), boardH = ed->board().getParentComponent()->getParentComponent()->getHeight();
         CHECK (! r.mixerTall.load() && closed == n2m::MixerStrip::heightFor (false), "the desk starts closed");
         ed->desk().setTall (true);
@@ -983,6 +992,72 @@ int main (int argc, char** argv)
         for (auto& t : before) n2m::AddPanel::setFavourite (t, true);
     }
 
+    // The All view: every sound on one board
+    {
+        Nebula2ModulationProcessor r;
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto& all = ed->all();
+        const int n = (int) r.rack.boards.size();
+        CHECK (r.showAll.load() && all.isVisible(), "a new project opens on the All view");
+        for (int i = 0; i < n; ++i)
+        {
+            auto* v = all.viewOf (i);
+            CHECK (v != nullptr && v->board == r.rack.boards[(size_t) i].get(), "each sound has its own area");
+            if (v == nullptr) continue;
+            for (auto& m : r.rack.boards[(size_t) i]->modules) CHECK (v->compFor (m->uid) != nullptr, "every unit of every sound is on the board");
+            // no two areas overlap
+            for (int k = 0; k < i; ++k) CHECK (! all.areaOf (i).intersects (all.areaOf (k)), "the areas don't overlap");
+            CHECK (all.getLocalBounds().contains (all.areaOf (i)), "every area is on the board");
+        }
+        // fitted: at the fit zoom the whole thing is no bigger than the window it scrolls in
+        auto* vp = all.findParentComponentOfClass<juce::Viewport>();
+        CHECK (vp != nullptr && r.zoomAll.load() == 0.0f, "it starts fitted");
+        int right = 0, bottom = 0;
+        for (int i = 0; i < n; ++i) { right = juce::jmax (right, all.areaOf (i).getRight()); bottom = juce::jmax (bottom, all.areaOf (i).getBottom()); }
+        CHECK ((float) right * all.zoomNow() <= (float) vp->getWidth() && (float) bottom * all.zoomNow() <= (float) vp->getHeight(), "fitted, everything is in view");
+        // cabling works on the All view just as on a tab, and Undo takes it back
+        auto& bass = *r.rack.boards[3];
+        auto* bv = all.viewOf (3);
+        n2m::Module *drive = nullptr, *out = nullptr;
+        for (auto& m : bass.modules) { if (std::string (m->info->type) == "drive") drive = m.get(); if (std::string (m->info->type) == "output") out = m.get(); }
+        const size_t cables = bass.cables.size();
+        auto* c1 = bv->compFor (out->uid); auto* c2 = bv->compFor (drive->uid);
+        bv->beginCable (*c1, false, 1, c1->getPosition() + c1->jackCentre (false, 1));
+        bv->endCable (c2->getPosition() + c2->jackCentre (true, 0));
+        CHECK (bass.cables.size() == cables + 1, "a cable can be made on the All view");
+        ed->stepHistory (false);
+        CHECK (bass.cables.size() == cables && all.isVisible() && all.viewOf (3) != nullptr && all.viewOf (3)->board == &bass, "Undo takes it back and the All view stays up");
+        // zooming in steps up from the fit, and the zoom figure puts it back
+        const float fit = all.zoomNow();
+        ed->stepZoom (1);
+        CHECK (r.zoomAll.load() > fit && std::abs (all.zoomNow() - r.zoomAll.load()) < 1.0e-6f, "zooming in steps up from the fit");
+        ed->stepZoom (-1); ed->stepZoom (-1);
+        CHECK (all.zoomNow() < fit, "and out goes below it");
+        r.zoomAll.store (0.0f); all.layout();
+        CHECK (std::abs (all.zoomNow() - fit) < 1.0e-4f, "back to fitted");
+        // Add units goes to the selected sound, and that sound's area grows
+        r.selectedTab.store (2);
+        const size_t mods = r.rack.boards[2]->modules.size();
+        const int h = all.viewOf (2)->getHeight();
+        ed->addUnits ({ "filter" });
+        CHECK (r.rack.boards[2]->modules.size() == mods + 1 && all.viewOf (2)->compFor (r.rack.boards[2]->modules.back()->uid) != nullptr && all.viewOf (2)->getHeight() > h, "Add units lands on the selected sound");
+        // a tab shows one sound alone; All brings them all back
+        ed->selectTab (1);
+        CHECK (! r.showAll.load() && ed->board().isVisible() && ! all.isVisible() && ed->board().board == r.rack.boards[1].get() && all.viewOf (0) == nullptr, "a tab shows that sound alone");
+        ed->showAllSounds();
+        CHECK (r.showAll.load() && all.isVisible() && ed->board().board == nullptr && all.viewOf (n - 1) != nullptr, "All shows them together again");
+        // which view is up is saved with the project; a project from before the All view opens on its tab
+        juce::MemoryBlock z; r.getStateInformation (z);
+        Nebula2ModulationProcessor other; other.setStateInformation (z.getData(), (int) z.getSize());
+        CHECK (other.showAll.load(), "the view is saved with the project");
+        juce::MemoryBlock old; { juce::MemoryOutputStream o (old, false); o.writeString (juce::String (r.rack.save())); o.writeInt (1); o.writeFloat (0.8f); o.writeBool (false); }
+        Nebula2ModulationProcessor before; before.setStateInformation (old.getData(), (int) old.getSize());
+        CHECK (! before.showAll.load() && before.selectedTab.load() == 1 && before.zoomAll.load() == 0.0f, "an older project opens on its tab");
+    }
+
     // The style bar: Make track, Variation, Random knobs and the part chips, as the screen does them
     {
         Nebula2ModulationProcessor r;
@@ -1008,7 +1083,8 @@ int main (int argc, char** argv)
         bool acidBass = false;
         for (auto& b : r.rack.boards) acidBass = acidBass || b->name == "Acid bass";
         CHECK (acidBass, "the track is in the chosen style");
-        CHECK (ed->board().board == r.rack.boards[0].get(), "the first sound of the new track is showing");
+        CHECK (r.showAll.load() && ed->all().isVisible() && ! ed->board().isVisible(), "a new project opens with every sound on one board");
+        CHECK (ed->all().viewOf (0) != nullptr && ed->all().viewOf (0)->board == r.rack.boards[0].get() && ed->all().viewOf ((int) r.rack.boards.size() - 1) != nullptr && ed->all().viewOf ((int) r.rack.boards.size()) == nullptr, "the new track's sounds are all showing");
         const auto made = r.rack.save();
         const size_t tabs = r.rack.boards.size();
         click (ed->styles().variationArea());

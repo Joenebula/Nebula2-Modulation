@@ -213,6 +213,8 @@ public:
     Board* board = nullptr;
     std::function<void()> onChanged;
     std::function<void (HostedModule&)> onOpenPlugin;
+    bool embedded = false;       // one of several boards on the All view: it is just as big as what is on it
+    std::function<void()> onFit; // (embedded) its size changed
     std::function<void()> onAddMenu;                                  // right-click on the board: open Add units
     std::function<void (const std::vector<std::string>&)> onAddTypes;   // ...or add a favourite straight away
 private:
@@ -222,6 +224,42 @@ private:
     juce::OwnedArray<ModuleComp> comps;
     struct Drag { bool active = false, fromOut = true; int uid = 0, port = 0; juce::Point<int> at; } drag;
     juce::Point<int> panStart;
+};
+
+// Every sound on one board: each tab's board in its own framed area, all drawn at one zoom.
+// Each area is an ordinary BoardView, so cables, knobs, dragging and Undo work exactly as on a tab.
+class AllView : public juce::Component
+{
+public:
+    explicit AllView (Nebula2ModulationProcessor&);
+    void rebuild();              // one area per tab, from the rack as it is now
+    void clear();                // let go of every board (before the rack changes under it)
+    void layout();               // place the areas; called when one changes size
+    void tick();
+    void repaintAll();
+    float fitZoom() const;       // the zoom at which everything is in view
+    float zoomNow() const;       // the zoom in use: the chosen one, or the fit
+    juce::Rectangle<int> areaOf (int tab) const;      // in this component, before zoom
+    BoardView* viewOf (int tab) const { return tab >= 0 && tab < views.size() ? views[tab] : nullptr; }
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    std::function<void (BoardView&)> configure;       // gives each area the editor's callbacks
+    std::function<void (int)> onFocus;                // a sound was clicked: it becomes the selected tab
+    std::function<void (int)> onOpen;                 // a sound's name was double-clicked: show that tab alone
+    std::function<void (int)> onZoomStep;
+    static constexpr int headerH = 30, gap = 20, margin = 16;
+private:
+    int tabAt (juce::Component* c, juce::Point<int> inThis) const;
+    Nebula2ModulationProcessor& proc;
+    juce::OwnedArray<BoardView> views;
+    std::vector<juce::Rectangle<int>> areas;
+    juce::Point<int> panStart;
+    bool laying = false;
+    float fitScale = 1.0f;
 };
 
 // The tabs along the top: one per sound, plus the + button
@@ -234,8 +272,12 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void showSelected();         // scroll so the selected tab is in view
-    std::function<void (int)> onSelect;
+    std::function<void (int)> onSelect;   // a tab was clicked: show that sound alone
+    std::function<void (int)> onShow;     // a tab changed (added, its sound swapped): show it, in whichever view is up. -1 = let go of the boards
+    std::function<void()> onAll;          // All was clicked: every sound on one board
     std::function<void()> onChanged;   // tabs added, removed, renamed or moved
+    juce::Rectangle<int> allArea() const;
+    static constexpr int allW = 58;
 private:
     struct Slot { juce::Rectangle<int> r; int index; };
     std::vector<Slot> slots() const;
@@ -371,7 +413,11 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress&) override;
-    void selectTab (int index);
+    void selectTab (int index);                     // show one sound alone (-1: let go of the boards)
+    void showAllSounds();                           // every sound on one board
+    void reshow (int index);                        // after a change: show that tab again, in whichever view is up (-1: let go)
+    void mouseDown (const juce::MouseEvent&) override;
+    n2m::AllView& all() { return allView; }         // for the tests
     n2m::AddPanel addPanel;      // public so the snapshot test can open it
     n2m::SongPanel songPanel;
     n2m::HostOverlay hostOverlay;
@@ -398,6 +444,14 @@ private:
     n2m::TabBar tabs;
     juce::Viewport viewport;
     n2m::BoardView boardView;
+    n2m::AllView allView;
+    void show();                                    // draw the boards for the view that is up
+    void letGo();
+    void refreshBoards();                           // after units were added, removed or moved on the current sound
+    void scrollToTab (int index);
+    void configureBoard (n2m::BoardView&);
+    float zoomInUse() const;
+    juce::Rectangle<int> zoomLabel() const;
     n2m::MixerStrip mixer;
     int seenVersion = -1;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Nebula2ModulationEditor)

@@ -1213,8 +1213,16 @@ void BoardView::fitToContent()
 {
     int w = 0, h = 0;
     for (auto* c : comps) { w = juce::jmax (w, c->getRight()); h = juce::jmax (h, c->getBottom()); }
+    if (embedded)
+    {
+        // On the All view a board is just as big as what is on it; the All view places it and does the zooming
+        setTransform ({});
+        setSize (juce::jmax (360, w + 28), juce::jmax (110, h + 20));
+        if (onFit) onFit();
+        return;
+    }
     w += 500; h += 320;        // always some room to scroll into and put new units
-    const float zoom = juce::jlimit (0.5f, 1.25f, proc.zoom.load());
+    const float zoom = juce::jlimit (0.5f, 1.5f, proc.zoom.load());
     if (auto* vp = findParentComponentOfClass<juce::Viewport>())
     {
         // Leave room for the scroll bars, so one appearing doesn't summon the other
@@ -1520,6 +1528,152 @@ void StyleBar::mouseDown (const juce::MouseEvent& e)
 }
 
 //==============================================================================
+AllView::AllView (Nebula2ModulationProcessor& p) : proc (p) { addMouseListener (this, true); }
+
+void AllView::clear()
+{
+    for (auto* v : views) v->setBoard (nullptr);
+    views.clear();
+    areas.clear();
+}
+
+void AllView::rebuild()
+{
+    clear();
+    laying = true;
+    for (auto& b : proc.rack.boards)
+    {
+        auto* v = views.add (new BoardView (proc));
+        v->embedded = true;
+        if (configure) configure (*v);
+        v->onFit = [this] { layout(); };
+        addAndMakeVisible (v);
+        v->setBoard (b.get());
+    }
+    laying = false;
+    layout();
+}
+
+// The areas go in rows, like words on a page. The row width is whichever gives the biggest picture when the
+// whole thing is fitted into the window.
+void AllView::layout()
+{
+    if (laying) return;
+    laying = true;
+    auto* vp = findParentComponentOfClass<juce::Viewport>();
+    const float vw = vp != nullptr ? (float) juce::jmax (200, vp->getWidth() - vp->getScrollBarThickness()) : 1200.0f;
+    const float vh = vp != nullptr ? (float) juce::jmax (120, vp->getHeight() - vp->getScrollBarThickness()) : 500.0f;
+    auto place = [this] (int rowW, std::vector<juce::Rectangle<int>>* out)
+    {
+        int x = margin, y = margin, rowH = 0, right = 0;
+        for (auto* v : views)
+        {
+            const int w = v->getWidth(), h = v->getHeight() + headerH;
+            if (x > margin && x + w > rowW) { x = margin; y += rowH + gap; rowH = 0; }
+            if (out != nullptr) out->push_back ({ x, y, w, h });
+            x += w + gap; rowH = juce::jmax (rowH, h); right = juce::jmax (right, x - gap);
+        }
+        return juce::Point<int> (right + margin, y + rowH + margin);
+    };
+    int widest = 0, sum = margin * 2;
+    for (auto* v : views) { widest = juce::jmax (widest, v->getWidth()); sum += v->getWidth() + gap; }
+    int bestW = widest + margin * 2; float bestFit = 0.0f;
+    for (int w = widest + margin * 2; w <= sum + widest; w += 60)
+    {
+        const auto size = place (w, nullptr);
+        const float fit = juce::jmin (vw / (float) juce::jmax (1, size.x), vh / (float) juce::jmax (1, size.y));
+        if (fit > bestFit + 0.0005f) { bestFit = fit; bestW = w; }
+    }
+    areas.clear();
+    auto size = place (bestW, &areas);
+    for (int i = 0; i < views.size(); ++i) views[i]->setTopLeftPosition (areas[(size_t) i].getX(), areas[(size_t) i].getY() + headerH);
+    const float fit = juce::jlimit (0.1f, 1.0f, juce::jmin (vw / (float) juce::jmax (1, size.x), vh / (float) juce::jmax (1, size.y)));
+    fitScale = fit;
+    const float zoom = zoomNow();
+    // Never smaller than the window, so the background can always be grabbed and dragged
+    size.x = juce::jmax (size.x, (int) std::ceil (vw / zoom)); size.y = juce::jmax (size.y, (int) std::ceil (vh / zoom));
+    setSize (size.x, size.y);
+    setTransform (juce::AffineTransform::scale (zoom));
+    if (auto* holder = getParentComponent())
+        if (isVisible() && dynamic_cast<juce::Viewport*> (holder) == nullptr && holder->findParentComponentOfClass<juce::Viewport>() != nullptr)
+            holder->setSize (juce::roundToInt ((float) size.x * zoom), juce::roundToInt ((float) size.y * zoom));
+    laying = false;
+    repaint();
+}
+
+float AllView::fitZoom() const { return fitScale; }
+float AllView::zoomNow() const { const float z = proc.zoomAll.load(); return z > 0.01f ? juce::jlimit (0.1f, 1.5f, z) : fitScale; }
+juce::Rectangle<int> AllView::areaOf (int tab) const { return tab >= 0 && tab < (int) areas.size() ? areas[(size_t) tab] : juce::Rectangle<int>(); }
+
+void AllView::tick() { for (auto* v : views) v->tick(); }
+void AllView::repaintAll() { for (auto* v : views) v->repaintAll(); repaint(); }
+
+void AllView::paint (juce::Graphics& g)
+{
+    g.fillAll (sunkenLo);
+    const int sel = proc.selectedTab.load();
+    for (int i = 0; i < (int) areas.size() && i < (int) proc.rack.boards.size(); ++i)
+    {
+        auto& b = *proc.rack.boards[(size_t) i];
+        const auto col = boardColour (b.colour);
+        const auto r = areas[(size_t) i].toFloat();
+        // A frame round each sound, in its colour; the selected one is brighter
+        g.setColour (col.withAlpha (i == sel ? 0.16f : 0.07f));
+        g.fillRoundedRectangle (r.expanded (4.0f), radiusPanel);
+        g.setColour (col.withAlpha (i == sel ? 0.9f : 0.35f));
+        g.drawRoundedRectangle (r.expanded (4.0f), radiusPanel, i == sel ? 2.0f : 1.2f);
+        g.fillEllipse (r.getX() + 10.0f, r.getY() + 10.0f, 10.0f, 10.0f);
+        g.setFont (font (15.0f, Weight::SemiBold));
+        g.setColour (i == sel ? juce::Colours::white : n8);
+        g.drawText (b.name, areas[(size_t) i].withHeight (headerH).withTrimmedLeft (28), juce::Justification::centredLeft, true);
+    }
+}
+
+// Which sound a click belongs to: the area its component sits in, or the name strip above an area
+int AllView::tabAt (juce::Component* c, juce::Point<int> inThis) const
+{
+    for (int i = 0; i < views.size(); ++i) if (c == views[i] || views[i]->isParentOf (c)) return i;
+    if (c == this) for (int i = 0; i < (int) areas.size(); ++i) if (areas[(size_t) i].expanded (4).contains (inThis)) return i;
+    return -1;
+}
+
+void AllView::mouseDown (const juce::MouseEvent& e)
+{
+    const int tab = tabAt (e.eventComponent, e.getEventRelativeTo (this).getPosition());
+    if (tab >= 0 && tab != proc.selectedTab.load() && onFocus) onFocus (tab);
+    if (e.eventComponent != this) return;
+    if (auto* vp = findParentComponentOfClass<juce::Viewport>()) panStart = vp->getViewPosition();
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+}
+
+void AllView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (e.eventComponent != this) return;
+    if (auto* vp = findParentComponentOfClass<juce::Viewport>())
+    {
+        const auto moved = e.getScreenPosition() - e.getMouseDownScreenPosition();
+        vp->setViewPosition (panStart.x - moved.x, panStart.y - moved.y);
+    }
+}
+
+void AllView::mouseUp (const juce::MouseEvent& e) { if (e.eventComponent == this) setMouseCursor (juce::MouseCursor::NormalCursor); }
+
+void AllView::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (e.eventComponent != this) return;
+    const auto p = e.getPosition();
+    for (int i = 0; i < (int) areas.size(); ++i)
+        if (areas[(size_t) i].withHeight (headerH).contains (p)) { if (onOpen) onOpen (i); return; }
+}
+
+void AllView::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    if (e.eventComponent != this) return;
+    if (e.mods.isCommandDown() && onZoomStep) { if (std::abs (w.deltaY) > 0.0f) onZoomStep (w.deltaY > 0 ? 1 : -1); return; }
+    Component::mouseWheelMove (e, w);
+}
+
+//==============================================================================
 TabBar::TabBar (Nebula2ModulationProcessor& p) : proc (p) {}
 
 int TabBar::totalWidth() const
@@ -1528,23 +1682,24 @@ int TabBar::totalWidth() const
     for (auto& b : proc.rack.boards) w += juce::jmax (84, juce::GlyphArrangement::getStringWidthInt (controlFont(), b->name) + 44) + 4;
     return w;
 }
-bool TabBar::overflowing() const { return totalWidth() > getWidth() - 24 - 40; }
+bool TabBar::overflowing() const { return totalWidth() > getWidth() - 24 - 40 - allW; }
+juce::Rectangle<int> TabBar::allArea() const { return { 12, 5, allW - 6, 28 }; }
 juce::Rectangle<int> TabBar::plusArea() const
 {
     if (overflowing()) return { getWidth() - 12 - 32, 5, 32, 28 };
-    return { 12 + totalWidth() + 2, 5, 32, 28 };
+    return { 12 + allW + totalWidth() + 2, 5, 32, 28 };
 }
 juce::Rectangle<int> TabBar::leftArrow() const { return { getWidth() - 12 - 32 - 6 - 56, 5, 26, 28 }; }
 juce::Rectangle<int> TabBar::rightArrow() const { return { getWidth() - 12 - 32 - 6 - 28, 5, 26, 28 }; }
 juce::Rectangle<int> TabBar::tabsArea() const
 {
-    return { 12, 0, overflowing() ? leftArrow().getX() - 6 - 12 : getWidth() - 24, getHeight() };
+    return { 12 + allW, 0, (overflowing() ? leftArrow().getX() - 6 - 12 : getWidth() - 24) - allW, getHeight() };
 }
 
 std::vector<TabBar::Slot> TabBar::slots() const
 {
     std::vector<Slot> s;
-    int x = 12 - (overflowing() ? scroll : 0), i = 0;
+    int x = 12 + allW - (overflowing() ? scroll : 0), i = 0;
     for (auto& b : proc.rack.boards)
     {
         const int w = juce::jmax (84, juce::GlyphArrangement::getStringWidthInt (controlFont(), b->name) + 44);
@@ -1573,6 +1728,15 @@ void TabBar::showSelected()
 void TabBar::paint (juce::Graphics& g)
 {
     const int sel = proc.selectedTab.load();
+    const bool all = proc.showAll.load();
+    {
+        // All: every sound on one board
+        const auto r = allArea().toFloat();
+        if (all) { raised (g, r, radiusControl); g.setColour (accent); g.fillRoundedRectangle (r.getX() + 10.0f, r.getBottom() - 3.0f, r.getWidth() - 20.0f, 2.0f, 1.0f); }
+        g.setFont (controlFont());
+        g.setColour (all ? juce::Colours::white : n7);
+        g.drawText ("All", allArea(), juce::Justification::centred, false);
+    }
     {
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (tabsArea());
@@ -1583,7 +1747,7 @@ void TabBar::paint (juce::Graphics& g)
             const auto r = s.r.toFloat();
             if (s.index == sel)
             {
-                raised (g, r, radiusControl);
+                if (! all) raised (g, r, radiusControl);
                 g.setColour (col);
                 g.fillRoundedRectangle (r.getX() + 10.0f, r.getBottom() - 3.0f, r.getWidth() - 20.0f, 2.0f, 1.0f);
             }
@@ -1613,6 +1777,7 @@ void TabBar::paint (juce::Graphics& g)
 void TabBar::mouseDown (const juce::MouseEvent& e)
 {
     if (plusArea().contains (e.getPosition())) { addMenu(); return; }
+    if (allArea().contains (e.getPosition())) { if (onAll) onAll(); return; }
     if (overflowing())
     {
         if (leftArrow().contains (e.getPosition())) { scroll -= 180; scroll = juce::jmax (0, scroll); repaint(); return; }
@@ -1687,7 +1852,7 @@ void TabBar::addMenu()
         rack.addBoard (std::move (b));
         safe->proc.history.tabAdded ((int) rack.boards.size() - 1);
         if (safe->onChanged) safe->onChanged();
-        if (safe->onSelect) safe->onSelect ((int) rack.boards.size() - 1);
+        if (safe->onShow) safe->onShow ((int) rack.boards.size() - 1);
         safe->showSelected();
     });
 }
@@ -1696,7 +1861,7 @@ void TabBar::added (int index)
 {
     if (index < 0) return;
     if (onChanged) onChanged();
-    if (onSelect) onSelect (index);
+    if (onShow) onShow (index);
     showSelected();
 }
 
@@ -1743,7 +1908,7 @@ void TabBar::soundMenu (int index, juce::Component* target)
     {
         if (safe == nullptr || r <= 0) return;
         auto& p = safe->proc;
-        if (safe->onSelect) safe->onSelect (-1);                  // the board on screen is about to be rebuilt
+        if (safe->onShow) safe->onShow (-1);                  // the board on screen is about to be rebuilt
         p.problem.clear();
         bool done = true;
         if (r >= 8000) { if (r - 8000 < (int) installed.size()) done = p.changeToPlugin (index, installed[(size_t) (r - 8000)].first, installed[(size_t) (r - 8000)].second); }
@@ -1755,7 +1920,7 @@ void TabBar::soundMenu (int index, juce::Component* target)
             safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe, index] (const juce::FileChooser& fc)
             {
                 if (safe == nullptr || fc.getResult() == juce::File()) return;
-                if (safe->onSelect) safe->onSelect (-1);
+                if (safe->onShow) safe->onShow (-1);
                 if (! safe->proc.changeToSample (index, fc.getResult()))
                     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Sound not changed", safe->proc.problem);
                 safe->added (index);
@@ -1815,13 +1980,13 @@ void TabBar::tabMenu (int index)
         if (r == 5)
         {
             // The board on screen must stop pointing at this one before it goes
-            if (safe->onSelect) safe->onSelect (-1);
+            if (safe->onShow) safe->onShow (-1);
             safe->proc.history.tabRemoving (index);
             rack.removeBoard (index);
             select = juce::jmin (index, (int) rack.boards.size() - 1);
         }
         if (safe->onChanged) safe->onChanged();
-        if (safe->onSelect) safe->onSelect (select);
+        if (safe->onShow) safe->onShow (select);
         safe->showSelected();
     });
 }
@@ -2519,7 +2684,7 @@ void SongPanel::paint (juce::Graphics& g)
 }
 
 Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
-    : AudioProcessorEditor (p), songPanel (p), proc (p), styleBar (p), tabs (p), boardView (p), mixer (p)
+    : AudioProcessorEditor (p), songPanel (p), proc (p), styleBar (p), tabs (p), boardView (p), allView (p), mixer (p)
 {
     setLookAndFeel (&lookAndFeel);
     setWantsKeyboardFocus (true);
@@ -2529,14 +2694,14 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     redoButton.onClick = [this] { stepHistory (true); };
     play.onClick = [this] { if (! proc.hostPlaying.load()) proc.preview.store (! proc.preview.load()); };
     addUnitsButton.onClick = [this] { addPanel.open(); };
-    tidyButton.onClick = [this] { if (auto* b = current()) { proc.history.before (*b); tidy (*b); proc.history.discardIfUnchanged(); boardView.rebuild(); viewport.setViewPosition (0, 0); } };
+    tidyButton.onClick = [this] { if (auto* b = current()) { proc.history.before (*b); tidy (*b); proc.history.discardIfUnchanged(); refreshBoards(); if (! proc.showAll.load()) viewport.setViewPosition (0, 0); } };
 
     for (int i = 0; i < 12; ++i) keyBox.addItem (kNoteNames[i], i + 1);
     for (int i = 0; i < (int) scales().size(); ++i) scaleBox.addItem (scales()[(size_t) i].name, i + 1);
     addAndMakeVisible (keyBox); addAndMakeVisible (scaleBox);
     // The key is shared by every tab. Changing it moves the notes and the chords with it.
-    keyBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (keyBox.getSelectedId() - 1, proc.rack.scale.load()); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
-    scaleBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (proc.rack.root.load(), scaleBox.getSelectedId() - 1); proc.chordsVersion.fetch_add (1); boardView.repaint(); };
+    keyBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (keyBox.getSelectedId() - 1, proc.rack.scale.load()); proc.chordsVersion.fetch_add (1); boardView.repaint(); allView.repaintAll(); };
+    scaleBox.onChange = [this] { proc.history.beforeChords(); proc.rack.setKey (proc.rack.root.load(), scaleBox.getSelectedId() - 1); proc.chordsVersion.fetch_add (1); boardView.repaint(); allView.repaintAll(); };
 
     addAndMakeVisible (styleBar);
     // Each of these changes many boards at once: let go of what is on screen, do it, then draw it all again
@@ -2547,14 +2712,20 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
 
     addAndMakeVisible (tabs);
     tabs.onSelect = [this] (int i) { selectTab (i); };
-    tabs.onChanged = [this] { tabs.repaint(); mixer.repaint(); };
+    tabs.onShow = [this] (int i) { reshow (i); };
+    tabs.onAll = [this] { if (proc.showAll.load()) selectTab (proc.selectedTab.load()); else showAllSounds(); };
+    tabs.onChanged = [this] { tabs.repaint(); mixer.repaint(); styleBar.repaint(); };
 
     addAndMakeVisible (viewport);
     boardHolder.addAndMakeVisible (boardView);
+    boardHolder.addChildComponent (allView);
     viewport.setViewedComponent (&boardHolder, false);
-    boardView.onZoomStep = [this] (int d) { stepZoom (d); };
-    boardView.onAddMenu = [this] { addPanel.open(); };
-    boardView.onAddTypes = [this] (const std::vector<std::string>& types) { addUnits (types); };
+    configureBoard (boardView);
+    allView.configure = [this] (BoardView& v) { configureBoard (v); };
+    allView.onZoomStep = [this] (int d) { stepZoom (d); };
+    // Clicking a sound on the All view makes it the selected tab, for Add units, Change sound and Tidy
+    allView.onFocus = [this] (int i) { proc.selectedTab.store (i); tabs.showSelected(); tabs.repaint(); mixer.repaint(); allView.repaint(); };
+    allView.onOpen = [this] (int i) { selectTab (i); tabs.showSelected(); };
     for (auto* b : { &zoomOut, &zoomIn }) addAndMakeVisible (b);
     zoomOut.onClick = [this] { stepZoom (-1); };
     zoomIn.onClick = [this] { stepZoom (1); };
@@ -2567,14 +2738,13 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     songButton.onClick = [this] { songPanel.open(); };
 
     addAndMakeVisible (mixer);
-    mixer.onSelect = [this] (int i) { selectTab (i); tabs.showSelected(); };
+    mixer.onSelect = [this] (int i) { reshow (i); tabs.showSelected(); };
     mixer.onResize = [this] { resized(); repaint(); };
     // The desk's own tab, sitting on its top edge above the master: opens it up and closes it again
     addAndMakeVisible (deskButton);
     deskButton.onClick = [this] { mixer.setTall (! proc.mixerTall.load()); };
 
     addChildComponent (hostOverlay);
-    boardView.onOpenPlugin = [this] (HostedModule& m) { if (auto* b = current()) hostOverlay.open (m, b->name); };
 
     addChildComponent (songPanel);
     addChildComponent (addPanel);
@@ -2600,18 +2770,87 @@ Board* Nebula2ModulationEditor::current() const
     return i >= 0 && i < (int) proc.rack.boards.size() ? proc.rack.boards[(size_t) i].get() : nullptr;
 }
 
+void Nebula2ModulationEditor::configureBoard (BoardView& v)
+{
+    v.onZoomStep = [this] (int d) { stepZoom (d); };
+    v.onAddMenu = [this] { addPanel.open(); };
+    v.onAddTypes = [this] (const std::vector<std::string>& types) { addUnits (types); };
+    v.onOpenPlugin = [this, &v] (HostedModule& m) { if (v.board != nullptr) hostOverlay.open (m, v.board->name); };
+}
+
+void Nebula2ModulationEditor::letGo() { boardView.setBoard (nullptr); allView.clear(); }
+
+// Draws the boards for whichever view is up: every sound on one board, or the selected tab alone
+void Nebula2ModulationEditor::show()
+{
+    proc.selectedTab.store (juce::jlimit (0, juce::jmax (0, (int) proc.rack.boards.size() - 1), proc.selectedTab.load()));
+    const bool all = proc.showAll.load();
+    boardView.setVisible (! all);
+    allView.setVisible (all);
+    if (all) { boardView.setBoard (nullptr); allView.rebuild(); }
+    else { allView.clear(); boardView.setBoard (current()); }
+    tabs.repaint(); mixer.repaint(); styleBar.repaint();
+    repaint (0, 0, getWidth(), topbarH);
+}
+
 void Nebula2ModulationEditor::selectTab (int index)
 {
-    if (index < 0) { boardView.setBoard (nullptr); return; }
-    proc.selectedTab.store (juce::jlimit (0, juce::jmax (0, (int) proc.rack.boards.size() - 1), index));
-    boardView.setBoard (current());
+    if (index < 0) { letGo(); return; }
+    proc.showAll.store (false);
+    proc.selectedTab.store (index);
+    show();
     viewport.setViewPosition (0, 0);
-    tabs.repaint(); mixer.repaint();
+}
+
+void Nebula2ModulationEditor::showAllSounds()
+{
+    proc.showAll.store (true);
+    show();
+    viewport.setViewPosition (0, 0);
+}
+
+void Nebula2ModulationEditor::reshow (int index)
+{
+    if (index < 0) { letGo(); return; }
+    proc.selectedTab.store (index);
+    const auto pos = viewport.getViewPosition();
+    show();
+    if (proc.showAll.load()) { viewport.setViewPosition (pos); scrollToTab (proc.selectedTab.load()); }
+    else viewport.setViewPosition (0, 0);
+}
+
+// On the All view: bring a sound into view if it isn't
+void Nebula2ModulationEditor::scrollToTab (int index)
+{
+    if (! proc.showAll.load()) return;
+    const float z = allView.zoomNow();
+    const auto a = allView.areaOf (index).toFloat() * z;
+    const auto seen = viewport.getViewArea().toFloat();
+    if (a.isEmpty() || seen.contains (a)) return;
+    viewport.setViewPosition (juce::jmax (0, juce::roundToInt (a.getX() - 20.0f)), juce::jmax (0, juce::roundToInt (a.getY() - 20.0f)));
+}
+
+void Nebula2ModulationEditor::refreshBoards()
+{
+    if (! proc.showAll.load()) { boardView.rebuild(); return; }
+    if (auto* v = allView.viewOf (proc.selectedTab.load())) v->rebuild();
+}
+
+float Nebula2ModulationEditor::zoomInUse() const { return proc.showAll.load() ? allView.zoomNow() : proc.zoom.load(); }
+juce::Rectangle<int> Nebula2ModulationEditor::zoomLabel() const { return { zoomOut.getRight(), 0, zoomIn.getX() - zoomOut.getRight(), topbarH }; }
+
+// Clicking the zoom figure: on the All view, fit everything in; on a tab, back to full size
+void Nebula2ModulationEditor::mouseDown (const juce::MouseEvent& e)
+{
+    if (! zoomLabel().contains (e.getPosition())) return;
+    if (proc.showAll.load()) { proc.zoomAll.store (0.0f); allView.layout(); viewport.setViewPosition (0, 0); }
+    else { proc.zoom.store (1.0f); boardView.fitToContent(); }
+    stepZoom (0);
 }
 
 void Nebula2ModulationEditor::afterWholeChange (int showTab)
 {
-    selectTab (juce::jmax (0, showTab));
+    reshow (juce::jmax (0, showTab));
     keyBox.setSelectedId (proc.rack.root.load() + 1, juce::dontSendNotification);
     scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
     proc.chordsVersion.fetch_add (1);
@@ -2623,17 +2862,24 @@ void Nebula2ModulationEditor::afterWholeChange (int showTab)
 // Zoom steps: small enough to see a whole busy board, up to a little larger than life
 void Nebula2ModulationEditor::stepZoom (int direction)
 {
-    static const float levels[5] = { 0.5f, 0.67f, 0.8f, 1.0f, 1.25f };
-    int at = 3;
-    for (int i = 0; i < 5; ++i) if (std::abs (levels[i] - proc.zoom.load()) < 0.02f) at = i;
-    at = juce::jlimit (0, 4, at + direction);
+    static const float levels[10] = { 0.2f, 0.25f, 0.33f, 0.4f, 0.5f, 0.67f, 0.8f, 1.0f, 1.25f, 1.5f };
+    const bool all = proc.showAll.load();
+    const int lowest = all ? 0 : 4;                 // one sound alone never needs to be smaller than half size
+    const float before = zoomInUse();
+    if (direction != 0)
+    {
+        // the next level up or down from where it is now (the All view's "fit" can sit between two levels)
+        int at = direction > 0 ? 9 : lowest;
+        if (direction > 0) { for (int i = 9; i >= lowest; --i) if (levels[i] > before + 0.011f) at = i; }
+        else for (int i = lowest; i <= 9; ++i) if (levels[i] < before - 0.011f) at = i;
+        (all ? proc.zoomAll : proc.zoom).store (levels[at]);
+    }
     // Keep the same spot of the board at the top left while the size changes
-    const float before = proc.zoom.load();
     const auto pos = viewport.getViewPosition();
-    proc.zoom.store (levels[at]);
-    boardView.fitToContent();
-    viewport.setViewPosition (juce::roundToInt ((float) pos.x / before * levels[at]), juce::roundToInt ((float) pos.y / before * levels[at]));
-    zoomOut.setEnabled (at > 0); zoomIn.setEnabled (at < 4);
+    if (all) allView.layout(); else boardView.fitToContent();
+    const float now = zoomInUse();
+    viewport.setViewPosition (juce::roundToInt ((float) pos.x / before * now), juce::roundToInt ((float) pos.y / before * now));
+    zoomOut.setEnabled (now > levels[lowest] + 0.011f); zoomIn.setEnabled (now < levels[9] - 0.011f);
     repaint (0, 0, getWidth(), topbarH);
 }
 
@@ -2665,12 +2911,11 @@ void Nebula2ModulationEditor::stepHistory (bool redo)
 {
     if (redo ? ! proc.history.canRedo() : ! proc.history.canUndo()) return;
     hostOverlay.close();
-    boardView.setBoard (nullptr);            // the board on screen may be about to change or go
+    letGo();                                 // the boards on screen may be about to change or go
     proc.history.showTab = -1;
     if (redo) proc.history.redo(); else proc.history.undo();
     if (proc.history.showTab >= 0) proc.selectedTab.store (proc.history.showTab);
-    proc.selectedTab.store (juce::jlimit (0, juce::jmax (0, (int) proc.rack.boards.size() - 1), proc.selectedTab.load()));
-    boardView.setBoard (current());
+    reshow (juce::jlimit (0, juce::jmax (0, (int) proc.rack.boards.size() - 1), proc.selectedTab.load()));
     keyBox.setSelectedId (proc.rack.root.load() + 1, juce::dontSendNotification);
     scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
     proc.chordsVersion.fetch_add (1);
@@ -2692,8 +2937,9 @@ void Nebula2ModulationEditor::addUnits (const std::vector<std::string>& types)
     for (auto& t : types)
         if (auto* m = proc.rack.addModule (*b, t, (float) x, (float) y))
             x += lay::width (*m->info) + 20;
-    boardView.rebuild();
-    viewport.setViewPosition (0, juce::jmax (0, juce::roundToInt ((float) (y - 60) * proc.zoom.load())));
+    refreshBoards();
+    if (! proc.showAll.load()) viewport.setViewPosition (0, juce::jmax (0, juce::roundToInt ((float) (y - 60) * proc.zoom.load())));
+    else scrollToTab (proc.selectedTab.load());
 }
 
 void Nebula2ModulationEditor::timerCallback()
@@ -2705,7 +2951,9 @@ void Nebula2ModulationEditor::timerCallback()
         seenVersion = v;
         keyBox.setSelectedId (proc.rack.root.load() + 1, juce::dontSendNotification);
         scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
-        selectTab (proc.selectedTab.load());
+        letGo();
+        show();
+        viewport.setViewPosition (0, 0);
         stepZoom (0);                    // a loaded project brings its zoom with it
         resized();                       // and whether its mixing desk was opened up
         tabs.showSelected();
@@ -2715,7 +2963,7 @@ void Nebula2ModulationEditor::timerCallback()
     if (scaleBox.getSelectedId() != proc.rack.scale.load() + 1)
     {
         scaleBox.setSelectedId (proc.rack.scale.load() + 1, juce::dontSendNotification);
-        boardView.repaint();
+        boardView.repaint(); allView.repaintAll();
     }
     undoButton.setEnabled (proc.history.canUndo());
     redoButton.setEnabled (proc.history.canRedo());
@@ -2723,6 +2971,7 @@ void Nebula2ModulationEditor::timerCallback()
     const juce::String text = host ? "With Cubase" : on ? "Stop" : "Play";
     if (play.getButtonText() != text || play.getToggleState() != on) { play.setButtonText (text); play.setToggleState (on, juce::dontSendNotification); }
     boardView.tick();
+    allView.tick();
     mixer.tick();
     songPanel.tick();
     if (songButton.getToggleState() != proc.rack.song.on.load()) songButton.setToggleState (proc.rack.song.on.load(), juce::dontSendNotification);
@@ -2757,7 +3006,7 @@ void Nebula2ModulationEditor::paint (juce::Graphics& g)
     caption (g, "Key", { 452, 0, 30, topbarH });
     g.setFont (controlFont());
     g.setColour (n7);
-    g.drawText (juce::String (juce::roundToInt (proc.zoom.load() * 100.0f)) + "%", zoomOut.getRight(), 0, zoomIn.getX() - zoomOut.getRight(), topbarH, juce::Justification::centred, false);
+    g.drawText (proc.showAll.load() && proc.zoomAll.load() < 0.01f ? juce::String ("Fit") : juce::String (juce::roundToInt (zoomInUse() * 100.0f)) + "%", zoomLabel(), juce::Justification::centred, false);
     dividerH (g, 0, getWidth(), topbarH - 2);
 }
 
@@ -2788,5 +3037,5 @@ void Nebula2ModulationEditor::resized()
     addPanel.setBounds (getLocalBounds());
     songPanel.setBounds (getLocalBounds());
     hostOverlay.setBounds (getLocalBounds());
-    boardView.fitToContent();
+    if (proc.showAll.load()) allView.layout(); else boardView.fitToContent();
 }

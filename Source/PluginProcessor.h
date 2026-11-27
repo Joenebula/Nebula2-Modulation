@@ -43,6 +43,8 @@ public:
     std::atomic<double> bpm { 124.0 };
     std::atomic<int> selectedTab { 0 };
     std::atomic<float> zoom { 1.0f };           // how big the board is drawn
+    std::atomic<bool> showAll { true };         // every sound on one board, instead of one tab at a time
+    std::atomic<float> zoomAll { 0.0f };        // how big that one board is drawn. 0 = whatever fits it all in view
     std::atomic<bool> mixerTall { false };      // the mixing desk opened up to show its extra controls
     std::atomic<int> stateVersion { 0 };        // goes up when a project load replaces the rack
     std::atomic<int> chordsVersion { 0 };       // goes up when the chords or the key change

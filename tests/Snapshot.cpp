@@ -24,7 +24,9 @@ int main (int argc, char** argv)
 
     std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
     auto* e = dynamic_cast<Nebula2ModulationEditor*> (ed.get());
-    shoot (*ed, dir + "/ui.png");                       // first open: the kick board
+    shoot (*ed, dir + "/ui_all.png");                   // first open: every sound on one board
+    e->selectTab (0);
+    shoot (*ed, dir + "/ui.png");                       // the kick on its own tab
 
     p.preview.store (true); run (p, 0.7);
     shoot (*ed, dir + "/ui_playing.png");               // playing: step lights and meters
@@ -175,5 +177,10 @@ int main (int argc, char** argv)
     p.preview.store (true); run (p, 0.7);
     shoot (*ed, dir + "/ui_style_acid.png");
     p.preview.store (false);
+    e->showAllSounds();
+    e->styles().onMake ("trance");
+    shoot (*ed, dir + "/ui_all_trance.png");            // a bigger track, fitted in
+    e->stepZoom (1); e->stepZoom (1); e->stepZoom (1);
+    shoot (*ed, dir + "/ui_all_zoomed.png");
     return 0;
 }

@@ -277,7 +277,7 @@ struct Module
 struct Cable { int src, srcPort, dst, dstPort; };
 
 // A knob's movement drawn on the timeline: points of (where in the song, in bars from the start; knob position
-// 0..1) joined by straight lines. Before the first point and after the last the knob holds that point's position.
+// 0..1) joined by lines. Each stretch between two points is straight unless it has been bent (see curve). Before the first point and after the last the knob holds that point's position.
 // The points are plain numbers the audio thread can read at any moment, so dragging one never makes audio wait.
 constexpr int kAutoPoints = 64;
 struct AutoLane
@@ -285,6 +285,23 @@ struct AutoLane
     int uid = 0, param = 0;                       // which unit on the board, and which of its knobs
     std::atomic<int> count { 0 };
     std::array<std::atomic<float>, kAutoPoints> bar {}, val {};
+    // How the stretch that starts at each point is bent, -1..1: 0 is straight, above 0 moves most of the way early
+    // then eases in, below 0 holds back then moves late. Old projects have none, so they play exactly as before.
+    std::array<std::atomic<float>, kAutoPoints> curve {};
+    static float shape (float t, float c)
+    {
+        if (c == 0.0f) return t;
+        const float k = 1.0f + 4.0f * std::min (1.0f, std::abs (c));
+        return c > 0.0f ? 1.0f - std::pow (1.0f - t, k) : std::pow (t, k);
+    }
+    // The bend that puts the middle of a stretch this far (0..1) from its first point's level to its second's
+    static float curveFor (float half)
+    {
+        const float f = std::min (0.96f, std::max (0.04f, half));
+        const float c = f >= 0.5f ? (std::log2 (1.0f / (1.0f - f)) - 1.0f) / 4.0f : -(std::log2 (1.0f / f) - 1.0f) / 4.0f;
+        return std::abs (c) < 0.02f ? 0.0f : std::min (1.0f, std::max (-1.0f, c));
+    }
+    void bend (int i, float c) { if (i >= 0 && i < count.load()) curve[(size_t) i].store (std::min (1.0f, std::max (-1.0f, c))); }
     float at (double barPos) const
     {
         const int n = std::min (kAutoPoints, count.load (std::memory_order_relaxed));
@@ -294,7 +311,7 @@ struct AutoLane
         for (int i = 1; i < n; ++i)
         {
             const float b1 = bar[(size_t) i].load (std::memory_order_relaxed), v1 = val[(size_t) i].load (std::memory_order_relaxed);
-            if (barPos < b1) return b1 > b0 ? v0 + (v1 - v0) * (float) ((barPos - b0) / (b1 - b0)) : v1;
+            if (barPos < b1) return b1 > b0 ? v0 + (v1 - v0) * shape ((float) ((barPos - b0) / (b1 - b0)), curve[(size_t) (i - 1)].load (std::memory_order_relaxed)) : v1;
             b0 = b1; v0 = v1;
         }
         return v0;
@@ -305,8 +322,9 @@ struct AutoLane
         const int n = count.load();
         if (n >= kAutoPoints) return -1;
         int i = n;
-        while (i > 0 && bar[(size_t) (i - 1)].load() > atBar) { bar[(size_t) i].store (bar[(size_t) (i - 1)].load()); val[(size_t) i].store (val[(size_t) (i - 1)].load()); --i; }
+        while (i > 0 && bar[(size_t) (i - 1)].load() > atBar) { bar[(size_t) i].store (bar[(size_t) (i - 1)].load()); val[(size_t) i].store (val[(size_t) (i - 1)].load()); curve[(size_t) i].store (curve[(size_t) (i - 1)].load()); --i; }
         bar[(size_t) i].store (atBar); val[(size_t) i].store (std::min (1.0f, std::max (0.0f, v)));
+        curve[(size_t) i].store (0.0f);          // a new point starts a straight stretch
         count.store (n + 1);
         return i;
     }
@@ -314,7 +332,7 @@ struct AutoLane
     {
         const int n = count.load();
         if (i < 0 || i >= n) return;
-        for (int k = i; k + 1 < n; ++k) { bar[(size_t) k].store (bar[(size_t) (k + 1)].load()); val[(size_t) k].store (val[(size_t) (k + 1)].load()); }
+        for (int k = i; k + 1 < n; ++k) { bar[(size_t) k].store (bar[(size_t) (k + 1)].load()); val[(size_t) k].store (val[(size_t) (k + 1)].load()); curve[(size_t) k].store (curve[(size_t) (k + 1)].load()); }
         count.store (n - 1);
     }
     // Moves a point. It can't pass its neighbours, so the line never doubles back.
@@ -1032,6 +1050,15 @@ struct Rack
                     o << "au " << a->uid << ' ' << m->info->params[(size_t) a->param].id;
                     for (int k = 0; k < std::min (kAutoPoints, a->count.load()); ++k) o << ' ' << a->bar[(size_t) k].load() << ' ' << a->val[(size_t) k].load();
                     o << '\n';
+                    // bends go on a line of their own, and only when there are some: older versions skip it
+                    bool bent = false;
+                    for (int k = 0; k < std::min (kAutoPoints, a->count.load()); ++k) bent = bent || a->curve[(size_t) k].load() != 0.0f;
+                    if (bent)
+                    {
+                        o << "ac " << a->uid << ' ' << m->info->params[(size_t) a->param].id;
+                        for (int k = 0; k < std::min (kAutoPoints, a->count.load()); ++k) o << ' ' << a->curve[(size_t) k].load();
+                        o << '\n';
+                    }
                 }
         for (auto& c : b.cables)
         {
@@ -1179,6 +1206,16 @@ struct Rack
                         while (ls >> at >> v) a->add (std::max (0.0f, at), v);
                         if (a->count.load() > 0) b->autos.push_back (std::move (a));
                     }
+                }
+            }
+            else if (tag == "ac")
+            {
+                int uid = 0; std::string id; ls >> uid >> id;
+                if (auto* m = b->find (uid))
+                {
+                    const int lane = b->autoIndex (uid, m->paramIndex (id));
+                    float c = 0; int k = 0;
+                    if (lane >= 0) while (ls >> c && k < kAutoPoints) b->autos[(size_t) lane]->bend (k++, c);
                 }
             }
             else if (tag == "cable")

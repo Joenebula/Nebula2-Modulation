@@ -422,7 +422,10 @@ private:
     bool paintTo = false; int shownSection = -2;
     float shownBar = -2.0f;
     int scroll = 0;
-    struct Drag { int kind = 0, tab = 0, lane = 0, point = 0; } drag;      // kind: 0 nothing, 1 painting squares, 2 a point
+    struct Drag { int kind = 0, tab = 0, lane = 0, point = 0; } drag;      // kind: 0 nothing, 1 painting squares, 2 a point, 3 bending a stretch
+    juce::Point<int> bendHandle (int tab, int lane, int stretch) const;    // the small handle in the middle of a stretch: drag it to bend the line
+    int bendNear (int tab, int lane, juce::Point<int>) const;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
     static constexpr int rowH = 26, laneH = 58, labelW = 210;
 };
 } // namespace n2m

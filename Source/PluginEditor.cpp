@@ -2754,6 +2754,38 @@ int SongPanel::pointNear (int tab, int lane, juce::Point<int> p) const
     }
     return best;
 }
+// Half way along a stretch, on the line itself: the handle that bends it. None where the stretch is too short
+// to grab or is flat (a flat line has nothing to bend).
+juce::Point<int> SongPanel::bendHandle (int tab, int lane, int k) const
+{
+    auto& a = *proc.rack.boards[(size_t) tab]->autos[(size_t) lane];
+    if (k < 0 || k + 1 >= a.count.load()) return { -1000, -1000 };
+    const float b0 = a.bar[(size_t) k].load(), b1 = a.bar[(size_t) (k + 1)].load(), v0 = a.val[(size_t) k].load(), v1 = a.val[(size_t) (k + 1)].load();
+    if ((b1 - b0) * barW() < 28.0f || std::abs (v1 - v0) < 0.02f) return { -1000, -1000 };
+    return pointAt (tab, lane, 0.5f * (b0 + b1), v0 + (v1 - v0) * AutoLane::shape (0.5f, a.curve[(size_t) k].load()));
+}
+int SongPanel::bendNear (int tab, int lane, juce::Point<int> p) const
+{
+    if (tab < 0 || tab >= (int) proc.rack.boards.size() || lane < 0 || lane >= (int) proc.rack.boards[(size_t) tab]->autos.size()) return -1;
+    const int n = proc.rack.boards[(size_t) tab]->autos[(size_t) lane]->count.load();
+    for (int k = 0; k + 1 < n; ++k) if (bendHandle (tab, lane, k).getDistanceFrom (p) <= 8) return k;
+    return -1;
+}
+// Double-click a bend handle: that stretch goes straight again
+void SongPanel::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
+        for (int l = 0; l < (int) proc.rack.boards[(size_t) t]->autos.size(); ++l)
+        {
+            const int k = bendNear (t, l, e.getPosition());
+            if (k < 0) continue;
+            proc.history.before (*proc.rack.boards[(size_t) t]);
+            proc.rack.boards[(size_t) t]->autos[(size_t) l]->bend (k, 0.0f);
+            proc.history.discardIfUnchanged();
+            repaint();
+            return;
+        }
+}
 bool SongPanel::hit (juce::Point<int> p, int& tab, int& section) const
 {
     if (! rows().contains (p)) return false;
@@ -2847,6 +2879,8 @@ void SongPanel::mouseDown (const juce::MouseEvent& e)
                 repaint();
                 return;
             }
+            // the handle in the middle of a stretch bends it
+            if (point < 0) { const int k = bendNear (t, l, p); if (k >= 0) { drag = { 3, t, l, k }; repaint(); return; } }
             if (point < 0)
             {
                 // a click on the line's row puts a new point there, already in the hand
@@ -2873,6 +2907,20 @@ void SongPanel::mouseDrag (const juce::MouseEvent& e)
         int t = 0, s = 0;
         if (hit (e.getPosition(), t, s)) setCell (t, s, paintTo);
     }
+    if (drag.kind == 3 && drag.tab < (int) proc.rack.boards.size() && drag.lane < (int) proc.rack.boards[(size_t) drag.tab]->autos.size())
+    {
+        // Bending: the middle of the stretch follows the mouse up and down
+        auto& a = *proc.rack.boards[(size_t) drag.tab]->autos[(size_t) drag.lane];
+        if (drag.point + 1 < a.count.load())
+        {
+            const auto area = laneArea (drag.tab, drag.lane);
+            const float v0 = a.val[(size_t) drag.point].load(), v1 = a.val[(size_t) (drag.point + 1)].load();
+            const float value = (float) (area.getBottom() - 6 - e.y) / (float) (laneH - 12);
+            if (std::abs (v1 - v0) > 0.0001f) a.bend (drag.point, AutoLane::curveFor ((value - v0) / (v1 - v0)));
+        }
+        repaint();
+        return;
+    }
     if (drag.kind != 2 || drag.tab >= (int) proc.rack.boards.size() || drag.lane >= (int) proc.rack.boards[(size_t) drag.tab]->autos.size()) return;
     // Dragging a point: sideways moves it through the song (to the nearest quarter bar; Shift for anywhere),
     // up and down moves the knob
@@ -2884,7 +2932,7 @@ void SongPanel::mouseDrag (const juce::MouseEvent& e)
 }
 void SongPanel::mouseUp (const juce::MouseEvent&)
 {
-    if (drag.kind == 2) proc.history.discardIfUnchanged();
+    if (drag.kind == 2 || drag.kind == 3) proc.history.discardIfUnchanged();
     drag = {};
 }
 void SongPanel::mouseMove (const juce::MouseEvent& e) { if (rows().contains (e.getPosition())) repaint (rows()); }
@@ -2912,8 +2960,8 @@ void SongPanel::paint (juce::Graphics& g)
     g.drawText ("Song", c.getX() + 20, c.getY() + 14, 300, 20, juce::Justification::centredLeft, false);
     g.setFont (helpFont());
     g.setColour (n7);
-    g.drawText (on ? "A filled block means that sound plays in that section: click or drag to change. + Knob gives a knob a line: click the line to add a point, drag points, right-click one to remove it."
-                   : "Sections are off: every sound plays all the time. + Knob gives a knob a line through the song: click the line to add a point, drag points, right-click one to remove it.",
+    g.drawText (on ? "A filled block means that sound plays in that section: click or drag to change. + Knob gives a knob a line: click the line to add a point, drag points, right-click one to remove it. Drag a diamond to bend the line."
+                   : "Sections are off: every sound plays all the time. + Knob gives a knob a line through the song: click the line to add a point, drag points, right-click one to remove it. Drag a diamond to bend the line.",
                 c.getX() + 20, c.getY() + 34, c.getWidth() - 40, 16, juce::Justification::centredLeft, true);
     caption (g, "Sections", { c.getX() + 180, c.getY() + 62, 68, 28 });
     g.setFont (controlFont());
@@ -3008,7 +3056,22 @@ void SongPanel::paint (juce::Graphics& g)
                 if (n <= 0) continue;
                 juce::Path line;
                 line.startNewSubPath ((float) area.getX(), (float) pointAt (t, l, 0.0f, a.val[0].load()).y);
-                for (int k = 0; k < n; ++k) line.lineTo (pointAt (t, l, a.bar[(size_t) k].load(), a.val[(size_t) k].load()).toFloat());
+                for (int k = 0; k < n; ++k)
+                {
+                    // a bent stretch is drawn as the curve the knob will really follow
+                    if (k > 0 && a.curve[(size_t) (k - 1)].load() != 0.0f)
+                    {
+                        const float b0 = a.bar[(size_t) (k - 1)].load(), b1 = a.bar[(size_t) k].load(), v0 = a.val[(size_t) (k - 1)].load(), v1 = a.val[(size_t) k].load(), cv = a.curve[(size_t) (k - 1)].load();
+                        const int steps = juce::jlimit (8, 96, juce::roundToInt ((b1 - b0) * barW() / 2.0f));
+                        // (worked out to a fraction of a pixel, so the curve is smooth rather than stepped)
+                        for (int s = 1; s < steps; ++s)
+                        {
+                            const float u = (float) s / (float) steps;
+                            line.lineTo ((float) area.getX() + (b0 + (b1 - b0) * u) * barW(), (float) area.getBottom() - 6.0f - juce::jlimit (0.0f, 1.0f, v0 + (v1 - v0) * AutoLane::shape (u, cv)) * (float) (laneH - 12));
+                        }
+                    }
+                    line.lineTo (pointAt (t, l, a.bar[(size_t) k].load(), a.val[(size_t) k].load()).toFloat());
+                }
                 line.lineTo ((float) area.getRight(), (float) pointAt (t, l, 0.0f, a.val[(size_t) (n - 1)].load()).y);
                 juce::Path fill (line);
                 fill.lineTo ((float) area.getRight(), (float) area.getBottom() - 3.0f); fill.lineTo ((float) area.getX(), (float) area.getBottom() - 3.0f); fill.closeSubPath();
@@ -3017,6 +3080,21 @@ void SongPanel::paint (juce::Graphics& g)
                 g.setColour (col);
                 g.strokePath (line, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
                 const int closest = area.expanded (4, 0).contains (mouse) ? pointNear (t, l, mouse) : -1;
+                // bend handles: a small diamond half way along each stretch
+                {
+                    const int over = closest < 0 && area.expanded (4, 0).contains (mouse) ? bendNear (t, l, mouse) : -1;
+                    for (int k = 0; k + 1 < n; ++k)
+                    {
+                        const auto h = bendHandle (t, l, k).toFloat();
+                        if (h.x < -500.0f) continue;
+                        const bool hot = k == over || (drag.kind == 3 && drag.tab == t && drag.lane == l && drag.point == k);
+                        const float r = hot ? 5.5f : 4.0f;
+                        juce::Path d; d.startNewSubPath (h.x, h.y - r); d.lineTo (h.x + r, h.y); d.lineTo (h.x, h.y + r); d.lineTo (h.x - r, h.y); d.closeSubPath();
+                        g.setColour (sunkenLo); g.fillPath (d);
+                        g.setColour (hot ? juce::Colours::white : col.withAlpha (a.curve[(size_t) k].load() != 0.0f ? 1.0f : 0.55f));
+                        g.strokePath (d, juce::PathStrokeType (1.4f));
+                    }
+                }
                 for (int k = 0; k < n; ++k)
                 {
                     const auto pt = pointAt (t, l, a.bar[(size_t) k].load(), a.val[(size_t) k].load()).toFloat();

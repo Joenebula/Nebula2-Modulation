@@ -193,7 +193,7 @@ int main (int argc, char** argv)
                 if (std::string (m->info->type) == "filter" && (b->type == "bass" || b->type == "lead"))
                 {
                     const int lane = e->songPanel.addLane (at, m->uid, m->paramIndex ("cutoff"));
-                    if (lane >= 0) { auto& a = *b->autos[(size_t) lane]; a.move (0, 0.0f, 0.25f); a.add (8.0f, 0.4f); a.add (16.0f, 0.9f); a.add (24.0f, 0.5f); }
+                    if (lane >= 0) { auto& a = *b->autos[(size_t) lane]; a.move (0, 0.0f, 0.25f); a.add (8.0f, 0.4f); a.add (16.0f, 0.9f); a.add (24.0f, 0.5f); a.bend (1, -0.6f); a.bend (2, 0.6f); }      // two stretches bent, one each way
                 }
             ++at;
         }

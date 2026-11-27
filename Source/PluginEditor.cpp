@@ -1706,8 +1706,8 @@ static constexpr int kChanW = 88, kMasterW = 112;
 static constexpr float kFaderTop = 1.25f;   // the top of a fader is 125%
 
 // Closed, the desk shows level, mute, solo and output. Opened with MORE it is taller, with a second row under
-// each channel: pan, Change sound, and how much of the computer the sound is using.
-static constexpr int kStripH = kMixerH - 16, kExtraH = 92;
+// each channel: pan, and how much of the computer the sound is using. Mixing only: nothing here changes a sound.
+static constexpr int kStripH = kMixerH - 16, kExtraH = 70;
 int MixerStrip::heightFor (bool tall) { return tall ? kMixerH + kExtraH + 4 : kMixerH; }
 void MixerStrip::setTall (bool tall) { proc.mixerTall.store (tall); if (onResize) onResize(); repaint(); }
 void MixerStrip::setPan (int channel, float pan)
@@ -1721,7 +1721,6 @@ juce::Rectangle<int> MixerStrip::channel (int i) const { return { 12 + i * (kCha
 juce::Rectangle<int> MixerStrip::extra (int i) const { return { 12 + i * (kChanW + 6) - scroll, 8 + kStripH + 4, kChanW, kExtraH }; }
 juce::Rectangle<int> MixerStrip::moreArea() const { const auto m = masterArea(); return { m.getX() + 62, m.getY() + 34, 46, 18 }; }
 juce::Rectangle<int> MixerStrip::panIn (juce::Rectangle<int> e) { return { e.getX() + 8, e.getY() + 18, e.getWidth() - 16, 14 }; }
-juce::Rectangle<int> MixerStrip::soundIn (juce::Rectangle<int> e) { return { e.getX() + 8, e.getY() + 52, e.getWidth() - 16, 20 }; }
 juce::Rectangle<int> MixerStrip::faderIn (juce::Rectangle<int> ch) { return { ch.getX() + 10, ch.getY() + 30, 26, ch.getHeight() - 40 }; }
 juce::Rectangle<int> MixerStrip::muteIn (juce::Rectangle<int> ch) { return { ch.getX() + 44, ch.getY() + 30, 34, 22 }; }
 juce::Rectangle<int> MixerStrip::soloIn (juce::Rectangle<int> ch) { return { ch.getX() + 44, ch.getY() + 56, 34, 22 }; }
@@ -1793,7 +1792,7 @@ void MixerStrip::paint (juce::Graphics& g)
             else { g.setColour (juce::Colours::white.withAlpha (0.025f)); g.fillRoundedRectangle (whole.toFloat(), radiusCard); }
             if (tall)
             {
-                // The second row: pan, Change sound, load
+                // The second row: pan and load
                 const auto ex = extra (i);
                 const float pan = b.pan.load();
                 caption (g, "Pan", { ex.getX(), ex.getY() + 2, ex.getWidth(), 12 }, juce::Justification::centred);
@@ -1808,16 +1807,10 @@ void MixerStrip::paint (juce::Graphics& g)
                 g.setColour (n7);
                 const int pc = (int) std::lround (std::abs (pan) * 100.0f);
                 g.drawText (pc == 0 ? juce::String ("Centre") : (pan < 0 ? "Left " : "Right ") + juce::String (pc), ex.getX(), ex.getY() + 34, ex.getWidth(), 12, juce::Justification::centred, false);
-                const auto sb = soundIn (ex);
-                g.setColour (n4);
-                g.fillRoundedRectangle (sb.toFloat(), 4.0f);
-                g.setFont (font (9.0f, Weight::SemiBold, 0.3f));
-                g.setColour (n8);
-                g.drawText ("CHANGE SOUND", sb, juce::Justification::centred, false);
                 const int load = (int) std::lround (b.load.load() * 100.0f);
                 g.setFont (font (8.5f, Weight::Medium, 0.3f));
                 g.setColour (load >= 40 ? bandOrange : n7);
-                g.drawText ("LOAD " + juce::String (juce::jmin (999, load)) + "%", ex.getX(), ex.getY() + 76, ex.getWidth(), 11, juce::Justification::centred, false);
+                g.drawText ("LOAD " + juce::String (juce::jmin (999, load)) + "%", ex.getX(), ex.getY() + 53, ex.getWidth(), 11, juce::Justification::centred, false);
             }
             g.setColour (col);
             g.fillRoundedRectangle ((float) ch.getX() + 10.0f, (float) ch.getY() + 4.0f, (float) ch.getWidth() - 20.0f, 2.0f, 1.0f);
@@ -1886,7 +1879,6 @@ void MixerStrip::mouseDown (const juce::MouseEvent& e)
         if (proc.mixerTall.load() && extra (i).contains (e.getPosition()))
         {
             const auto ex = extra (i);
-            if (soundIn (ex).contains (e.getPosition())) { if (onChangeSound) onChangeSound (i); return; }
             if (panIn (ex).expanded (4, 6).contains (e.getPosition())) { proc.history.before (*proc.rack.boards[(size_t) i]); dragChannel = i; dragPan = true; mouseDrag (e); return; }
             if (onSelect) onSelect (i);
             return;
@@ -2343,7 +2335,6 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addAndMakeVisible (mixer);
     mixer.onSelect = [this] (int i) { selectTab (i); tabs.showSelected(); };
     mixer.onResize = [this] { resized(); repaint(); };
-    mixer.onChangeSound = [this] (int i) { selectTab (i); tabs.showSelected(); tabs.soundMenu (i); };
 
     addChildComponent (hostOverlay);
     boardView.onOpenPlugin = [this] (HostedModule& m) { if (auto* b = current()) hostOverlay.open (m, b->name); };

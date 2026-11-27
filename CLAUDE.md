@@ -22,6 +22,7 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - Check it works before saying it's done (tests, snapshots). Then say plainly what you checked.
 - Everything stays in key.
 - Keep it tidy: one tab per sound, nothing from another sound on screen.
+- The mixing desk is for mixing only (level, pan, mute, solo, output). Nothing that changes a sound goes there.
 
 ## Files
 
@@ -101,10 +102,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.18'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.19'
 ```
 
-The latest release is **v0.1.17**. Bump by one each time.
+The latest release is **v0.1.18**. Bump by one each time.
 
 ## What can't be checked here
 

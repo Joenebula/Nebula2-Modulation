@@ -153,7 +153,7 @@ change it with a preset or another VST or sample. I need a menu I can select fro
 
 ## Screen polish (Joe: "we can work the UI later")
 
-- [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". MORE (by the master fader) adds a second row per channel: Pan, Change sound and the load figure. LESS closes it. Saved with the project
+- [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". MORE (by the master fader) adds a second row per channel: Pan and the load figure. LESS closes it. Saved with the project. Change sound was there in v0.1.17 and came out in v0.1.18 (Joe: "this is mixing elements"): the desk is for mixing only
 
 - [x] Drag the board background to move around; the board always has spare room to the right and below (v0.1.4)
 - [x] Zoom: 50% to 125%, with - and + at the top or Ctrl + wheel; saved with the project (v0.1.9)

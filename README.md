@@ -76,7 +76,7 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
 17. **Keep a sound:** right-click a tab and choose **Save this sound**. It then appears under **+**, in **Your saved
     sounds**, in every project.
 18. The **mixing desk** at the bottom has level, mute and solo for each tab. Click a channel to jump to its tab.
-    **MORE**, by the master fader, opens it up to show pan, Change sound and load for each channel; **LESS** closes it.
+    **MORE**, by the master fader, opens it up to show pan and load for each channel; **LESS** closes it.
 19. **Tidy** lines the modules up in signal order.
 
 **Undo** and **Redo** are at the top (also Ctrl+Z and Ctrl+Y). **-** and **+** zoom the board (also Ctrl + mouse wheel). Hover a row in Add units to see a picture of that unit. To use your own sound, add a **Sample player** and load or drop an audio file on it. Drag the empty board background to move around a big board. Knobs: drag up and down. Hold Shift for fine moves. Double-click to reset. Double-click a tab to rename it;

@@ -829,7 +829,12 @@ int main (int argc, char** argv)
                     CHECK (slot->currentPreset() == names.size() - 1, "picking one of a plugin's own presets selects it");
                     slot->choosePreset (0);
                     CHECK (slot->currentPreset() == 0, "and another");
+                    // the arrows: on to the next, back past the first to the last, and round again
+                    CHECK (slot->stepPreset (1) && slot->currentPreset() == 1, "the next arrow moves to the next preset");
+                    CHECK (slot->stepPreset (-1) && slot->stepPreset (-1) && slot->currentPreset() == names.size() - 1, "the previous arrow goes round to the last");
+                    CHECK (slot->stepPreset (1) && slot->currentPreset() == 0, "and next goes round to the first");
                 }
+                else CHECK (! slot->stepPreset (1), "with no list of presets the arrows do nothing");
                 slot->choosePreset (-1); slot->choosePreset (99999);
                 CHECK (slot->hasPlugin(), "a preset that isn't there is ignored");
             }
@@ -990,6 +995,17 @@ int main (int argc, char** argv)
         now = n2m::AddPanel::favourites();
         CHECK (! has ("hall") && ! has ("lfo"), "un-starring removes it");
         for (auto& t : before) n2m::AddPanel::setFavourite (t, true);
+    }
+
+    // Stepping through a plugin's own presets: round at both ends, and nothing to do without a list
+    CHECK (n2m::HostedModule::presetAfter (0, 8, 1) == 1 && n2m::HostedModule::presetAfter (7, 8, 1) == 0 && n2m::HostedModule::presetAfter (0, 8, -1) == 7, "preset arrows go round at the ends");
+    CHECK (n2m::HostedModule::presetAfter (-1, 8, 1) == 1 && n2m::HostedModule::presetAfter (0, 1, 1) == -1 && n2m::HostedModule::presetAfter (0, 0, -1) == -1, "and do nothing when there is no list");
+    {
+        Nebula2ModulationProcessor r;
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        auto* empty = dynamic_cast<n2m::HostedModule*> (r.rack.addModule (*r.rack.boards[0], "plugin", 0, 0));
+        CHECK (empty != nullptr && ! empty->stepPreset (1) && ! empty->stepPreset (-1) && ! empty->hasPlugin(), "an empty slot has no presets to step through");
     }
 
     // Every unit, the plugin slot and sample player included, fits on its panel

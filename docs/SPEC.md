@@ -125,7 +125,10 @@ theme, icon rail and floating toolbar.
 Limits, agreed:
 
 - VST3 only.
-- A plugin that keeps presets in its own browser (Nexus, HALion) is chosen in its own window.
+- A plugin that hands over a list of its presets gets a **Presets** menu on the slot, and **<** **>** arrows to
+  step through them. The slot shows the name of the one in use.
+- A plugin that keeps presets in its own browser (Nexus, HALion) hands over no list: its sound is chosen in its
+  own window, which floats beside ours while the track keeps playing.
 - A hosted plugin can be changed through the controls it offers and through anything done to its audio. Its
   insides can't be reached.
 - Many heavy plugins on one track is a lot of load. Each mixer channel shows its load. A freeze button is **not built**.

@@ -633,6 +633,9 @@ HostView::HostView (BoardView& o, HostedModule& m) : owner (o), module (m)
     knobs.onClick = [this] { showKnobMenu(); };
     addChildComponent (presets);
     presets.onClick = [this] { showPresetMenu(); };
+    addChildComponent (prev); addChildComponent (next);
+    prev.onClick = [this] { if (module.stepPreset (-1)) repaint(); };
+    next.onClick = [this] { if (module.stepPreset (1)) repaint(); };
     open.onClick = [this] { if (module.hasPlugin() && owner.onOpenPlugin) owner.onOpenPlugin (module); };
     setSize (lay::hostW, lay::hostSeqH);
     refresh();
@@ -642,9 +645,10 @@ void HostView::refresh()
 {
     open.setEnabled (module.hasPlugin()); knobs.setEnabled (module.hasPlugin() && module.numControls() > 0);
     presets.setVisible (module.hasPlugin() && module.presetNames().size() > 1);     // only for plugins that offer a list
+    prev.setVisible (presets.isVisible()); next.setVisible (presets.isVisible());
     repaint();
 }
-void HostView::resized() { load.setBounds (0, 30, 72, 24); open.setBounds (78, 30, 72, 24); knobs.setBounds (156, 30, 72, 24); presets.setBounds (234, 30, 78, 24); }
+void HostView::resized() { load.setBounds (0, 30, 72, 24); open.setBounds (78, 30, 72, 24); knobs.setBounds (156, 30, 72, 24); presets.setBounds (234, 30, 72, 24); prev.setBounds (310, 30, 23, 24); next.setBounds (335, 30, 23, 24); }
 
 // Presets: the plugin's own list of presets
 void HostView::showPresetMenu()
@@ -677,7 +681,15 @@ void HostView::paint (juce::Graphics& g)
     const bool failed = module.status.isNotEmpty();
     g.setFont (font (13.0f, Weight::SemiBold));
     g.setColour (module.hasPlugin() ? juce::Colours::white : n7);
-    g.drawText (module.hasPlugin() ? module.pluginName() : "Empty", 0, 2, 190, 18, juce::Justification::centredLeft, true);
+    // the plugin's name, and which of its own presets is in use when it offers a list
+    juce::String title = module.hasPlugin() ? module.pluginName() : juce::String ("Empty");
+    if (presets.isVisible())
+    {
+        const auto names = module.presetNames();
+        const int now = module.currentPreset();
+        if (now >= 0 && now < names.size()) title << "   " << names[now];
+    }
+    g.drawText (title, 0, 2, 190, 18, juce::Justification::centredLeft, true);
     g.setFont (helpFont());
     // What the slot's four knobs are pointed at
     juce::String pointed;
@@ -685,6 +697,7 @@ void HostView::paint (juce::Graphics& g)
         if (module.knobTarget (k) >= 0) pointed << (pointed.isEmpty() ? "" : "   ") << (k + 1) << ": " << module.controlName (module.knobTarget (k));
     g.setColour (n8);
     g.drawText (pointed, 196, 2, getWidth() - 196, 18, juce::Justification::centredRight, true);
+    if (presets.isVisible() && ! failed) return;          // the arrows sit where the hint would be
     g.setColour (failed ? bandOrange : n7);
     g.drawFittedText (failed ? module.status : module.hasPlugin() ? "Open shows its own window. Knobs points Knob 1 to 4 at its controls" : "Load a plugin, or drop a .vst3 file on the board",
                       presets.isVisible() ? 320 : 236, 30, getWidth() - (presets.isVisible() ? 320 : 236), 24, juce::Justification::centredLeft, 2, 0.8f);

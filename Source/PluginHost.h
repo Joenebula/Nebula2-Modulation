@@ -55,6 +55,9 @@ public:
     juce::StringArray presetNames() const;
     int currentPreset() const;
     void choosePreset (int index);
+    // Which preset comes after (step 1) or before (step -1) this one, going round at the ends. -1 if there is no list.
+    static int presetAfter (int current, int count, int step) { return count < 2 ? -1 : (((current < 0 ? 0 : current) + step) % count + count) % count; }
+    bool stepPreset (int step);      // the next or the previous of the plugin's own presets. False if it offers no list
 
 private:
     juce::Optional<PositionInfo> getPosition() const override;

@@ -185,6 +185,13 @@ juce::StringArray HostedModule::presetNames() const
     return names;
 }
 int HostedModule::currentPreset() const { return plugin != nullptr ? plugin->getCurrentProgram() : -1; }
+bool HostedModule::stepPreset (int step)
+{
+    const int next = presetAfter (currentPreset(), presetNames().size(), step);
+    if (next < 0) return false;
+    choosePreset (next);
+    return true;
+}
 void HostedModule::choosePreset (int index)
 {
     if (plugin == nullptr || index < 0 || index >= plugin->getNumPrograms()) return;

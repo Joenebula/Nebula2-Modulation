@@ -148,6 +148,7 @@ change it with a preset or another VST or sample. I need a menu I can select fro
 - [x] One of your saved sounds
 - [x] The pattern, the tab's name, level, pan, mute, solo, output and song sections all stay. Undo brings the old sound back, plugin or sample included
 - [x] A plugin's own presets (v0.1.16): a slot shows a Presets button when the plugin offers a list (Nebula2 Glitch's 8 show up). Tested with Nebula2 Glitch
+- [x] Previous / next arrows beside Presets (27 Nov 2026, not released yet), and the slot shows the name of the preset in use. Going past the last goes round to the first. Tested here on the stepping itself and on a slot with no list; **not** tested with a plugin that has a list, because none is on this machine (Nebula2 Glitch has one: Joe to try)
 - [ ] Plugins that keep their presets in their own browser (Nexus, HALion) won't show a list here: use Open
 - [ ] An effect plugin can't be a tab's sound (it makes none of its own): the menu refuses it quietly. It should say why
 

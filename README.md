@@ -67,7 +67,9 @@ Then rescan plugins in Cubase. Downloads are on the [Releases page](https://gith
     a .vst3, pick one from **All installed plugins**, or drop a .vst3 file on the board. Plugins you've loaded before are listed first under Load. **Open** shows
     the plugin's own window beside the board; close that window when you're done. Cable a sequencer's Pitch and Gate into the slot to
     play an instrument, cable audio into In L / In R to use an effect, and cable Out L / Out R on to the Output.
-    **Presets** lists the plugin's own presets, when it has a list.
+    **Presets** lists the plugin's own presets, when it has a list, and the **<** and **>** arrows beside it step
+    through them one at a time. A plugin that keeps its sounds in its own browser (Nexus, HALion) gives no list:
+    press **Open** and choose in its window.
     **Knobs** points the slot's Knob 1 to 4 at the plugin's own controls; cable an LFO or any mover into Mod 1 to 4
     to move them. **+ > Your plugins** does it all in one go: a new tab with Nebula2 Drums, Voice, Chord, Glitch or
     another of your plugins already loaded and cabled.

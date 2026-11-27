@@ -108,6 +108,7 @@ private:
     void refresh();
     BoardView& owner; HostedModule& module;
     juce::TextButton load { "Load" }, open { "Open" }, knobs { "Knobs" }, presets { "Presets" };
+    juce::TextButton prev { "<" }, next { ">" };          // step through the plugin's own presets, when it offers a list
     std::unique_ptr<juce::FileChooser> chooser;
 };
 

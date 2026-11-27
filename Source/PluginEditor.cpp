@@ -3190,7 +3190,11 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     addChildComponent (addPanel);
     addPanel.onAdd = [this] (const std::vector<std::string>& types) { addUnits (types); };
 
+    for (auto* b : { &focusButton, &fullButton }) addAndMakeVisible (b);
+    focusButton.onClick = [this] { setFocus (! proc.focusView.load()); };
+    fullButton.onClick = [this] { setBigWindow (! proc.bigWindow.load()); };
     setSize (windowW, windowH);
+    applyWindowSize();
     stepZoom (0);
     timerCallback();
     startTimerHz (30);
@@ -3400,7 +3404,7 @@ void Nebula2ModulationEditor::timerCallback()
         show();
         viewport.setViewPosition (0, 0);
         stepZoom (0);                    // a loaded project brings its zoom with it
-        resized();                       // and whether its mixing desk was opened up
+        applyWindowSize();               // and its window size, Focus, and whether its mixing desk was opened up
         tabs.showSelected();
         repaint();
     }
@@ -3456,6 +3460,23 @@ void Nebula2ModulationEditor::paint (juce::Graphics& g)
     dividerH (g, 0, getWidth(), topbarH - 2);
 }
 
+// Full screen: as big as the monitor the plugin is on allows, leaving room for the host's own window frame and
+// title strip around ours. Off: the standard size.
+void Nebula2ModulationEditor::applyWindowSize()
+{
+    int w = windowW, h = windowH;
+    if (proc.bigWindow.load())
+    {
+        juce::Rectangle<int> area (0, 0, 1920, 1080);                       // with no screen to ask (the tests): a common one
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) area = d->userArea;
+        w = juce::jmax (windowW, area.getWidth() - 40);
+        h = juce::jmax (windowH, area.getHeight() - 130);
+    }
+    if (w != getWidth() || h != getHeight()) setSize (w, h); else resized();
+}
+void Nebula2ModulationEditor::setBigWindow (bool on) { proc.bigWindow.store (on); applyWindowSize(); repaint(); }
+void Nebula2ModulationEditor::setFocus (bool on) { proc.focusView.store (on); resized(); repaint(); }
+
 void Nebula2ModulationEditor::resized()
 {
     const int cy = (topbarH - 28) / 2;
@@ -3469,10 +3490,18 @@ void Nebula2ModulationEditor::resized()
     scaleBox.setBounds (558, cy, 154, 28);
     tidyButton.setBounds (getWidth() - space4 - 70, cy, 70, 28);
     addUnitsButton.setBounds (tidyButton.getX() - 8 - 104, cy, 104, 28);
-    const int top = topbarH + StyleBar::height;
+    // Focus: the style bar and the mixing desk step aside and the board takes their room
+    const bool focus = proc.focusView.load();
+    const int top = topbarH + (focus ? 0 : StyleBar::height);
+    styleBar.setVisible (! focus); mixer.setVisible (! focus); deskButton.setVisible (! focus);
     styleBar.setBounds (0, topbarH, getWidth(), StyleBar::height);
-    tabs.setBounds (0, top, getWidth() - 136, kTabsH);
-    const int deskH = MixerStrip::heightFor (proc.mixerTall.load());
+    tabs.setBounds (0, top, getWidth() - 136 - 176, kTabsH);
+    fullButton.setBounds (getWidth() - 14 - 118 - 8 - 94, top + 6, 94, 26);
+    focusButton.setBounds (fullButton.getX() - 6 - 66, top + 6, 66, 26);
+    focusButton.setToggleState (focus, juce::dontSendNotification);
+    fullButton.setToggleState (proc.bigWindow.load(), juce::dontSendNotification);
+    fullButton.setButtonText (proc.bigWindow.load() ? "Normal size" : "Full screen");
+    const int deskH = focus ? 0 : MixerStrip::heightFor (proc.mixerTall.load());
     mixer.setBounds (0, getHeight() - deskH, getWidth(), deskH);
     viewport.setBounds (0, top + kTabsH, getWidth(), getHeight() - top - kTabsH - deskH);
     deskButton.setButtonText (proc.mixerTall.load() ? "Less" : "More");

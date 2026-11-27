@@ -23,7 +23,7 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - Check it works before saying it's done (tests, snapshots). Then say plainly what you checked.
 - Everything stays in key.
 - Keep it tidy: one tab per sound. The All tab shows every sound together, each in its own frame (Joe asked for this on 27 Nov 2026, after the Modurand video); a sound's units never mix with another's.
-- Keep our look: dark, text buttons, fixed window. Joe chose this over Modurand's light theme (27 Nov 2026).
+- Keep our look: dark, text buttons. Joe chose this over Modurand's light theme (27 Nov 2026). The window is a fixed size unless he presses Full screen (28 Nov 2026), so lay things out from `getWidth()` / `getHeight()`, never from `windowW` / `windowH`.
 - The mixing desk is for mixing only (level, pan, mute, solo, output). Nothing that changes a sound goes there.
 
 ## Files
@@ -110,10 +110,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.24'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.25'
 ```
 
-The latest release is **v0.1.23**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
+The latest release is **v0.1.24**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
 Joe asked for that release on 27 Nov 2026, after it had built on Windows, Mac and Linux and passed every test.
 
 Windows: don't name a variable `near`, `far` or `small`. The Windows headers define them and the build breaks.

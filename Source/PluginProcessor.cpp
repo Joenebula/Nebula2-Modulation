@@ -396,6 +396,8 @@ void Nebula2ModulationProcessor::getStateInformation (juce::MemoryBlock& dest)
     out.writeBool (mixerTall.load());
     out.writeBool (showAll.load());
     out.writeFloat (zoomAll.load());
+    out.writeBool (focusView.load());
+    out.writeBool (bigWindow.load());
 }
 
 void Nebula2ModulationProcessor::setStateInformation (const void* data, int size)
@@ -409,6 +411,8 @@ void Nebula2ModulationProcessor::setStateInformation (const void* data, int size
         mixerTall.store (! in.isExhausted() && in.readBool());       // projects from before v0.1.17: closed
         showAll.store (! in.isExhausted() && in.readBool());         // projects from before the All view open on their tab, as they were saved
         zoomAll.store (in.isExhausted() ? 0.0f : juce::jlimit (0.0f, 1.5f, in.readFloat()));
+        focusView.store (! in.isExhausted() && in.readBool());       // projects from before v0.1.24: everything showing, normal size
+        bigWindow.store (! in.isExhausted() && in.readBool());
         history.clear();                 // the old steps describe a project that is no longer loaded
         stateVersion.fetch_add (1);
     }

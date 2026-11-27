@@ -98,6 +98,15 @@ int main (int argc, char** argv)
     juce::ignoreUnused (b);
     shoot (*ed, dir + "/ui_added.png");
 
+    // more room for the board: Focus, and Full screen
+    e->setFocus (true);
+    shoot (*ed, dir + "/ui_focus.png");
+    e->setBigWindow (true);
+    shoot (*ed, dir + "/ui_full_focus.png");
+    e->setFocus (false);
+    shoot (*ed, dir + "/ui_full.png");
+    e->setBigWindow (false);
+
     // the mixing desk opened up
     p.rack.boards[1]->pan.store (-0.4f); p.rack.boards[3]->pan.store (0.6f);
     e->desk().setTall (true);

@@ -448,6 +448,11 @@ public:
     n2m::HostOverlay hostOverlay;
     n2m::BoardView& board() { return boardView; }   // for the tests
     n2m::MixerStrip& desk() { return mixer; }
+    // More room for the board. Focus hides the style bar and the mixing desk. Full screen grows the plugin's
+    // window to fill the monitor. Both are saved with the project.
+    void setFocus (bool on);
+    void setBigWindow (bool on);
+    juce::Rectangle<int> boardArea() const { return viewport.getBounds(); }
     void stepHistory (bool redo);                   // Undo (false) or Redo (true)
     void stepZoom (int direction);                  // +1 bigger, -1 smaller, 0 just apply
     void addUnits (const std::vector<std::string>& types);
@@ -460,7 +465,8 @@ private:
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
     juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
-    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" }, deskButton { "More" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" }, deskButton { "More" }, focusButton { "Focus" }, fullButton { "Full screen" };
+    void applyWindowSize();
     juce::Component boardHolder;                 // the board sits in this so it can be drawn bigger or smaller
     std::map<std::string, juce::Image> previews;
     juce::Image previewOf (const n2m::Info&);

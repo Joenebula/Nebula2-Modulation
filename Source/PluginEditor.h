@@ -28,6 +28,7 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override { repaint(); }
+    bool dropdown = false;   // on a wide panel a switch is drawn as a drop-down
 private:
     void setNorm (float n);
     void changed();          // after any change: linked knobs and patterns follow
@@ -47,7 +48,18 @@ public:
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void tick();   // called by the editor's timer: moves the playing-step light
+    // On a wide panel (the drum and note sequencers). Public so the tests can do what a click does.
+    void setBars (int index);            // 0..3: 1, 2, 4 or 8 bars
+    void showPage (int bar);             // which bar is on show
+    int shownPage() const { return page; }
+    void toggleAccentAt (int step);      // a click on a velocity bar
+    void chooseIdea (int index);         // an item of the idea drop-down
+    juce::String ideaName() const;       // what the drop-down shows
+    juce::Rectangle<int> barButton (int index) const, pageMark (int bar) const, stepRow() const, velRow() const, nameRow() const;
 private:
+    bool wide = false;
+    void paintWide (juce::Graphics&);
+    void refreshIdea();
     juce::Rectangle<int> grid() const;
     int stepAtX (int x) const;
     void setDegreeFromY (int step, int y);
@@ -72,6 +84,9 @@ public:
     void tick();
     void chordMenu (int index);      // public so the tests can reach it
     static juce::Rectangle<int> tile (int index);
+    bool hitTest (int x, int y) override;       // only the tiles and buttons take clicks: the rest is the panel's
+    juce::Rectangle<int> keyboardArea() const;
+    std::vector<int> litNotes() const;          // the notes of the chord playing now (the first chord when stopped)
 private:
     void refreshLabels();
     Nebula2ModulationProcessor& proc; Module& module;
@@ -80,6 +95,22 @@ private:
 };
 
 class BoardView;
+
+// The screen on a wide Notes and rhythm unit that only shows things: the MIDI keyboard's keys, the arpeggiator's
+// order, the Euclidean ring, and what goes in and comes out of a Ratchet or a Swing
+class NotesScreen : public juce::Component
+{
+public:
+    NotesScreen (Nebula2ModulationProcessor&, Board&, Module&);
+    void paint (juce::Graphics&) override;
+    void tick();
+    int lowestShown() const { return lowC; }     // the keyboard's first key (a C)
+private:
+    uint64_t signature() const;
+    Nebula2ModulationProcessor& proc; Board& board; Module& module;
+    uint64_t seen = 0;
+    int lowC = 48;
+};
 
 // On a Scope: the wave passing through, the note it is playing and how far off it is
 class ScopeView : public juce::Component
@@ -173,6 +204,7 @@ public:
     std::unique_ptr<HostView> host;
     std::unique_ptr<SampleView> sample;
     std::unique_ptr<ScopeView> scope;
+    std::unique_ptr<NotesScreen> screen;
 private:
     BoardView& owner; Nebula2ModulationProcessor& proc; Board& board;
     juce::OwnedArray<ParamCell> cells;

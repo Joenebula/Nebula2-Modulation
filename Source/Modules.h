@@ -489,15 +489,18 @@ struct KeysIn : Module
         const float oct = std::round (P (1));
         const bool snap = P (2) > 0.5f;
         int notes[Keys::kMax], count = 0, newest = -1, newestVel = 100; uint32_t newestOrder = 0;
+        uint64_t lo = 0, hi = 0;          // the keys held on this unit's channel, for the screen's keyboard
         if (c.keys != nullptr)
             for (int i = 0; i < c.keys->count; ++i)
             {
                 const auto& h = c.keys->held[i];
                 if (channel != 0 && h.channel != channel) continue;
                 const int note = snap ? inKey (h.note, c.root, c.scale) : h.note;
+                (h.note < 64 ? lo : hi) |= (uint64_t) 1 << (h.note & 63);
                 notes[count++] = note;
                 if (h.order >= newestOrder) { newestOrder = h.order; newest = note; newestVel = h.vel; }
             }
+        heldLo.store (lo, std::memory_order_relaxed); heldHi.store (hi, std::memory_order_relaxed);
         std::sort (notes, notes + count);
         const bool retrigger = count > 0 && wasHeld && newestOrder != lastOrder;
         if (count > 0)
@@ -522,6 +525,10 @@ struct KeysIn : Module
             out[7][(size_t) i] = mod;
         }
     }
+    // The keys this unit saw held the last time it ran (one bit per MIDI note), as plain numbers the screen can
+    // read at any moment without touching the audio thread's own list
+    std::atomic<uint64_t> heldLo { 0 }, heldHi { 0 };
+    bool isHeld (int note) const { return note >= 0 && note < 128 && (((note < 64 ? heldLo : heldHi).load (std::memory_order_relaxed) >> (note & 63)) & 1u) != 0; }
     float pitch = 0, vel = 0.8f, voice[4] { 0, 0, 0, 0 }, bend = 0, mod = 0;
     uint32_t lastOrder = 0; bool wasHeld = false;
 };
@@ -1622,6 +1629,8 @@ struct Euclid : Module
         const int k = ((step - turn) % steps + steps) % steps;
         return (k * hits) % steps < hits;
     }
+    // Accent: every so-many steps is a loud one (0 = none). A hit that lands on one comes out at full velocity.
+    static bool accentAt (int step, int accent) { return accent > 0 && step % accent == 0; }
     void process (int n, const Ctx& c) override
     {
         const int steps = std::min (16, std::max (1, (int) std::lround (P (0))));
@@ -1641,8 +1650,7 @@ struct Euclid : Module
                     if (hitAt (k, steps, hits, turn))
                     {
                         left = gateLen;
-                        const int acc = (int) std::lround (P (3));
-                        vel = acc > 0 && k % acc == 0 ? 1.0f : 0.72f;
+                        vel = accentAt (k, (int) std::lround (P (3))) ? 1.0f : 0.72f;
                     }
                 }
             }

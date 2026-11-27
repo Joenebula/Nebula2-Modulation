@@ -18,15 +18,120 @@ constexpr int hostW = 360, hostSeqH = 58, sampleSeqH = 86, scopeSeqH = 112;
 inline int seqHeight (const Info& i) { return i.seq == Seq::Drum ? drumSeqH : i.seq == Seq::Note || i.seq == Seq::Value ? noteSeqH : i.seq == Seq::Chord ? chordSeqH : i.seq == Seq::Host ? hostSeqH : i.seq == Seq::Sample ? sampleSeqH : i.seq == Seq::Scope ? scopeSeqH : 0; }
 inline int seqWidth (const Info& i) { return i.seq == Seq::Chord ? chordW : i.seq == Seq::Host ? hostW : i.seq != Seq::None ? seqW : 0; }
 
+// ---- Wide panels: the Notes and rhythm units ----
+// Same height as every other panel, but laid out sideways: a screen on the left, the knobs and drop-downs in a row
+// to the right of it, and one row of jacks along the bottom (inputs on the left, outputs together on the right).
+constexpr int wideSide = pad + 2, wideGap = 10, wideKnobW = 58, wideCellH = 84, wideCellGap = 4, jackSlot = jackW + 4;
+constexpr int wideBodyY = header + 4, wideJacksY = panelH - foot - jackH, wideBodyH = wideJacksY - wideBodyY - 6;
+constexpr int stepW = 22, wideSeqW = kSteps * stepW;        // a sequencer's step grid
+constexpr int chordColX = chordW + 10, chordColW = 250;     // the chord unit's own buttons sit in a column beside its tiles
+constexpr int wideTileH = 26;                               // a chord tile: its name over its length
+constexpr int midiW = 66, midiH = 18, linkRoom = 150;       // the DRAG MIDI label, and room beside it for a sequencer's LINK label
+constexpr int kMaxCells = 8;
+struct Box
+{
+    int x = 0, y = 0, w = 0, h = 0;
+    int right() const { return x + w; }
+    int bottom() const { return y + h; }
+    bool empty() const { return w <= 0 || h <= 0; }
+    bool overlaps (const Box& o) const { return ! empty() && ! o.empty() && x < o.right() && o.x < right() && y < o.bottom() && o.y < bottom(); }
+};
+inline bool isWide (const Info& i) { return std::string (i.shelf) == "Notes and rhythm"; }
+// How wide a wide unit's screen is
+inline int screenWidth (const Info& i)
+{
+    const std::string t = i.type;
+    if (i.seq == Seq::Drum || i.seq == Seq::Note) return wideSeqW;
+    if (i.seq == Seq::Chord) return chordW;
+    if (t == "keys") return 14 * 20 + 2;
+    if (t == "euclid") return wideBodyH;       // a square, for the ring
+    if (t == "arp" || t == "ratchet" || t == "swing") return 200;
+    return 0;
+}
+// A drop-down is as wide as its longest choice needs
+inline int dropWidth (const Param& p)
+{
+    size_t longest = 0;
+    for (auto* c : p.choices) longest = std::max (longest, std::char_traits<char>::length (c));
+    return std::min (116, std::max (72, (int) longest * 7 + 34));
+}
+
 // Where everything on a panel goes
 struct Geo
 {
     int w = 0, h = panelH;
     int cols = 1, rows = 0, cellW = cell, cellH = cellMinH, knobsX = pad, knobsY = header;   // the knob grid
     int jackCols = 1, jackRows = 1, jacksY = 0;                                              // the jack strip
+    // A wide panel (Notes and rhythm): the screen, then each knob's own place (an empty box = not shown as a knob:
+    // a sequencer's Bars are buttons on its screen)
+    bool wide = false;
+    Box screen, midi;                  // midi: the DRAG MIDI label, on units that have one
+    int extraW = 0;                    // more room to the right of the screen that belongs to the unit's own buttons
+    Box cellBox[kMaxCells];
 };
+inline Geo wideGeo (const Info& i)
+{
+    Geo g;
+    g.wide = true;
+    const std::string type = i.type;
+    const int nKnobs = (int) i.params.size(), nIn = (int) i.ins.size(), nOut = (int) i.outs.size();
+    const bool seq = i.seq == Seq::Drum || i.seq == Seq::Note, chord = i.seq == Seq::Chord;
+    g.screen = { wideSide, wideBodyY, screenWidth (i), wideBodyH };
+    g.extraW = chord ? chordColX - chordW + chordColW : 0;
+    int x = wideSide + (g.screen.w > 0 ? g.screen.w + g.extraW + wideGap : 0);
+    const int cy = wideBodyY + (wideBodyH - wideCellH) / 2;
+    int shown = 0;
+    for (int k = 0; k < nKnobs && k < kMaxCells; ++k)
+    {
+        const auto& p = i.params[(size_t) k];
+        const std::string id = p.id;
+        if (seq && id == "bars") continue;                                                            // the bar buttons
+        if (chord && id == "pattern") { g.cellBox[k] = { wideSide + chordColX, wideBodyY + 42, 104, 38 }; continue; }   // Rhythm, under Mood
+        const int w = p.choices.empty() ? wideKnobW : dropWidth (p);
+        g.cellBox[k] = { x, cy, w, wideCellH };
+        x += w + wideCellGap;
+        ++shown;
+    }
+    if (shown > 0) x -= wideCellGap; else if (g.screen.w > 0) x -= wideGap;
+    if (seq) g.midi = { wideSide + 2, wideJacksY + 10, midiW, midiH };                                // bottom left, where a sequencer has no inputs
+    if (chord) g.midi = { wideSide + chordColX + 176, wideBodyY + 59, 70, midiH };                    // beside More
+    const int nameW = (int) std::char_traits<char>::length (i.name) * 8 + 40;
+    const int jacksW = (nIn + nOut) * jackSlot + (nIn > 0 && nOut > 0 ? 16 : 0) + (seq ? midiW + 8 + linkRoom : 0);
+    g.w = std::max ({ x, wideSide + nameW, wideSide + jacksW }) + wideSide;
+    g.cols = std::max (1, shown); g.rows = shown > 0 ? 1 : 0; g.cellW = wideKnobW; g.cellH = wideCellH; g.knobsX = x; g.knobsY = cy;
+    g.jackCols = std::max (1, nIn + nOut); g.jackRows = nIn + nOut > 0 ? 1 : 0; g.jacksY = wideJacksY;
+    return g;
+}
+// A wide panel: the screen, every knob and the jacks each have their own room, inside the panel
+inline bool wideFits (const Info& i, const Geo& g)
+{
+    const int nKnobs = (int) i.params.size(), nIn = (int) i.ins.size(), nOut = (int) i.outs.size();
+    if (nKnobs > kMaxCells || g.h != panelH) return false;
+    const Box inside { pad, header, g.w - 2 * pad, g.jacksY - header };
+    auto within = [&inside] (const Box& b) { return b.x >= inside.x && b.y >= inside.y && b.right() <= inside.right() && b.bottom() <= inside.bottom(); };
+    Box whole = g.screen; whole.w += g.extraW;
+    if (! g.screen.empty() && ! within (whole)) return false;
+    if (g.screen.w < screenWidth (i)) return false;
+    for (int k = 0; k < nKnobs; ++k)
+    {
+        const auto& c = g.cellBox[k];
+        if (c.empty()) continue;
+        const bool knob = i.params[(size_t) k].choices.empty();
+        if (! within (c) || c.w < cell - 2 || c.h < (knob ? cellMinH : 36) || c.overlaps (g.screen)) return false;
+        for (int j = 0; j < k; ++j) if (c.overlaps (g.cellBox[j])) return false;
+        if (c.overlaps (g.midi)) return false;
+    }
+    // the jacks: one row inside the panel, the inputs (and a sequencer's labels) clear of the outputs
+    if (g.jacksY + g.jackRows * jackH > panelH || g.jackRows > 1) return false;
+    const bool labelsInRow = ! g.midi.empty() && g.midi.y >= g.jacksY;
+    const int insRight = wideSide + nIn * jackSlot + (labelsInRow ? g.midi.w + 8 + linkRoom : 0), outsLeft = g.w - wideSide - nOut * jackSlot;
+    if (labelsInRow && nIn > 0) return false;
+    if (! g.midi.empty() && (g.midi.x < pad || g.midi.right() > g.w - pad || g.midi.bottom() > panelH - 4)) return false;
+    return insRight <= outsLeft;
+}
 inline Geo geo (const Info& i)
 {
+    if (isWide (i)) return wideGeo (i);
     const int nKnobs = (int) i.params.size(), nJacks = (int) (i.ins.size() + i.outs.size());
     const int seqH = seqHeight (i);
     // wide enough for its name in the header (sequencers and the like are wider than their names anyway)
@@ -67,6 +172,7 @@ inline Geo geo (const Info& i)
 inline bool fits (const Info& i)
 {
     const auto g = geo (i);
+    if (g.wide) return wideFits (i, g);
     const int nKnobs = (int) i.params.size();
     return g.knobsY >= header + seqHeight (i) && g.knobsY + g.rows * g.cellH <= g.jacksY && g.cellH >= cellMinH && g.cellW >= cell - 2
         && g.jacksY + g.jackRows * jackH <= panelH && g.cols * g.rows >= nKnobs && g.knobsX + g.cols * g.cellW <= g.w - pad + 1 && g.w >= seqWidth (i) + 2 * pad;
@@ -205,6 +311,16 @@ inline void setNotesBar (Module& m, int bar, const char* gates, const int* degre
 inline void setDrum (Module& m, const char* pat) { for (int b = 0; b < kMaxBars; ++b) setDrumBar (m, b, pat); }
 inline void setNotes (Module& m, const char* gates, const int* degrees) { for (int b = 0; b < kMaxBars; ++b) setNotesBar (m, b, gates, degrees); }
 
+// A drum step's accent: a hit becomes an accent and an accent a plain hit. A step with no hit stays empty.
+inline bool toggleAccent (Module& m, int step)
+{
+    if (step < 0 || step >= kMaxSteps) return false;
+    const float d = m.data[(size_t) step].load();
+    if (d < 0.5f) return false;
+    m.data[(size_t) step].store (d > 1.5f ? 1.0f : 2.0f);
+    return true;
+}
+
 struct DrumIdea { const char* name; const char* pat; };
 struct NoteIdea { const char* name; const char* gates; int deg[16]; };
 
@@ -280,6 +396,40 @@ inline const std::vector<NoteIdea>& noteIdeas (const std::string& boardType)
         { "Octave leap", "x...x.x...x.x...", { 0, 0, 0, 0, 7, 0, 4, 0, 0, 0, 7, 0, 9, 0, 0, 0 } },
         { "Slow line", "x.......x...x...", { 4, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0 } } };
     return boardType == "bass" ? bass : lead;
+}
+
+// Which idea a sequencer's first bar is, or -1 if it isn't one of them (after Random, or once it has been edited).
+// For the drop-down that shows the idea's name.
+inline int drumIdeaIndex (const Module& m, const std::string& kind)
+{
+    const auto& ideas = drumIdeas (kind);
+    for (size_t k = 0; k < ideas.size(); ++k)
+    {
+        bool same = true;
+        for (int i = 0; i < kSteps && same; ++i)
+        {
+            const float d = m.data[(size_t) i].load();
+            const char c = ideas[k].pat[i];
+            same = (d > 1.5f ? 'X' : d > 0.5f ? 'x' : '.') == c;
+        }
+        if (same) return (int) k;
+    }
+    return -1;
+}
+inline int noteIdeaIndex (const Module& m, const std::string& boardType)
+{
+    const auto& ideas = noteIdeas (boardType);
+    for (size_t k = 0; k < ideas.size(); ++k)
+    {
+        bool same = true;
+        for (int i = 0; i < kSteps && same; ++i)
+        {
+            const bool on = m.data[(size_t) i].load() > 0.5f;
+            same = on == (ideas[k].gates[i] == 'x') && (! on || (int) std::lround (m.data[(size_t) (kMaxSteps + i)].load()) == ideas[k].deg[i]);
+        }
+        if (same) return (int) k;
+    }
+    return -1;
 }
 
 // Shapes for the step modulator: 16 values, 0 (bottom) to 21 (top), every step on

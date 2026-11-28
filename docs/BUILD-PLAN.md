@@ -33,11 +33,11 @@ Cubase. Tick things off here as they land.
 - [x] Multi-oscillator (four notes at once)
 - [x] Sample player (v0.1.9): load or drop an audio file (wav, aiff, flac, ogg). Start, Length, Tune, Forward / Reverse, Once / Loop. A Pitch cable plays it at notes. A "Sample" sound in the + menu. The project remembers where the file is; if it has moved, the unit names the file it wants
 - [x] Sample player reads mp3 (v0.1.14)
-- [x] Sample player: the file travels with the project (built, not released yet). A file up to 10 MB is also kept inside the project and inside a saved sound. When the project opens, the file itself is used if it is still where it was; if not, the copy plays. A bigger file is kept by where it is only, and if it has gone the player says it was too big to keep and which file it wants. Projects grow by about a third more than the file's size per sample. Older projects load as before
+- [x] Sample player: the file travels with the project (v0.1.28). A file up to 10 MB is also kept inside the project and inside a saved sound. When the project opens, the file itself is used if it is still where it was; if not, the copy plays. A bigger file is kept by where it is only, and if it has gone the player says it was too big to keep and which file it wants. Projects grow by about a third more than the file's size per sample. Older projects load as before
 - [x] Clap board, with its own clap envelope (v0.1.7)
 - [x] Stereo cabling (v0.1.14): dragging a left output to a left input brings the right side along, when both units have one and the right input is free. Units themselves are as before: stereo ones have L and R jacks, mono ones have one
 - [x] Undo and redo (v0.1.8): buttons and Ctrl+Z / Ctrl+Y. Covers knobs, patterns, cables, adding, moving and deleting units, tabs, the mixer, links, chords and key. Keeps the last 100 steps. A board is put back in place, so undoing a knob never reloads a plugin in a slot
-- [x] Undo for a plugin slot and the master fader (built, not released yet): loading a plugin into a slot, emptying it (the plugin comes back with its settings), pointing a slot knob at a control, and moving the master fader are each a step
+- [x] Undo for a plugin slot and the master fader (v0.1.28): loading a plugin into a slot, emptying it (the plugin comes back with its settings), pointing a slot knob at a control, and moving the master fader are each a step
 - [ ] Not undoable: changes made inside a hosted plugin's own window (and Undo of pointing a knob leaves them alone)
 - [x] MIDI keyboard unit (v0.1.12): notes from a keyboard or a Cubase MIDI track. Pitch, Gate and Vel for a bass or lead; Note 1 to 4 for chords. Channel (All or 1 to 16), Octave, and Stay in key (on by default) or As played. Keys land on their exact sample. Works with Cubase stopped
 - [x] MIDI keyboard (v0.1.14): pitch wheel (Bend knob sets how far, 2 semitones to start), mod wheel on its own jack, sustain pedal
@@ -97,10 +97,10 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [ ] Still to try: Nexus / HALion in a slot, and dropping a .vst3 on the board inside Cubase
 - [x] A slot's Load menu lists every VST3 in the usual plugin folders by name (v0.1.9). The list is made by looking at the folders only; nothing is loaded to build it
 - [x] Knobs on the slot (v0.1.11): Knob 1 to 4, each pointed at one of the plugin's own controls from the Knobs button (pick from the list, or "the control I last moved in its window"). Mod 1 to 4 inputs let cables move them. Saved with the project
-- [x] Pointing a knob can be undone (built, not released yet)
+- [x] Pointing a knob can be undone (v0.1.28)
 - [ ] Nexus / HALion controls can only be tried on Joe's PC
 - [x] Notes out of a hosted plugin (v0.1.14): a slot has Note 1 to 4 and Gate outputs carrying whatever notes the plugin sends out, so Nebula2 Chord in a slot can play an oscillator or another slot. Tested with Nebula2 Chord
-- [x] Latency of hosted plugins (built, not released yet): when a plugin in a slot says its sound comes out late, every other sound is held back by the same amount so the tabs stay in step, and Cubase is told the total so it lines the whole instrument up with the other tracks. A project with no such plugin sounds exactly as before. DRAG AUDIO still starts on bar 1
+- [x] Latency of hosted plugins (v0.1.28): when a plugin in a slot says its sound comes out late, every other sound is held back by the same amount so the tabs stay in step, and Cubase is told the total so it lines the whole instrument up with the other tracks. A project with no such plugin sounds exactly as before. DRAG AUDIO still starts on bar 1
 - [ ] Not lined up: inside one sound, a path that goes round a late plugin (say a dry path beside it) against the path through it; and a shared-effects tab is fed by the other tabs as they are, before their wait
 - [ ] **Joe to test in Cubase** with a plugin that looks ahead (a limiter or a linear-phase EQ): no plugin here reports any lateness, so the tests use a stand-in
 - [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% when the desk is opened with More; orange from 40%. A Total load figure by the master adds them up (v0.1.20); orange from 70%
@@ -116,7 +116,7 @@ Joe: "lock a bass to a string and change one, the other changes also", for anyth
 - [x] Knob links: right-click any knob to put it in a group (A to H). Knobs in a group move together, by knob position
 - [x] Joining a group takes the group's pattern or position; links save with the project
 - [x] Follow link (v0.1.4): a note sequencer keeps its own pattern and moves, in key, to match the group's leader (the first sequencer in the group that isn't following). This is what Joe meant by locking; a sequencer joining a group now follows by default
-- [x] A linked knob moved by its line on the timeline now moves the others in its group, at the same point of the song (built, not released yet). A knob with a line of its own keeps to its own line
+- [x] A linked knob moved by its line on the timeline now moves the others in its group, at the same point of the song (v0.1.28). A knob with a line of its own keeps to its own line
 - [ ] A linked knob "moved by a cable" still doesn't move the others: a cable doesn't turn the knob, it adds to it inside that one unit, so there is nothing to pass on. The way to do it today is to cable the same mover into each unit
 - [ ] Offsets between linked things (the same line a third up, a knob that moves half as far)
 
@@ -137,7 +137,7 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 - [ ] Song page: sections all the same length; no names for sections; no copy of a section
 - [x] Drag MIDI out (v0.1.12): a DRAG MIDI label on note sequencers, drum sequencers and the chord unit. Drag it into Cubase for a MIDI part of exactly what the unit plays (in key, following the chords and any key change). **Joe to test the drag itself in Cubase**
 - [x] Drag audio out (v0.1.14): a DRAG AUDIO label on each tab's Output. Drag it into Cubase for a WAV of that sound alone, the chords once through from bar 1, at the song's tempo. **Joe to test the drag itself in Cubase**
-- [x] Freeze a tab (built, not released yet): Freeze in the tab's menu swaps the sound for its own audio, so it takes almost none of the computer's time (the bass here went from 0.4% to 0.01%). Unfreeze, in the same place, brings its units back exactly as they were. Both can be undone
+- [x] Freeze a tab (v0.1.28): Freeze in the tab's menu swaps the sound for its own audio, so it takes almost none of the computer's time (the bass here went from 0.4% to 0.01%). Unfreeze, in the same place, brings its units back exactly as they were. Both can be undone
   - The board is dimmed and locked, with the line "Frozen: Unfreeze to edit". The mixer's level, pan, mute, solo and output still work
   - The audio is one time round the song: as long as the chords and the longest pattern, and the song page too when it is on or the sound has knob lines. Knob lines and song sections are in it. It is played by where the song is, so it loops with the song
   - Saved with the project as the sound itself plus a note that it is frozen; the audio is made again when the project opens (the sound plays from its units for the moment that takes). An older version opens it unfrozen
@@ -146,7 +146,7 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
   - For Joe to decide: a frozen sound repeats exactly each time round (anything "random" in it no longer changes from one pass to the next); when the song stops it fades out in a few milliseconds instead of ringing on; making the audio holds the screen for a moment on a long song
   - [ ] **Joe to test in Cubase**: freezing a sound that is one of his plugins (Nexus, HALion)
 - [x] Save and load a sound (v0.1.12): right-click a tab, Save this sound. Saved sounds are listed under + (Your saved sounds), from any project. They live in Documents / Nebula2 Modulation / Sounds. A plugin in a slot is saved with its settings
-- [x] A saved sound carries its sample file with it (up to 10 MB; built, not released yet). Before this a saved sound lost its sample when loaded again: fixed
+- [x] A saved sound carries its sample file with it (up to 10 MB; v0.1.28). Before this a saved sound lost its sample when loaded again: fixed
 - [ ] No pictures or tags in the list
 
 ## Change sound (done, v0.1.15)

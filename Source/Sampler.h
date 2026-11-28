@@ -25,6 +25,7 @@ public:
     double seconds() const { return sound != nullptr && sourceRate > 0 ? sound->getNumSamples() / sourceRate : 0.0; }
     juce::String status;                     // shown on the unit when a file can't be loaded
     std::vector<float> peaks;                // the shape of the sound, for drawing (message thread)
+    std::vector<float> fine;                 // the same in much finer slices, for the bigger view to zoom into
     std::atomic<float> playhead { -1.0f };   // 0..1 through the file while it plays, -1 when silent
 
     static bool canRead (const juce::String& path);

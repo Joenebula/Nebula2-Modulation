@@ -51,6 +51,12 @@ juce::String SampleModule::load (const juce::File& f)
         const int a = (int) ((juce::int64) k * length / (juce::int64) shape.size()), b = juce::jmax (a + 1, (int) ((juce::int64) (k + 1) * length / (juce::int64) shape.size()));
         shape[k] = juce::jmax (fresh->getMagnitude (0, a, b - a), fresh->getMagnitude (1, a, b - a));
     }
+    std::vector<float> detail ((size_t) juce::jlimit (160, 8192, length), 0.0f);
+    for (size_t k = 0; k < detail.size(); ++k)
+    {
+        const int a = (int) ((juce::int64) k * length / (juce::int64) detail.size()), b = juce::jmax (a + 1, (int) ((juce::int64) (k + 1) * length / (juce::int64) detail.size()));
+        detail[k] = juce::jmax (fresh->getMagnitude (0, a, b - a), fresh->getMagnitude (1, a, b - a));
+    }
     {
         Hold h (guard);
         sound = fresh;
@@ -58,6 +64,7 @@ juce::String SampleModule::load (const juce::File& f)
         active = false; pos = 0;
     }
     peaks = std::move (shape);
+    fine = std::move (detail);
     status.clear();
     return {};
 }
@@ -66,7 +73,7 @@ void SampleModule::clear()
 {
     std::shared_ptr<const juce::AudioBuffer<float>> gone;
     { Hold h (guard); gone.swap (sound); active = false; }
-    peaks.clear(); file = juce::File(); status.clear();
+    peaks.clear(); fine.clear(); file = juce::File(); status.clear();
 }
 
 void SampleModule::process (int n, const Ctx&)

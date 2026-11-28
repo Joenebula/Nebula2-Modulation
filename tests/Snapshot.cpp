@@ -247,5 +247,138 @@ int main (int argc, char** argv)
         p.preview.store (false); run (p, 0.1);
         e->stepZoom (1); e->setFocus (false); e->setBigWindow (false);
     }
+    ed.reset();
+
+    // The bigger views: one picture of each, with something worth looking at in it
+    {
+        Nebula2ModulationProcessor q;
+        q.setRateAndBufferSizeDetails (48000, 256);
+        q.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (q.createEditor());
+        auto* b = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto unit = [&q] (int tab, const char* type) -> n2m::Module*
+        {
+            for (auto& m : q.rack.boards[(size_t) tab]->modules) if (std::string (m->info->type) == type) return m.get();
+            return nullptr;
+        };
+        b->selectTab (3);
+        // a four-bar bass line with some long notes
+        if (auto* m = unit (3, "noteseq"))
+        {
+            m->set ("bars", 2);
+            const int lines[4][16] = { { 0, 0, 0, 0, 2, 0, 4, 0, 0, 0, 7, 0, 4, 0, 2, 0 }, { 0, 0, 0, 0, 2, 0, 4, 0, 0, 0, 5, 0, 4, 0, 6, 0 },
+                                       { -3, 0, 0, 0, -1, 0, 0, 0, 2, 0, 4, 0, 2, 0, 0, 0 }, { -3, 0, 0, 0, -1, 0, 1, 0, 2, 0, 0, 0, 7, 0, 9, 0 } };
+            const char* const gates[4] = { "x...x.x...x.x.x.", "x...x.x...x.x.xx", "x...x...x.x.x...", "x...x.x.x...x.x." };
+            for (int bar = 0; bar < 4; ++bar) n2m::setNotesBar (*m, bar, gates[bar], lines[bar]);
+            // some notes with a length of their own: held for two, three or four steps
+            for (int at : { 0, 16, 32, 48 }) m->data[(size_t) (n2m::kLenRow + at)].store (4.0f);
+            for (int at : { 6, 22, 36, 56 }) m->data[(size_t) (n2m::kLenRow + at)].store (3.0f);
+            for (int at : { 10, 44, 60 }) m->data[(size_t) (n2m::kLenRow + at)].store (2.0f);
+            b->bigPanel.open (*q.rack.boards[3], *m);
+            q.preview.store (true); run (q, 2.6);
+            shoot (*holder, dir + "/ui_big_noteseq.png");
+            q.preview.store (false); run (q, 0.1);
+            b->setBigWindow (true);
+            shoot (*holder, dir + "/ui_big_noteseq_full.png");       // the same with Full screen on
+            b->setBigWindow (false);
+            m->set ("bars", 3); n2m::randomNotes ("bass", 77, *m);
+            shoot (*holder, dir + "/ui_big_noteseq_8.png");          // eight bars, the most there can be
+            b->bigPanel.close();
+        }
+        // a four-bar drum pattern with hits of different strengths
+        b->selectTab (0);
+        if (auto* m = unit (0, "drumseq"))
+        {
+            m->set ("bars", 2); n2m::randomDrum ("hat", 99, *m);
+            n2m::Rand r (5);
+            for (int k = 0; k < 64; ++k) if (m->data[(size_t) k].load() > 0.5f && k % 4 != 0) m->data[(size_t) k].store (n2m::drumData (0.2f + 0.8f * (float) r.upTo (100) / 100.0f));
+            b->bigPanel.open (*q.rack.boards[0], *m);
+            if (auto* v = b->bigPanel.as<n2m::BigDrumGrid>()) { v->copyBarAt (0); v->selectBar (2); }
+            q.preview.store (true); run (q, 1.2);
+            shoot (*holder, dir + "/ui_big_drumseq.png");
+            q.preview.store (false); run (q, 0.1);
+            b->bigPanel.close();
+            b->selectTab (0);
+            shoot (*holder, dir + "/ui_drum_velocities.png");        // the unit itself, showing those strengths on its small bars
+        }
+        // the chords of a 16-bar song, one picked
+        b->selectTab (4);
+        if (auto* m = unit (4, "chords"))
+        {
+            q.rack.toggleChordLock (5);
+            b->bigPanel.open (*q.rack.boards[4], *m);
+            if (auto* v = b->bigPanel.as<n2m::BigChords>()) v->select (2);
+            q.preview.store (true); run (q, 9.0);
+            shoot (*holder, dir + "/ui_big_chords.png");
+            q.preview.store (false); run (q, 0.1);
+            // ...and the most it has to show: 32 chords
+            q.rack.harmony.lenBars = 32; q.rack.harmony.chordBars = 1; q.rack.generateChords (11); q.chordsVersion.fetch_add (1);
+            if (auto* v = b->bigPanel.as<n2m::BigChords>()) v->select (19);
+            shoot (*holder, dir + "/ui_big_chords_32.png");
+            b->bigPanel.close();
+        }
+        // a board with the other four on it
+        auto eb = n2m::makeBoard ("empty", 48000);
+        eb->name = "Bigger views"; eb->colour = 2;
+        for (const char* t : { "sample", "parameq", "stepmod", "scope" }) eb->add (t, 0, 0, 48000);
+        n2m::tidy (*eb);
+        q.rack.addBoard (std::move (eb));
+        const int tab = (int) q.rack.boards.size() - 1;
+        b->selectTab (tab);
+        if (auto* sm = dynamic_cast<n2m::SampleModule*> (unit (tab, "sample")))
+        {
+            // a short loop to load: four hits that die away, each a little lower
+            const auto wav = juce::File (dir).getChildFile ("snapshot-loop.wav");
+            wav.deleteFile();
+            {
+                juce::AudioBuffer<float> buf (1, 48000);
+                for (int i = 0; i < 48000; ++i)
+                {
+                    const int hit = i / 12000; const float t = (float) (i % 12000) / 48000.0f;
+                    buf.setSample (0, i, 0.9f * std::exp (-t * (9.0f + 3.0f * (float) hit)) * std::sin (6.2832f * (180.0f - 25.0f * (float) hit) * t * (1.0f + 2.0f * std::exp (-t * 30.0f))));
+                }
+                juce::WavAudioFormat fmt;
+                if (auto os = std::unique_ptr<juce::FileOutputStream> (wav.createOutputStream()))
+                    if (auto w = std::unique_ptr<juce::AudioFormatWriter> (fmt.createWriterFor (os.get(), 48000, 1, 16, {}, 0))) { os.release(); w->writeFromAudioSampleBuffer (buf, 0, 48000); }
+            }
+            sm->load (wav);
+            sm->set ("start", 0.25f); sm->set ("length", 0.66f);
+            sm->playhead.store (0.41f);
+            b->bigPanel.open (*q.rack.boards[(size_t) tab], *sm);
+            shoot (*holder, dir + "/ui_big_sample.png");
+            if (auto* v = b->bigPanel.as<n2m::BigSample>()) v->zoomBy (3.0f, 0.4f);
+            shoot (*holder, dir + "/ui_big_sample_zoom.png");
+            b->bigPanel.close();
+            sm->playhead.store (-1.0f);
+        }
+        if (auto* m = unit (tab, "parameq"))
+        {
+            b->bigPanel.open (*q.rack.boards[(size_t) tab], *m);
+            if (auto* v = b->bigPanel.as<n2m::BigEq>()) { v->setBand (0, 0.20f, 7.5f); v->setBand (2, 0.70f, -9.0f); v->setWidth (2, 3.0f); }
+            shoot (*holder, dir + "/ui_big_parameq.png");
+            b->bigPanel.close();
+        }
+        if (auto* m = unit (tab, "stepmod"))
+        {
+            m->set ("bars", 1);
+            b->bigPanel.open (*q.rack.boards[(size_t) tab], *m);
+            if (auto* v = b->bigPanel.as<n2m::BigStepMod>())
+            {
+                v->drawLine (0, -7, 11, 14); v->drawLine (12, 14, 15, 2); v->drawLine (16, 2, 23, 12); v->drawLine (24, 12, 31, -7);
+                v->setHold (5); v->setHold (6); v->setHold (20);
+            }
+            shoot (*holder, dir + "/ui_big_stepmod.png");
+            b->bigPanel.close();
+        }
+        if (auto* sc = dynamic_cast<n2m::Scope*> (unit (tab, "scope")))
+        {
+            for (int i = 0; i < n2m::Scope::size; ++i) sc->ring[(size_t) i] = 0.7f * std::sin (0.0575f * (float) i) + 0.2f * std::sin (0.23f * (float) i);
+            sc->hz.store (221.5f); sc->level.store (0.7f);
+            b->bigPanel.open (*q.rack.boards[(size_t) tab], *sc);
+            shoot (*holder, dir + "/ui_big_scope.png");
+            b->bigPanel.close();
+        }
+        shoot (*holder, dir + "/ui_big_units.png");                  // those four units on their board, each with its Expand label
+    }
     return 0;
 }

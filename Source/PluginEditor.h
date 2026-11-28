@@ -3,10 +3,13 @@
 #include <map>
 #include "PluginProcessor.h"
 #include "Look.h"
+#include "BigViews.h"
 
 namespace n2m
 {
 juce::Colour boardColour (int index);
+// A piano keyboard: so many white keys up from a C. "lit" says which notes are down; they get a bar in "mark".
+void drawKeyboard (juce::Graphics&, juce::Rectangle<float>, int lowC, int nWhite, const std::function<bool (int)>& lit, juce::Colour mark);
 
 // Buttons in the house style
 struct N2MLook : look::SoftLookAndFeel
@@ -193,6 +196,7 @@ public:
     juce::Rectangle<int> midiArea() const;                       // on a sequencer or the chords: drag from here to put the MIDI in the host
     bool midiDrag = false;
     juce::Rectangle<int> linkArea() const;                       // on a sequencer: the Link label in the header
+    juce::Rectangle<int> expandArea() const;                     // on a unit with a bigger view: the Expand label in the header
     bool onTimeline (int param) const { return board.autoIndex (module.uid, param) >= 0; }   // this knob has a line on the timeline
     bool anyOnTimeline() const { for (auto& a : board.autos) if (a->uid == module.uid) return true; return false; }
     Board& itsBoard() const { return board; }
@@ -248,6 +252,8 @@ public:
     Board* board = nullptr;
     std::function<void()> onChanged;
     std::function<void (HostedModule&)> onOpenPlugin;
+    std::function<void (Board&, Module&)> onExpand;               // a unit's Expand label: open its bigger view
+    std::function<void()> onRebuilt;                             // its units were drawn again: one may have gone
     bool embedded = false;       // one of several boards on the All view: it is just as big as what is on it
     std::function<void()> onFit; // (embedded) its size changed
     std::function<void (Board&, int uid, int param)> onDrawKnob;      // a knob's menu: give it a line on the timeline
@@ -478,6 +484,7 @@ public:
     n2m::AddPanel addPanel;      // public so the snapshot test can open it
     n2m::SongPanel songPanel;
     n2m::HostOverlay hostOverlay;
+    n2m::BigPanel bigPanel;      // a unit's bigger view, over the board
     n2m::BoardView& board() { return boardView; }   // for the tests
     n2m::MixerStrip& desk() { return mixer; }
     // More room for the board. Focus hides the style bar and the mixing desk. Full screen grows the plugin's

@@ -27,7 +27,7 @@ juce_add_binary_data(N2MData SOURCES
     Resources/Inter-Medium.ttf
     Resources/Inter-SemiBold.ttf)
 
-set(N2M_SOURCES Source/PluginProcessor.cpp Source/PluginEditor.cpp Source/PluginHost.cpp Source/Sampler.cpp)
+set(N2M_SOURCES Source/PluginProcessor.cpp Source/PluginEditor.cpp Source/BigViews.cpp Source/PluginHost.cpp Source/Sampler.cpp)
 target_sources(Nebula2Modulation PRIVATE ${N2M_SOURCES})
 target_include_directories(Nebula2Modulation PRIVATE Source)
 

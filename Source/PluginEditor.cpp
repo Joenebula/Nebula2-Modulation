@@ -37,7 +37,7 @@ static void chevron (juce::Graphics& g, float cx, float cy, juce::Colour c)
 }
 
 // A piano keyboard: so many white keys up from a C. "lit" says which notes are down; they get a bar in "mark".
-static void drawKeyboard (juce::Graphics& g, juce::Rectangle<float> r, int lowC, int nWhite, const std::function<bool (int)>& lit, juce::Colour mark)
+void drawKeyboard (juce::Graphics& g, juce::Rectangle<float> r, int lowC, int nWhite, const std::function<bool (int)>& lit, juce::Colour mark)
 {
     static const int whiteSemis[7] = { 0, 2, 4, 5, 7, 9, 11 };
     const float kw = r.getWidth() / (float) nWhite;
@@ -448,7 +448,9 @@ void SeqView::paintWide (juce::Graphics& g)
             // its velocity: tall for an accent, shorter for a plain hit
             if (d > 0.5f)
             {
-                const float h = (vr.getHeight() - 12.0f) * (d > 1.5f ? 1.0f : 0.55f);
+                // (a plain hit and an accent are drawn as they always were; hits set in the bigger view fall in between or below)
+                const float v = drumVel (d);
+                const float h = (vr.getHeight() - 12.0f) * (v >= 0.72f ? 0.55f + (v - 0.72f) / 0.28f * 0.45f : juce::jmax (0.12f, 0.55f * v / 0.72f));
                 g.setColour (col.withAlpha ((d > 1.5f ? 0.95f : 0.6f) * alpha));
                 g.fillRoundedRectangle (tile.getX() + 1.0f, vr.getBottom() - 6.0f - h, tile.getWidth() - 2.0f, h, 2.0f);
             }
@@ -608,6 +610,7 @@ void SeqView::mouseDown (const juce::MouseEvent& e)
         {
             boardWillChange (*this);
             module.data[(size_t) s].store (module.data[(size_t) s].load() > 0.5f ? 0.0f : 1.0f);
+            module.data[(size_t) (kLenRow + s)].store (0.0f);       // (a length given in the bigger view goes with its note)
             edited();
         }
         else if (gr.contains (at))
@@ -617,7 +620,8 @@ void SeqView::mouseDown (const juce::MouseEvent& e)
             const bool on = module.data[(size_t) s].load() > 0.5f;
             const int was = (int) std::lround (module.data[(size_t) (kMaxSteps + s)].load());
             setDegreeFromY (s, e.y);
-            if (on && was == (int) std::lround (module.data[(size_t) (kMaxSteps + s)].load())) module.data[(size_t) s].store (0.0f);
+            if (! on) module.data[(size_t) (kLenRow + s)].store (0.0f);
+            if (on && was == (int) std::lround (module.data[(size_t) (kMaxSteps + s)].load())) { module.data[(size_t) s].store (0.0f); module.data[(size_t) (kLenRow + s)].store (0.0f); }
             else dragStep = s;
             edited();
         }
@@ -1509,6 +1513,12 @@ juce::Rectangle<int> ModuleComp::linkArea() const
     return { 20 + nameW + 10, 4, w, 15 };
 }
 
+juce::Rectangle<int> ModuleComp::expandArea() const
+{
+    if (! BigPanel::has (*module.info)) return {};
+    return { getWidth() - 15 - 48, 3, 48, 15 };       // top right, clear of the corner screw
+}
+
 juce::Rectangle<int> ModuleComp::midiArea() const
 {
     if (! canExportMidi (module) && std::string (module.info->type) != "output") return {};
@@ -1629,8 +1639,12 @@ void ModuleComp::paint (juce::Graphics& g)
     // the name, printed on the plate, over a line in the colour of its kind
     g.setFont (font (10.0f, Weight::SemiBold, 0.5f));
     g.setColour (juce::Colours::white.withAlpha (0.92f));
-    const bool labels = ! geo.wide && (! linkArea().isEmpty() || (! midiArea().isEmpty() && std::string (info.type) != "output"));
-    g.drawFittedText (juce::String (info.name).toUpperCase(), labels ? 20 : 12, 2, getWidth() - (labels ? 28 : 24), lay::header - 5,
+    const auto ea = expandArea();
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), juce::String (info.name).toUpperCase());
+    // (on a narrow panel with an Expand label the name moves to the left, out of its way)
+    const bool crowded = ! ea.isEmpty() && (getWidth() + nameW) / 2 > ea.getX() - 6;
+    const bool labels = crowded || (! geo.wide && (! linkArea().isEmpty() || (! midiArea().isEmpty() && std::string (info.type) != "output")));
+    g.drawFittedText (juce::String (info.name).toUpperCase(), labels ? 20 : 12, 2, crowded ? ea.getX() - 24 : getWidth() - (labels ? 28 : 24), lay::header - 5,
                       labels ? juce::Justification::centredLeft : juce::Justification::centred, 1, 0.7f);
     g.setColour ((geo.wide ? col : tone).withAlpha (0.85f));      // (a wide Notes and rhythm unit wears its sound's colour, like its steps)
     g.fillRoundedRectangle (r.getX() + 12.0f, (float) lay::header - 3.0f, r.getWidth() - 24.0f, 1.6f, 0.8f);
@@ -1652,6 +1666,15 @@ void ModuleComp::paint (juce::Graphics& g)
         g.setFont (font (8.5f, Weight::SemiBold, 0.3f));
         g.setColour (n8);
         g.drawFittedText (std::string (info.type) == "output" ? "DRAG AUDIO" : "DRAG MIDI", ma.reduced (2, 0), juce::Justification::centred, 1, 0.7f);
+    }
+
+    if (! ea.isEmpty())
+    {
+        g.setColour (n4);
+        g.fillRoundedRectangle (ea.toFloat(), 4.0f);
+        g.setFont (font (8.5f, Weight::SemiBold, 0.3f));
+        g.setColour (n8);
+        g.drawFittedText ("EXPAND", ea.reduced (2, 0), juce::Justification::centred, 1, 0.7f);
     }
 
     // a screen behind the pattern, the chords, the wave: black glass with a faint glow
@@ -1751,6 +1774,7 @@ void ModuleComp::mouseDown (const juce::MouseEvent& e)
         });
         return;
     }
+    if (expandArea().contains (e.getPosition())) { if (owner.onExpand) owner.onExpand (board, module); return; }
     if (linkArea().contains (e.getPosition())) { linkMenu(); return; }
     midiDrag = midiArea().contains (e.getPosition());
     if (midiDrag) return;
@@ -1813,6 +1837,7 @@ void BoardView::rebuild()
     fitToContent();
     repaint();
     if (onChanged) onChanged();
+    if (onRebuilt) onRebuilt();
 }
 
 void BoardView::refreshLive()
@@ -3619,7 +3644,7 @@ void SongPanel::paint (juce::Graphics& g)
 }
 
 Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
-    : AudioProcessorEditor (p), songPanel (p), proc (p), styleBar (p), tabs (p), boardView (p), allView (p), mixer (p)
+    : AudioProcessorEditor (p), songPanel (p), bigPanel (p), proc (p), styleBar (p), tabs (p), boardView (p), allView (p), mixer (p)
 {
     setLookAndFeel (&lookAndFeel);
     setWantsKeyboardFocus (true);
@@ -3680,6 +3705,12 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     deskButton.onClick = [this] { mixer.setTall (! proc.mixerTall.load()); };
 
     addChildComponent (hostOverlay);
+    // A unit's bigger view. What it changes shows on the unit underneath; Undo, Redo and Play are on it too,
+    // because it covers the ones along the top.
+    addChildComponent (bigPanel);
+    bigPanel.onEdited = [this] { boardView.repaintAll(); allView.repaintAll(); };
+    bigPanel.onUndo = [this] (bool redo) { stepHistory (redo); };
+    bigPanel.onPlay = [this] { if (! proc.hostPlaying.load()) proc.preview.store (! proc.preview.load()); };
 
     addChildComponent (songPanel);
     addChildComponent (addPanel);
@@ -3715,6 +3746,8 @@ void Nebula2ModulationEditor::configureBoard (BoardView& v)
     v.onAddMenu = [this] { addPanel.open(); };
     v.onAddTypes = [this] (const std::vector<std::string>& types) { addUnits (types); };
     v.onOpenPlugin = [this, &v] (HostedModule& m) { if (v.board != nullptr) hostOverlay.open (m, v.board->name); };
+    v.onExpand = [this] (Board& b, Module& m) { bigPanel.open (b, m); };
+    v.onRebuilt = [this] { bigPanel.check(); };          // a unit was deleted, or Undo took it away: its bigger view closes
     v.onDrawKnob = [this] (Board& b, int uid, int param)
     {
         for (int t = 0; t < (int) proc.rack.boards.size(); ++t)
@@ -3735,6 +3768,7 @@ void Nebula2ModulationEditor::show()
     else { allView.clear(); boardView.setBoard (current()); }
     tabs.repaint(); mixer.repaint(); styleBar.repaint();
     repaint (0, 0, getWidth(), topbarH);
+    bigPanel.check();                // the unit a bigger view is showing may have gone with the change
 }
 
 void Nebula2ModulationEditor::selectTab (int index)
@@ -3918,6 +3952,7 @@ void Nebula2ModulationEditor::timerCallback()
     allView.tick();
     mixer.tick();
     songPanel.tick();
+    bigPanel.tick();
     if (songButton.getToggleState() != proc.rack.song.on.load()) songButton.setToggleState (proc.rack.song.on.load(), juce::dontSendNotification);
     static int shownBpm = 0;
     const int b = (int) std::lround (proc.bpm.load() * 10.0);
@@ -3930,6 +3965,7 @@ bool Nebula2ModulationEditor::keyPressed (const juce::KeyPress& k)
     if (k == juce::KeyPress ('y', juce::ModifierKeys::commandModifier, 0)
         || k == juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) { stepHistory (true); return true; }
     if (k == juce::KeyPress::spaceKey && ! proc.hostPlaying.load()) { proc.preview.store (! proc.preview.load()); return true; }
+    if (k == juce::KeyPress::escapeKey && bigPanel.isOpen()) { bigPanel.close(); return true; }
     if (k == juce::KeyPress::escapeKey && songPanel.isVisible()) { songPanel.setVisible (false); return true; }
     if (k == juce::KeyPress::escapeKey && addPanel.isVisible()) { addPanel.setVisible (false); return true; }
     if (k == juce::KeyPress::escapeKey && hostOverlay.isOpen()) { hostOverlay.close(); return true; }
@@ -4007,5 +4043,6 @@ void Nebula2ModulationEditor::resized()
     addPanel.setBounds (getLocalBounds());
     songPanel.setBounds (getLocalBounds());
     hostOverlay.setBounds (getLocalBounds());
+    bigPanel.setBounds (getLocalBounds());
     if (proc.showAll.load()) allView.layout(); else boardView.fitToContent();
 }

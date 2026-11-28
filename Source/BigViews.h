@@ -176,7 +176,7 @@ public:
     BigSample (Nebula2ModulationProcessor&, Board&, Module&);
     juce::String help() const override;
     void resized() override;
-    void setRegion (float start, float end);        // both 0..1 through the file
+    void setRegion (float from, float to);          // both 0..1 through the file
     float regionStart() const, regionEnd() const;
     void zoomBy (float factor, float around);       // above 1 zooms in; around: the place (0..1 of the file) that stays put
     void showWhole();
@@ -193,7 +193,7 @@ protected:
     void ticked() override;
     uint64_t signature() const override;
 private:
-    void rawRegion (float start, float end);
+    void rawRegion (float from, float to);
     juce::TextButton zoomIn { "Zoom in" }, zoomOut { "Zoom out" }, whole { "Whole file" };
     float v0 = 0.0f, v1 = 1.0f, shownHead = -1.0f;
     int dragEnd = 0;                                // 1 the start, 2 the end

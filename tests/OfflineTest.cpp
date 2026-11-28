@@ -1081,7 +1081,7 @@ int main (int argc, char** argv)
             CHECK (unit (0, "sample") != nullptr && unit (0, "plugin") == nullptr, "Undo goes back to the sample");
             CHECK (alone (0) > 0.02f, "with its file still loaded");
         }
-        if (argc > 3) CHECK (! r.changeToPlugin (0, "Nebula2 Glitch", argv[3]) && unit (0, "plugin") == nullptr && r.problem.contains ("is an effect"), "an effect can't be a tab's sound: nothing changes, and it says why");
+        if (argc > 3) CHECK (! r.changeToPlugin (0, "Nebula2 Glitch", argv[3]) && unit (0, "plugin") == nullptr && r.problem.contains ("is an effect") && r.problem.startsWith ("Nebula2 Glitch") && r.problem.contains ("Plugin slot"), "an effect can't be a tab's sound: nothing changes, and it says why");
         CHECK (! r.changeToPlugin (0, "No Such Plugin Anywhere") && r.problem.contains ("wasn't found"), "a plugin that isn't installed changes nothing, and it says so");
         // to a saved sound
         const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test-change.n2msound");

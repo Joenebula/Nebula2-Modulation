@@ -151,7 +151,7 @@ change it with a preset or another VST or sample. I need a menu I can select fro
 - [x] The pattern, the tab's name, level, pan, mute, solo, output and song sections all stay. Undo brings the old sound back, plugin or sample included
 - [x] A plugin's own presets (v0.1.16): a slot shows a Presets button when the plugin offers a list (Nebula2 Glitch's 8 show up). Tested with Nebula2 Glitch
 - [ ] Plugins that keep their presets in their own browser (Nexus, HALion) won't show a list here: use Open
-- [ ] An effect plugin can't be a tab's sound (it makes none of its own): the menu refuses it quietly. It should say why
+- [x] An effect plugin can't be a tab's sound (it makes none of its own). The menu says why in plain words ("X is an effect, so it can't be a sound on its own...") and how to use it instead. In since v0.1.21; a test now holds the wording in place
 
 ## Joe's Cubase test of v0.1.20 (27 Nov 2026) and what v0.1.21 changed
 

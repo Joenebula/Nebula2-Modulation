@@ -2318,6 +2318,56 @@ int main()
         for (auto* info : allTypes()) for (auto& prm : info->params) if (! prm.choices.empty()) CHECK (! isMixKnob (*info, prm), "a switch is never a fader");
     }
 
+    {
+        // Undo for what a unit holds beyond its knobs (a slot's plugin), and for the master fader
+        struct Holder : Module
+        {
+            static const Info& desc() { static const Info i { "testholder", "Holder", "Utilities", "test only", {}, { { "out", "Out" } }, { { "k1", "Knob", 0, 1, 0.5f, Fmt::Percent } } }; return i; }
+            void process (int n, const Ctx&) override { std::fill (out[0].begin(), out[0].begin() + n, 0.0f); }
+            std::string saveExtra() const override { return held.empty() ? std::string() : held + " " + light; }
+            void loadExtra (const std::string& t) override { ++loads; std::istringstream is (t); held.clear(); light.clear(); is >> held >> light; }
+            void restoreExtra (const std::string& t, bool whole) override
+            {
+                if (whole) { if (t.empty()) { held.clear(); light.clear(); } else loadExtra (t); return; }
+                std::istringstream is (t); std::string h; light.clear(); is >> h >> light;
+            }
+            std::string held, light; int loads = 0;
+        };
+        extraTypes().push_back ({ &Holder::desc(), [] { return std::unique_ptr<Module> (new Holder()); } });
+        Rack rack; rack.prepare (48000);
+        rack.addBoard (makeBoard ("bass", 48000));
+        auto& b = *rack.boards[0];
+        auto* h = dynamic_cast<Holder*> (rack.addModule (b, "testholder", 0, 0));
+        History hist (rack);
+        CHECK (h != nullptr && Rack::extraIn (Rack::boardText (b), h->uid).empty(), "(an empty holder saves nothing extra)");
+        // loading something into it
+        hist.beforeUnit (b, h->uid); h->held = "pluginA"; h->light = "none";
+        hist.discardIfUnchanged();
+        CHECK (hist.canUndo(), "loading a plugin into a slot is a step Undo keeps, though no knob moved");
+        CHECK (Rack::extraIn (Rack::boardText (b), h->uid) == "pluginA none", "(the extra line is found by unit)");
+        // pointing a knob: the knob moves and the target changes
+        hist.beforeUnit (b, h->uid, false); h->light = "cutoff"; h->set ("k1", 0.9f);
+        // emptying it
+        hist.beforeUnit (b, h->uid); h->held.clear(); h->light.clear();
+        const int loadsBefore = h->loads;
+        CHECK (hist.undo() && b.find (h->uid) == h && h->held == "pluginA" && h->light == "cutoff", "Undo brings an emptied slot's plugin back, in the same unit");
+        CHECK (h->loads == loadsBefore + 1, "and loads it once, not twice");
+        CHECK (hist.undo() && h->held == "pluginA" && h->light == "none" && std::abs (h->P (0) - 0.5f) < 1.0e-6f && h->loads == loadsBefore + 1, "Undo of pointing a knob puts the knob and its target back without loading the plugin again");
+        CHECK (hist.undo() && h->held.empty() && ! hist.canUndo(), "Undo of loading a plugin leaves the slot empty");
+        CHECK (hist.redo() && h->held == "pluginA" && h->light == "none", "Redo loads it again");
+        CHECK (hist.redo() && h->light == "cutoff" && std::abs (h->P (0) - 0.9f) < 1.0e-6f, "Redo points the knob again");
+        CHECK (hist.redo() && h->held.empty() && ! hist.canRedo(), "Redo empties it again");
+        hist.clear();
+        // the master fader
+        rack.master.store (0.8f);
+        hist.beforeMaster(); hist.discardIfUnchanged();
+        CHECK (! hist.canUndo(), "a click on the master fader that moves nothing leaves no step");
+        hist.beforeMaster(); rack.master.store (0.3f); hist.discardIfUnchanged();
+        CHECK (hist.canUndo() && hist.undo() && std::abs (rack.master.load() - 0.8f) < 1.0e-6f, "Undo puts the master fader back");
+        CHECK (hist.redo() && std::abs (rack.master.load() - 0.3f) < 1.0e-6f, "and Redo moves it again");
+        extraTypes().pop_back();
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

@@ -1187,18 +1187,20 @@ void HostView::showKnobMenu()
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&knobs), [safe, board] (int r)
     {
         if (safe == nullptr || r < 100000) return;
-        board->willChange();                         // the knob's own position changes, so Undo knows
+        board->unitWillChange (safe->module.uid, false);     // Undo puts the knob and what it pointed at back
         safe->module.assignKnob (r / 100000 - 1, r % 100000 - 1);
-        board->settled();
         board->repaintAll();
     });
 }
+
+// Just before the slot's plugin changes or goes: Undo brings back the one it held, with its settings
+void HostView::willChange() { owner.unitWillChange (module.uid); }
 
 void HostView::loadFile (const juce::String& path)
 {
     const auto found = pluginsInFile (path);
     if (found.empty()) module.status = "That file isn't a VST3 plugin this can load";
-    else module.load (found[0]);
+    else { willChange(); module.load (found[0]); }
     refresh();
 }
 
@@ -1226,10 +1228,10 @@ void HostView::showLoadMenu()
     menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&load), [safe, recent, installed] (int r)
     {
         if (safe == nullptr || r <= 0) return;
-        if (r == 1001) { safe->module.unload(); safe->refresh(); return; }
+        if (r == 1001) { safe->willChange(); safe->module.unload(); safe->refresh(); return; }
         if (r == 1002) { installedPlugins (true); return; }
         if (r >= 2000) { if (r - 2000 < (int) installed.size()) safe->loadFile (installed[(size_t) (r - 2000)].second); return; }
-        if (r < 1000) { safe->module.load (recent[(size_t) (r - 1)]); safe->refresh(); return; }
+        if (r < 1000) { safe->willChange(); safe->module.load (recent[(size_t) (r - 1)]); safe->refresh(); return; }
         juce::File start;
        #if JUCE_WINDOWS
         start = juce::File::getSpecialLocation (juce::File::globalApplicationsDirectory).getChildFile ("Common Files").getChildFile ("VST3");
@@ -1960,6 +1962,7 @@ bool BoardView::findJack (juce::Point<int> at, ModuleComp*& comp, bool& isOut, i
 
 void BoardView::willChange (int removingUid) { if (board != nullptr) proc.history.before (*board, removingUid); }
 void BoardView::settled() { proc.history.discardIfUnchanged(); }
+void BoardView::unitWillChange (int uid, bool whole) { if (board != nullptr) proc.history.beforeUnit (*board, uid, whole); }
 
 void BoardView::beginCable (ModuleComp& comp, bool isOut, int port, juce::Point<int> at)
 {
@@ -2975,7 +2978,7 @@ void MixerStrip::mouseDown (const juce::MouseEvent& e)
 {
     dragChannel = -2; dragPan = false; dragUid = 0; dragParam = -1;
     const auto m = masterArea();
-    if (m.contains (e.getPosition())) { dragChannel = -1; mouseDrag (e); return; }
+    if (m.contains (e.getPosition())) { proc.history.beforeMaster(); dragChannel = -1; mouseDrag (e); return; }   // mouseUp drops the step if it didn't move
     if (e.x >= m.getX() - 10) return;
     if (proc.mixerInside.load())
     {
@@ -3046,7 +3049,7 @@ void MixerStrip::mouseUp (const juce::MouseEvent&) { proc.history.discardIfUncha
 
 void MixerStrip::mouseDoubleClick (const juce::MouseEvent& e)
 {
-    if (masterArea().contains (e.getPosition())) { proc.rack.master.store (0.8f); repaint(); return; }
+    if (masterArea().contains (e.getPosition())) { proc.history.beforeMaster(); proc.rack.master.store (0.8f); proc.history.discardIfUnchanged(); repaint(); return; }
     if (proc.mixerInside.load())
     {
         // a double-click puts the knob back where it starts, as it does on the board

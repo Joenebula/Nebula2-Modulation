@@ -29,6 +29,7 @@ public:
     void process (int n, const Ctx&) override;
     std::string saveExtra() const override;
     void loadExtra (const std::string&) override;
+    void restoreExtra (const std::string&, bool whole) override;
 
     // Message thread. Returns an empty string when it worked, otherwise why it didn't.
     // keepKnobs: a project being opened keeps what its knobs pointed at; loading a different plugin by hand clears them.

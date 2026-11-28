@@ -230,6 +230,9 @@ struct Module
     // Anything more than knobs and patterns that a module needs saved (one line of text, no line breaks)
     virtual std::string saveExtra() const { return {}; }
     virtual void loadExtra (const std::string&) {}
+    // Undo and redo: put the extra state back to this (empty text = it had none). whole = false: only the part that
+    // can be put back without starting again (see History::beforeUnit)
+    virtual void restoreExtra (const std::string& text, bool whole) { if (whole) loadExtra (text); }
 
     void init (const Info& i, int id)
     {
@@ -1281,6 +1284,28 @@ struct Rack
         std::ostringstream o;
         writeBoard (o, b, wantExtra);
         return o.str();
+    }
+
+    // One unit's extra state as written in a piece of saved board text (its "x" line), or empty
+    static std::string extraIn (const std::string& text, int uid)
+    {
+        const std::string tag = "x " + std::to_string (uid) + " ";
+        std::istringstream in (text);
+        std::string line;
+        while (std::getline (in, line))
+            if (line.compare (0, tag.size(), tag) == 0) return line.substr (tag.size());
+        return {};
+    }
+
+    // The same text without that line
+    static std::string withoutExtra (const std::string& text, int uid)
+    {
+        const std::string tag = "x " + std::to_string (uid) + " ";
+        std::istringstream in (text);
+        std::string line, out;
+        while (std::getline (in, line))
+            if (line.compare (0, tag.size(), tag) != 0) out += line + "\n";
+        return out;
     }
 
     // The module ids named in a piece of saved board text

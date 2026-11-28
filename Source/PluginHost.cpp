@@ -165,6 +165,7 @@ juce::String HostedModule::load (const juce::PluginDescription& d, const juce::M
 
 void HostedModule::unload()
 {
+    description = {}; status.clear();                 // an emptied slot is saved as empty, and stays empty when the project opens
     if (plugin == nullptr) return;
     tellClosing (this);
     std::unique_ptr<juce::AudioPluginInstance> gone;
@@ -361,6 +362,30 @@ void HostedModule::loadExtra (const std::string& text)
     description = d;
     status = "Loading " + d.name;
     juce::MessageManager::callAsync ([this, d, state, flag = alive] { if (*flag) load (d, &state, true); });
+}
+
+// Undo and redo. whole: the slot goes back to the plugin (and that plugin's settings) it held, or to empty.
+// Otherwise only what the four knobs point at goes back; the plugin itself is left running as it is.
+void HostedModule::restoreExtra (const std::string& text, bool whole)
+{
+    if (whole)
+    {
+        if (text.empty()) unload(); else loadExtra (text);
+        return;
+    }
+    const auto parts = juce::StringArray::fromTokens (juce::String (text), " ", "");
+    juce::StringArray list;
+    juce::MemoryOutputStream ids;
+    if (parts.size() > 2 && juce::Base64::convertFromBase64 (ids, parts[2])) list = juce::StringArray::fromLines (ids.toString());
+    for (int k = 0; k < kKnobs; ++k)
+    {
+        const auto id = k < list.size() ? list[k] : juce::String();
+        int found = -1;
+        if (id.isNotEmpty()) for (int i = 0; i < numControls() && found < 0; ++i) if (controlId (i) == id) found = i;
+        knobIds.set (k, found >= 0 ? id : juce::String());
+        Hold h (guard);
+        target[k].store (found); sent[k] = -1;        // nothing is sent until the knob next moves, so the control doesn't jump
+    }
 }
 
 void registerPluginSlot()

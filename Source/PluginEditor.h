@@ -137,6 +137,7 @@ public:
     void resized() override;
     void loadFile (const juce::String& path);
 private:
+    void willChange();
     void showLoadMenu();
     void showKnobMenu();
     void showPresetMenu();
@@ -229,6 +230,7 @@ public:
     bool couldTake (int uid, bool jackIsOut) const { return drag.active && jackIsOut != drag.fromOut && uid != drag.uid; }
     void willChange (int removingUid = 0);   // call just before changing this board, so Undo can put it back
     void settled();              // call when a gesture ends: drops the undo step if nothing changed
+    void unitWillChange (int uid, bool whole = true);   // just before a plugin slot's plugin (or, whole = false, what its knobs point at) changes
     void repaintAll();           // after a linked knob or pattern changed others on this board
     void fitToContent();
     void paint (juce::Graphics&) override;

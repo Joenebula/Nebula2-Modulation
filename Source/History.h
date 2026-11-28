@@ -43,6 +43,23 @@ public:
         push (std::move (e));
     }
 
+    // Before changing what a unit holds beyond its knobs and pattern: the plugin in a slot, or which of the plugin's
+    // controls the slot's knobs point at. whole = false: only the light part changes (the knobs' targets), so Undo
+    // puts that back without loading the plugin again, and whatever was changed in the plugin's own window stays.
+    void beforeUnit (const Board& board, int uid, bool whole = true)
+    {
+        for (size_t i = 0; i < rack.boards.size(); ++i)
+            if (rack.boards[i].get() == &board)
+            {
+                Entry e; e.kind = Kind::Unit; e.a = uid; e.b = whole ? 1 : 0;
+                const auto wantExtra = std::function<bool (int)> ([uid] (int id) { return id == uid; });
+                e.boards.push_back ({ (int) i, Rack::boardText (board, &wantExtra) });
+                push (std::move (e));
+            }
+    }
+    // Before moving the master fader
+    void beforeMaster() { Entry e; e.kind = Kind::Master; e.level = rack.master.load(); push (std::move (e)); }
+
     // Before changing the chords or the key
     void beforeChords() { push (chordsNow()); }
     // Before changing the song page: on or off, its sections, which tabs play where
@@ -66,6 +83,7 @@ public:
     // Drops the last "before" if nothing came of it: a knob clicked but not turned, a cable picked up and put back
     void discardIfUnchanged()
     {
+        if (! undos.empty() && undos.back().kind == Kind::Master && undos.back().level == rack.master.load()) { undos.pop_back(); return; }
         if (undos.empty() || undos.back().kind != Kind::Boards) return;
         const auto none = std::function<bool (int)> ([] (int) { return false; });
         for (auto& p : undos.back().boards)
@@ -85,7 +103,7 @@ public:
     int showTab = -1;          // after an undo or redo: the tab it happened on, for the screen to show
 
 private:
-    enum class Kind { Boards, Chords, TabAdded, TabRemoved, TabMoved, Song, Whole };
+    enum class Kind { Boards, Chords, TabAdded, TabRemoved, TabMoved, Song, Whole, Unit, Master };
     struct Entry
     {
         Kind kind = Kind::Boards;
@@ -93,6 +111,7 @@ private:
         int a = 0, b = 0;
         std::string text;
         Harmony harmony; int root = 0, scale = 0;
+        float level = 0;
         bool songOn = false; int sections = 8, bars = 4; std::vector<uint32_t> plays;
     };
 
@@ -134,6 +153,24 @@ private:
                 if (! e.boards.empty()) showTab = e.boards[0].first;
                 break;
             }
+            case Kind::Unit:
+            {
+                back.kind = Kind::Unit; back.a = e.a; back.b = e.b;
+                if (e.boards.empty() || e.boards[0].first < 0 || e.boards[0].first >= (int) rack.boards.size()) break;
+                const int uid = e.a;
+                const auto& p = e.boards[0];
+                const auto wantExtra = std::function<bool (int)> ([uid] (int id) { return id == uid; });
+                back.boards.push_back ({ p.first, Rack::boardText (*rack.boards[(size_t) p.first], &wantExtra) });
+                // the unit itself stays where it is (so its plugin isn't loaded twice); only its extra state is put back
+                rack.applyBoard (p.first, Rack::withoutExtra (p.second, uid));
+                if (auto* m = rack.boards[(size_t) p.first]->find (uid)) m->restoreExtra (Rack::extraIn (p.second, uid), e.b != 0);
+                showTab = p.first;
+                break;
+            }
+            case Kind::Master:
+                back.kind = Kind::Master; back.level = rack.master.load();
+                rack.master.store (e.level);
+                break;
             case Kind::Chords:
                 back = chordsNow();
                 rack.harmony = e.harmony;

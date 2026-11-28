@@ -702,6 +702,47 @@ int main (int argc, char** argv)
             auto* older = dynamic_cast<n2m::HostedModule*> (r.rack.addModule (b, "plugin", 0, 0));
             older->loadExtra ((extra[0] + " " + extra[1]).toStdString());
             CHECK (older->hasPlugin() && older->knobTarget (0) == -1, "a slot saved before knobs existed still loads");
+            {
+                // Undo: pointing a knob, emptying the slot and loading a plugin are each a step
+                r.history.clear();
+                slot->assignKnob (0, -1); slot->set ("k1", 0.6f);
+                slot->instance()->getParameters()[ctl]->setValue (0.6f);
+                r.history.beforeUnit (b, slot->uid, false);
+                slot->assignKnob (1, ctl);
+                CHECK (slot->knobTarget (1) == ctl && r.history.canUndo(), "pointing a knob at a control is a step for Undo");
+                slot->instance()->getParameters()[ctl]->setValue (0.33f);          // meanwhile, a change in the plugin's own window
+                auto* inside = slot->instance();
+                r.history.undo();
+                CHECK (slot->knobTarget (1) == -1 && slot->instance() == inside, "Undo points the knob at nothing again, without loading the plugin again");
+                CHECK (std::abs (value() - 0.33f) < 0.02f, "and what was changed in the plugin's own window stays");
+                r.history.redo();
+                CHECK (slot->knobTarget (1) == ctl && slot->instance() == inside, "Redo points it again");
+                run (r, song, 0.2);
+                CHECK (std::abs (value() - 0.33f) < 0.02f, "and the control doesn't jump");
+                r.history.clear();
+                // emptying the slot
+                slot->instance()->getParameters()[ctl]->setValue (0.71f);
+                const auto name = slot->pluginName();
+                r.history.beforeUnit (b, slot->uid);
+                slot->unload();
+                CHECK (! slot->hasPlugin() && slot->saveExtra().empty(), "an emptied slot is saved as empty");
+                r.history.undo();
+                CHECK (b.find (slot->uid) == slot && slot->hasPlugin() && slot->pluginName() == name, "Undo brings the emptied slot's plugin back");
+                CHECK (std::abs (value() - 0.71f) < 0.02f && slot->knobTarget (1) == ctl, "with its settings and its knobs");
+                song.playing = true; song.ppq = 0;
+                CHECK (run (r, song, 1.0) > 0.001f, "and it plays again");
+                song.playing = false; run (r, song, 3.0);
+                r.history.redo();
+                CHECK (! slot->hasPlugin(), "Redo empties it again");
+                // loading into an empty slot
+                r.history.beforeUnit (b, slot->uid);
+                slot->load (found[0]);
+                r.history.undo();
+                CHECK (! slot->hasPlugin(), "Undo of loading a plugin leaves the slot empty");
+                r.history.redo();
+                CHECK (slot->hasPlugin() && slot->pluginName() == name, "and Redo loads it again");
+                r.history.clear();
+            }
             // loading a different plugin by hand clears the knobs; so does emptying the slot
             slot->load (found[0]);
             CHECK (slot->knobTarget (0) == -1, "loading another plugin into the slot clears its knobs");

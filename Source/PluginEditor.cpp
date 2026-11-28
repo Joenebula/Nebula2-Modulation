@@ -2100,9 +2100,12 @@ void BoardView::tick()
     if (flashUid != 0 && juce::Time::getMillisecondCounter() > flashUntil) { flashUid = 0; repaint(); }
     // knobs the timeline is moving are redrawn as they turn
     const bool moving = board != nullptr && ! board->autos.empty() && proc.isPlaying();
+    bool linkedMoving = false;
+    if (board != nullptr && proc.isPlaying()) for (auto& o : proc.rack.boards) linkedMoving = linkedMoving || ! o->autos.empty();
     for (auto* c : comps)
     {
         if (moving && c->anyOnTimeline()) c->repaint();
+        else if (linkedMoving) { bool linked = false; for (int g : c->module.paramLink) linked = linked || g > 0; if (linked) c->repaint(); }      // knobs linked to one with a line turn with it
         if (c->seq != nullptr) c->seq->tick();
         if (c->chords != nullptr) c->chords->tick();
         if (c->sample != nullptr) c->sample->tick();

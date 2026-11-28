@@ -2597,6 +2597,62 @@ int main()
         }
     }
 
+    {
+        // A linked knob moved by its line on the timeline takes the rest of its group with it
+        // mode 0: nothing. 1: both basses' cutoffs linked, a line on the first. 2: not linked, the same line on each.
+        struct Made { std::unique_ptr<Rack> rack; Module* f0 = nullptr; Module* f1 = nullptr; int knob = -1; };
+        auto build = [] (int mode)
+        {
+            Made m; m.rack = std::make_unique<Rack>(); m.rack->prepare (48000);
+            m.rack->addBoard (makeBoard ("bass", 48000)); m.rack->addBoard (makeBoard ("bass", 48000));
+            for (int t = 0; t < 2; ++t)
+                for (auto& u : m.rack->boards[(size_t) t]->modules)
+                    if ((t == 0 ? m.f0 : m.f1) == nullptr && u->paramIndex ("cutoff") >= 0) { (t == 0 ? m.f0 : m.f1) = u.get(); m.knob = u->paramIndex ("cutoff"); }
+            auto line = [&m] (int t, Module* f)
+            {
+                auto& b = *m.rack->boards[(size_t) t];
+                const int lane = m.rack->addAuto (b, f->uid, m.knob);
+                b.autos[(size_t) lane]->move (0, 0.0f, 0.2f); b.autos[(size_t) lane]->move (1, 4.0f, 0.9f);
+            };
+            if (mode == 1) { m.rack->linkParam (*m.f0, m.knob, 1); m.rack->linkParam (*m.f1, m.knob, 1); line (0, m.f0); }
+            if (mode == 2) { line (0, m.f0); line (1, m.f1); }
+            return m;
+        };
+        auto none = build (0), linked = build (1), each = build (2);
+        const float start = linked.f1->P (linked.knob);
+        const auto yn = render (*none.rack, 3), yl = render (*linked.rack, 3), ye = render (*each.rack, 3);
+        CHECK (linked.f1->P (linked.knob) != start && linked.f1->P (linked.knob) == linked.f0->P (linked.knob), "a linked knob moved by its line on the timeline moves the knob linked to it");
+        CHECK (yl.l == ye.l && yl.r == ye.r && yl.l != yn.l, "and it sounds exactly as if that knob had the same line itself");
+        for (int block : { 64, 100, 1000 })
+        {
+            auto lb = build (1);
+            const auto yb = render (*lb.rack, 3, true, block);
+            CHECK (yb.l == yl.l, "linked knobs following a line don't depend on the block size");
+        }
+        // a knob with a line of its own keeps to it
+        auto own = build (1);
+        {
+            auto& b = *own.rack->boards[1];
+            const int lane = own.rack->addAuto (b, own.f1->uid, own.knob);
+            b.autos[(size_t) lane]->move (0, 0.0f, 0.5f); b.autos[(size_t) lane]->move (1, 4.0f, 0.5f);
+            render (*own.rack, 3);
+            CHECK (std::abs (paramToNorm (own.f1->info->params[(size_t) own.knob], own.f1->P (own.knob)) - 0.5f) < 1.0e-4f, "a linked knob with a line of its own keeps to its own line");
+        }
+        // stopped, nothing moves
+        auto still = build (1);
+        const float was = still.f1->P (still.knob);
+        render (*still.rack, 1, false);
+        CHECK (still.f1->P (still.knob) == was, "with the song stopped the line moves nothing");
+        // a frozen sound's knobs are left alone, and a sound whose knob follows another tab's line can't be frozen
+        auto cold = build (1);
+        CHECK (cold.rack->cantFreeze (*cold.rack->boards[1]) != nullptr && cold.rack->cantFreeze (*cold.rack->boards[0]) == nullptr, "a sound whose knob follows another tab's line can't be frozen; the one with the line can");
+        cold.rack->boards[0]->frozen.store (true);
+        CHECK (cold.rack->makeIce (0, 124.0), "(the sound with the line freezes)");
+        const float coldWas = cold.f0->P (cold.knob);
+        render (*cold.rack, 3);
+        CHECK (cold.f0->P (cold.knob) == coldWas && cold.f1->P (cold.knob) != start, "frozen, its own knob stays put but the knob linked to it on the other tab still follows the line");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

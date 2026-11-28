@@ -848,6 +848,26 @@ struct Rack
                         m->params[k].store (paramFromNorm (m->info->params[k], n));
     }
 
+    // A linked knob moved by its line on the timeline: the other knobs in its group go to the same position, at the
+    // same point of the song. Audio thread, inside the lock the audio already holds, on the same fixed grid as the
+    // lines themselves. A knob with a line of its own keeps to its own line, and a frozen sound's knobs are left alone.
+    void pushLine (const Board& from, const AutoLane& a, double barPos)
+    {
+        auto* src = from.find (a.uid);
+        if (src == nullptr || a.param < 0 || a.param >= (int) src->paramLink.size() || a.count.load (std::memory_order_relaxed) <= 0) return;
+        const int group = src->paramLink[(size_t) a.param];
+        if (group <= 0) return;
+        const float n = a.at (barPos);
+        for (auto& b : boards)
+        {
+            if (b->iced()) continue;
+            for (auto& m : b->modules)
+                for (size_t k = 0; k < m->paramLink.size(); ++k)
+                    if (m->paramLink[k] == group && ! (m.get() == src && (int) k == a.param) && b->autoIndex (m->uid, (int) k) < 0)
+                        m->params[k].store (paramFromNorm (m->info->params[k], n));
+        }
+    }
+
     // Copies what two linked sequencers share from one to the other
     static void copyPattern (const Module& from, Module& to)
     {
@@ -997,6 +1017,14 @@ struct Rack
         // moves on never depends on the host's block size.
         bool anyAuto = false;
         if (playing) for (auto& b : boards) anyAuto = anyAuto || (! b->autos.empty() && ! b->iced());      // a frozen sound's knob lines are in its kept audio
+        // A knob with a line that is also linked takes the rest of its group along (see pushLine)
+        bool anyLinkedLine = false;
+        if (playing)
+            for (auto& b : boards)
+                for (auto& a : b->autos)
+                    if (auto* m = b->find (a->uid))
+                        anyLinkedLine = anyLinkedLine || (a->param >= 0 && a->param < (int) m->paramLink.size() && m->paramLink[(size_t) a->param] > 0);
+        anyAuto = anyAuto || anyLinkedLine;
         const double songBars = (double) (nSec * secBars);
         auto gridAt = [] (double q) { return (long) std::floor (q * 128.0 + 1.0e-9); };
         double barNow = -1.0;
@@ -1027,6 +1055,7 @@ struct Rack
                 len = k;
                 const double at = std::fmod (std::max (0.0, (double) cellNow / 128.0) / 4.0, songBars);
                 for (auto& b : boards) if (! b->autos.empty() && ! b->iced()) b->applyAutos (at);
+                if (anyLinkedLine) for (auto& b : boards) for (auto& a : b->autos) pushLine (*b, *a, at);
             }
             for (int k = 0; k < 2; ++k) { std::fill (buses.l[k].begin(), buses.l[k].begin() + len, 0.0f); std::fill (buses.r[k].begin(), buses.r[k].begin() + len, 0.0f); }
             // Tabs that play a send bus run after the tabs that feed it, wherever they sit in the tab row
@@ -1521,6 +1550,16 @@ struct Rack
             if (t == "keys") return "it is played from the keyboard (it has a MIDI keyboard unit).";
             if (m->patternLink > 0 && m->patternShare == 4) return "one of its sequencers follows a sequencer in its link group.";
         }
+        // a knob moved from another tab's timeline line, through a link, would stand still in the kept audio
+        for (auto& m : b.modules)
+            for (int g : m->paramLink)
+                if (g > 0)
+                    for (auto& o : boards)
+                        if (o.get() != &b)
+                            for (auto& a : o->autos)
+                                if (auto* s = o->find (a->uid))
+                                    if (a->param >= 0 && a->param < (int) s->paramLink.size() && s->paramLink[(size_t) a->param] == g)
+                                        return "one of its knobs is linked to a knob on another tab that has a line on the timeline.";
         if (freezeBars (b) > 64) return "the song is longer than 64 bars before it comes round again.";
         return nullptr;
     }

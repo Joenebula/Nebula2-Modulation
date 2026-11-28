@@ -116,7 +116,8 @@ Joe: "lock a bass to a string and change one, the other changes also", for anyth
 - [x] Knob links: right-click any knob to put it in a group (A to H). Knobs in a group move together, by knob position
 - [x] Joining a group takes the group's pattern or position; links save with the project
 - [x] Follow link (v0.1.4): a note sequencer keeps its own pattern and moves, in key, to match the group's leader (the first sequencer in the group that isn't following). This is what Joe meant by locking; a sequencer joining a group now follows by default
-- [ ] A linked knob moved by a cable (not by hand) doesn't move the others
+- [x] A linked knob moved by its line on the timeline now moves the others in its group, at the same point of the song (built, not released yet). A knob with a line of its own keeps to its own line
+- [ ] A linked knob "moved by a cable" still doesn't move the others: a cable doesn't turn the knob, it adds to it inside that one unit, so there is nothing to pass on. The way to do it today is to cable the same mover into each unit
 - [ ] Offsets between linked things (the same line a third up, a knob that moves half as far)
 
 ## Separate outputs (done, v0.1.5)

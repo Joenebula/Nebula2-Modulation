@@ -193,20 +193,24 @@ Joe: "can we make an option to view full plugin screen so I can see more of the 
 - [x] Both together leave only the top bar and the tabs above the board. Both are saved with the project
 - [ ] **Joe to test in Cubase**: that the window really grows there, and to the right monitor. Here there is no screen, so the tests use a stand-in size
 
-## Next: the Notes and rhythm units, from Joe's design (28 Nov 2026)
+## The Notes and rhythm units, from Joe's design (done, v0.1.25)
 
-Joe sent a picture of the Notes and rhythm units redrawn and asked for it to go on the plan. Not started. What it shows:
+Joe sent a picture of the Notes and rhythm units redrawn and asked for it to be built, for those units only (every
+other unit stays a tall panel).
 
-- [ ] **Units as wide rack rows on rails**, several to a row, rather than tall panels: the name centred over a green line, screws in the corners, empty rail showing where a row isn't full
-- [ ] **Jacks grouped**: inputs plain along the bottom left, outputs together on a raised pad at the bottom right
-- [ ] **Drum sequencer**: bar buttons (1 bar, 2, 4, 8) and the pattern idea as a drop-down in the unit's top line, Random beside it; a row of velocity bars under the steps, one per hit; DRAG MIDI at the bottom left
-- [ ] **Note sequencer**: the same top line; the notes drawn piano-roll style on a grid, with the playing step shaded
-- [ ] **MIDI keyboard**: a picture of a keyboard that lights the keys being held
-- [ ] **Arpeggiator**: a small screen drawing the order the notes will play in, with the pattern name and rate on it; Rate and Pattern as drop-downs
-- [ ] **Chord generator**: the chord tiles, each with its length, above a keyboard that lights the notes of the chord playing; Mood and Rhythm as drop-downs, Generate, More, DRAG MIDI
-- [ ] **Euclidean rhythm**: a ring showing the hits round the bar with "5 / 16" in the middle; an Accent knob (new: we have Steps, Hits and Turn today)
-- [ ] **Ratchet** and **Swing**: a small screen with a row of dots going in and the row coming out, so the effect can be seen
-- To settle with Joe before building: is this one long scrolling rack for the whole sound, or does it replace the panels only in the Notes and rhythm heading; and whether the other headings get the same treatment
+- [x] **Wide panels** for the eight units (drum sequencer, note sequencer, MIDI keyboard, chord generator, arpeggiator, Euclidean rhythm, ratchet, swing): name centred over a line, screws, screen on the left, knobs and drop-downs to its right, inputs at the bottom left, outputs together on a raised pad at the bottom right. Still the same height as every other unit, so Tidy lines everything up
+- [x] **Drum sequencer**: bar buttons (1 bar, 2, 4, 8), the pattern idea as a drop-down (it reads "Your own" after an edit), Random; a mark per bar to move between bars (or click the chosen length again); velocity bars under the steps, tall for an accent, click to toggle; DRAG MIDI at the bottom left
+- [x] **Note sequencer**: the same top line; notes drawn piano-roll style with the playing step shaded; click or drag to set a note, click a note to remove it
+- [x] **MIDI keyboard**: a two-octave keyboard that lights the keys being held
+- [x] **Arpeggiator**: a screen drawing the order the notes play in, with the pattern and rate on it; Rate and Pattern as drop-downs
+- [x] **Chord generator**: tiles with the chord's name over its length, above a keyboard that lights the notes of the chord playing; Mood and Rhythm drop-downs, Generate, More, DRAG MIDI
+- [x] **Euclidean rhythm**: a ring with the hits lit, the loud ones ringed, the playing step marked, and "5 / 16" in the middle
+- [x] **Ratchet** and **Swing**: a row of dots going in and the row coming out
+- Different from the picture, for Joe to decide: the panels are taller in proportion (they keep the common height); no rack rails; the line under the name is the sound's colour, not always green; kept because they do a job today: the note names under the note grid, the chord unit's song length row and Octave knob, and LINK beside DRAG MIDI
+- Not a new knob: the picture's **Accent** on the Euclidean rhythm was already there (every Nth step is loud; default 4). Its sound is unchanged. If Joe wants "N of the hits, spread evenly" instead, that is a new knob with a new id, so old projects stay as they are
+- [ ] Boards are wider now: a bass's sequencer is about 640 across and a chord unit about 830. Older projects open with units overlapping until Tidy is pressed
+- [ ] **Joe to test in Cubase**: clicking the bar buttons, velocity bars and drop-downs with a real mouse; the keyboard lighting from a real MIDI keyboard
+- Fixed on the way (v0.1.25): a delay line could read one sample past its end when the position rounded exactly onto it
 
 ## Units that would gain from a bigger view (ideas, not started)
 

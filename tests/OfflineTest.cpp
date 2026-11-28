@@ -345,6 +345,138 @@ int main (int argc, char** argv)
             ed->selectTab (0);
         }
 
+        // The wide Notes and rhythm units: what their screens' clicks do, done through the same functions
+        {
+            ed->selectTab (0);
+            n2m::Module* ds = nullptr;
+            for (auto& m : r.rack.boards[0]->modules) if (std::string (m->info->type) == "drumseq") ds = m.get();
+            auto seqOf = [&view] (n2m::Module* m) { auto* c = view.compFor (m->uid); return c != nullptr ? c->seq.get() : nullptr; };
+            CHECK (ds != nullptr && seqOf (ds) != nullptr, "the kick's drum sequencer is on screen");
+            if (ds != nullptr && seqOf (ds) != nullptr)
+            {
+                const int bars = ds->paramIndex ("bars");
+                auto* c = view.compFor (ds->uid);
+                CHECK (c->getWidth() == n2m::lay::width (*ds->info) && c->getHeight() == n2m::lay::panelH && c->getWidth() > c->getHeight(), "a Notes and rhythm unit is a wide panel of the usual height");
+                CHECK (c->jackCentre (true, 0).x > c->getWidth() / 2 && c->jackCentre (true, 0).y > n2m::lay::wideJacksY && c->midiArea().getX() < c->getWidth() / 2 && c->midiArea().getY() > n2m::lay::wideJacksY, "outputs at the bottom right, DRAG MIDI at the bottom left");
+                // the idea drop-down names the pattern, and choosing another changes it
+                n2m::setDrum (*ds, n2m::drumIdeas ("kick")[0].pat);
+                CHECK (seqOf (ds)->ideaName() == "Four on the floor", "the idea drop-down shows the idea's name");
+                seqOf (ds)->chooseIdea (3);
+                CHECK (seqOf (ds)->ideaName() == juce::String (n2m::drumIdeas ("kick")[3].name) && ds->data[3].load() == 1.0f, "choosing an idea from the drop-down sets the pattern");
+                ed->stepHistory (false);
+                CHECK (seqOf (ds)->ideaName() == "Four on the floor", "and Undo puts the old one back");
+                // velocity bars: a click turns a hit into an accent and back; an empty step stays empty
+                CHECK (ds->data[4].load() == 1.0f && ds->data[1].load() == 0.0f, "(the fifth step is a plain hit, the second is empty)");
+                seqOf (ds)->toggleAccentAt (4);
+                CHECK (ds->data[4].load() == 2.0f, "a click on a hit's velocity bar makes it an accent");
+                ed->stepHistory (false);
+                CHECK (ds->data[4].load() == 1.0f, "Undo takes the accent away");
+                seqOf (ds)->toggleAccentAt (4); seqOf (ds)->toggleAccentAt (4);
+                CHECK (ds->data[4].load() == 1.0f, "a second click makes it a plain hit again");
+                seqOf (ds)->toggleAccentAt (1);
+                CHECK (ds->data[1].load() == 0.0f, "a step with no hit has no bar to click");
+                seqOf (ds)->toggleAccentAt (0);
+                CHECK (seqOf (ds)->ideaName() == "Your own", "once edited, the pattern is no longer called by the idea's name");
+                seqOf (ds)->toggleAccentAt (0);
+                // bar buttons: how long the pattern is, and which bar is on show
+                seqOf (ds)->setBars (2);
+                CHECK (ds->P (bars) == 2.0f, "the 4 button makes the pattern four bars long");
+                seqOf (ds)->showPage (3);
+                CHECK (seqOf (ds)->shownPage() == 3, "any of its bars can be put on show");
+                seqOf (ds)->toggleAccentAt (3 * n2m::kSteps + 4);
+                CHECK (ds->data[(size_t) (3 * n2m::kSteps + 4)].load() == 2.0f, "and edited");
+                seqOf (ds)->toggleAccentAt (3 * n2m::kSteps + 4);
+                seqOf (ds)->setBars (0);
+                CHECK (ds->P (bars) == 0.0f && seqOf (ds)->shownPage() == 0, "back to one bar, the first bar is on show again");
+                ed->stepHistory (false);
+                CHECK (ds->P (bars) == 2.0f, "Undo brings the length back");
+                seqOf (ds)->setBars (0);
+                // a real click, to be sure the buttons are where the functions say
+                auto click = [&] (juce::Point<int> at)
+                {
+                    auto* sv = seqOf (ds);
+                    const auto ev = juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys::leftButtonModifier, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, sv, sv, juce::Time::getCurrentTime(), at.toFloat(), juce::Time::getCurrentTime(), 1, false);
+                    sv->mouseDown (ev);
+                };
+                click (seqOf (ds)->barButton (1).getCentre());
+                CHECK (ds->P (bars) == 1.0f, "clicking the 2 button gives two bars");
+                click (seqOf (ds)->barButton (1).getCentre());
+                CHECK (ds->P (bars) == 1.0f && seqOf (ds)->shownPage() == 1, "clicking it again shows the next bar");
+                click (seqOf (ds)->pageMark (0).getCentre());
+                CHECK (seqOf (ds)->shownPage() == 0, "and a bar's mark shows that bar");
+                click (seqOf (ds)->barButton (0).getCentre());
+                click ({ 4 * n2m::lay::stepW + 8, seqOf (ds)->velRow().getCentreY() });
+                CHECK (ds->data[4].load() == 2.0f, "a click on the fifth velocity bar accents the fifth step");
+                click ({ 4 * n2m::lay::stepW + 8, seqOf (ds)->velRow().getCentreY() });
+                click ({ 1 * n2m::lay::stepW + 8, seqOf (ds)->stepRow().getCentreY() });
+                CHECK (ds->data[1].load() == 1.0f, "a click on a step still puts a hit there");
+                click ({ 1 * n2m::lay::stepW + 8, seqOf (ds)->stepRow().getCentreY() }); click ({ 1 * n2m::lay::stepW + 8, seqOf (ds)->stepRow().getCentreY() });
+                CHECK (ds->data[1].load() == 0.0f, "then an accent, then nothing, as before");
+                n2m::setDrum (*ds, n2m::drumIdeas ("kick")[0].pat);
+            }
+            // the note sequencer: a click in the grid sets the step's note, a click on the note takes it away
+            ed->selectTab (3);
+            n2m::Module* ns = nullptr;
+            for (auto& m : r.rack.boards[3]->modules) if (m->info->seq == n2m::Seq::Note) ns = m.get();
+            CHECK (ns != nullptr && seqOf (ns) != nullptr, "the bass's note sequencer is on screen");
+            if (ns != nullptr && seqOf (ns) != nullptr)
+            {
+                auto* sv = seqOf (ns);
+                auto click = [&] (juce::Point<int> at)
+                {
+                    const auto ev = juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys::leftButtonModifier, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, sv, sv, juce::Time::getCurrentTime(), at.toFloat(), juce::Time::getCurrentTime(), 1, false);
+                    sv->mouseDown (ev);
+                };
+                const float was = ns->data[0].load(), wasDeg = ns->data[(size_t) n2m::kMaxSteps].load();
+                const juce::Point<int> top (8, 36 + 3);
+                click (top);
+                CHECK (ns->data[0].load() == 1.0f && ns->data[(size_t) n2m::kMaxSteps].load() == 14.0f, "a click at the top of the grid puts the step's note at the top");
+                click (top);
+                CHECK (ns->data[0].load() == 0.0f, "a click on the note takes it away");
+                click ({ 8, sv->nameRow().getCentreY() });
+                CHECK (ns->data[0].load() == 1.0f, "a click on its name brings it back");
+                ns->data[0].store (was); ns->data[(size_t) n2m::kMaxSteps].store (wasDeg);
+                CHECK (view.compFor (ns->uid)->linkArea().getY() > n2m::lay::wideJacksY && ! view.compFor (ns->uid)->linkArea().intersects (view.compFor (ns->uid)->midiArea()), "its Link label sits beside DRAG MIDI");
+            }
+            // the chord unit: the keyboard lights the notes of a chord, and only the tiles and buttons take clicks
+            ed->selectTab (4);
+            for (auto& m : r.rack.boards[4]->modules)
+                if (auto* c = view.compFor (m->uid))
+                    if (c->chords != nullptr)
+                    {
+                        const auto lit = c->chords->litNotes();
+                        CHECK (lit.size() == 5, "the chord keyboard lights the bass note and four notes of a chord");
+                        CHECK (c->chords->hitTest (n2m::ChordView::tile (0).getCentreX(), n2m::ChordView::tile (0).getCentreY()), "a chord tile takes clicks");
+                        CHECK (! c->chords->hitTest (c->chords->keyboardArea().getCentreX(), c->chords->keyboardArea().getCentreY()), "the keyboard is only a picture: the panel can be picked up by it");
+                        const auto ma = c->midiArea() - c->chords->getPosition();
+                        CHECK (! ma.isEmpty() && ! c->chords->hitTest (ma.getCentreX(), ma.getCentreY()), "DRAG MIDI is not covered by the chord screen");
+                        // the longest song there can be: 32 chords, four rows of tiles
+                        const auto kept = r.rack.harmony;
+                        r.rack.harmony.lenBars = 32; r.rack.harmony.chordBars = 1;
+                        r.rack.generateChords (r.rack.harmony.seed);
+                        CHECK (r.rack.harmony.names.size() == 32, "the test song has 32 chords");
+                        CHECK (! n2m::ChordView::tile (31).intersects (c->chords->keyboardArea()) && c->chords->keyboardArea().getHeight() >= 40, "with every tile row in use there is still room for the keyboard");
+                        r.rack.harmony = kept; r.rack.rebuildChords();
+                    }
+            // the units that only show things each have their screen
+            {
+                auto nb = n2m::makeBoard ("empty", 48000);
+                for (const char* t : { "keys", "arp", "euclid", "ratchet", "swing" }) nb->add (t, 0, 0, 48000);
+                n2m::tidy (*nb);
+                r.rack.addBoard (std::move (nb));
+                const int tab = (int) r.rack.boards.size() - 1;
+                ed->selectTab (tab);
+                int screens = 0;
+                for (auto& m : r.rack.boards[(size_t) tab]->modules) if (auto* c = view.compFor (m->uid)) if (c->screen != nullptr) { ++screens; c->screen->tick(); }
+                CHECK (screens == 5, "the keyboard, arpeggiator, Euclidean rhythm, Ratchet and Swing each have a screen");
+                const auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                CHECK (img.isValid(), "and they draw");
+                ed->selectTab (-1);
+                r.rack.removeBoard (tab);
+            }
+            ed->selectTab (0);
+        }
+
         // Every unit has a picture for the Add units menu
         {
             int made = 0;

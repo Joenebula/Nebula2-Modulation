@@ -27,10 +27,55 @@ void N2MLook::drawButtonBackground (juce::Graphics& g, juce::Button& b, const ju
     else raised (g, r, radiusControl, over);
 }
 
+// The small arrow on a drop-down
+static void chevron (juce::Graphics& g, float cx, float cy, juce::Colour c)
+{
+    juce::Path p;
+    p.startNewSubPath (cx - 4.0f, cy - 2.0f); p.lineTo (cx, cy + 2.0f); p.lineTo (cx + 4.0f, cy - 2.0f);
+    g.setColour (c);
+    g.strokePath (p, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+// A piano keyboard: so many white keys up from a C. "lit" says which notes are down; they get a bar in "mark".
+static void drawKeyboard (juce::Graphics& g, juce::Rectangle<float> r, int lowC, int nWhite, const std::function<bool (int)>& lit, juce::Colour mark)
+{
+    static const int whiteSemis[7] = { 0, 2, 4, 5, 7, 9, 11 };
+    const float kw = r.getWidth() / (float) nWhite;
+    for (int k = 0; k < nWhite; ++k)
+    {
+        const int note = lowC + 12 * (k / 7) + whiteSemis[k % 7];
+        const auto key = juce::Rectangle<float> (r.getX() + (float) k * kw + 0.5f, r.getY(), kw - 1.0f, r.getHeight());
+        const bool on = lit (note);
+        g.setGradientFill (juce::ColourGradient (on ? juce::Colours::white : whiteKeyTop, key.getX(), key.getY(), on ? juce::Colours::white.interpolatedWith (mark, 0.12f) : whiteKeyBottom, key.getX(), key.getBottom(), false));
+        g.fillRoundedRectangle (key, 2.0f);
+        if (on) { g.setColour (mark); g.fillRoundedRectangle (key.getX() + 2.5f, key.getBottom() - 7.0f, key.getWidth() - 5.0f, 3.5f, 1.5f); }
+    }
+    const float bw = kw * 0.6f, bh = r.getHeight() * 0.6f;
+    for (int k = 0; k + 1 < nWhite; ++k)
+    {
+        if (k % 7 == 2 || k % 7 == 6) continue;          // no black key after E or B
+        const int note = lowC + 12 * (k / 7) + whiteSemis[k % 7] + 1;
+        const auto key = juce::Rectangle<float> (r.getX() + (float) (k + 1) * kw - bw * 0.5f, r.getY(), bw, bh);
+        const bool on = lit (note);
+        g.setGradientFill (juce::ColourGradient (blackKeyTop, key.getX(), key.getY(), blackKeyBottom, key.getX(), key.getBottom(), false));
+        g.fillRoundedRectangle (key, 2.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.5f));
+        g.drawRoundedRectangle (key, 2.0f, 1.0f);
+        if (on) { g.setColour (mark); g.fillRoundedRectangle (key.getX() + 2.0f, key.getBottom() - 7.0f, key.getWidth() - 4.0f, 3.5f, 1.5f); }
+    }
+}
+
 void N2MLook::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool, bool)
 {
     g.setFont (controlFont());
     g.setColour (! b.isEnabled() ? n6 : b.getToggleState() ? accent : n8);
+    if (b.getProperties()["dropdown"])
+    {
+        // a drop-down: what is chosen on the left, an arrow on the right
+        g.drawFittedText (b.getButtonText(), 10, 0, b.getWidth() - 32, b.getHeight(), juce::Justification::centredLeft, 1, 0.75f);
+        chevron (g, (float) b.getWidth() - 14.0f, (float) b.getHeight() * 0.5f, n7);
+        return;
+    }
     g.drawText (b.getButtonText(), b.getLocalBounds(), juce::Justification::centred, false);
 }
 
@@ -99,7 +144,8 @@ void ParamCell::paint (juce::Graphics& g)
     const float v = module.P (idx);
     g.setFont (font (8.0f, Weight::Medium, 0.2f));
     g.setColour (n8);
-    g.drawFittedText (juce::String (param.name).toUpperCase(), 0, 0, getWidth(), 11, juce::Justification::centred, 1, 0.6f);
+    const bool drop = dropdown && ! param.choices.empty();       // a drop-down's label starts at its left edge
+    g.drawFittedText (juce::String (param.name).toUpperCase(), drop ? 2 : 0, 0, getWidth() - (drop ? 2 : 0), 11, drop ? juce::Justification::centredLeft : juce::Justification::centred, 1, 0.6f);
 
     // A linked knob wears its group's letter
     if (const int group = module.paramLink[(size_t) idx]; group > 0)
@@ -119,6 +165,17 @@ void ParamCell::paint (juce::Graphics& g)
         g.fillRoundedRectangle (1.0f, 13.0f, 9.0f, 3.0f, 1.5f);
     }
     const float W = (float) getWidth(), H = (float) getHeight();
+    if (! param.choices.empty() && dropdown)
+    {
+        // On a wide panel: a drop-down, level with the knobs beside it
+        const auto r = juce::Rectangle<float> (1.0f, juce::jmax (13.0f, 12.0f + (H - 24.0f) * 0.5f - 11.0f), W - 2.0f, 22.0f);
+        raised (g, r.reduced (0.5f), radiusControl, isMouseOver());
+        g.setFont (controlFont());
+        g.setColour (n8);
+        g.drawFittedText (paramText (param, v), (int) r.getX() + 10, (int) r.getY(), (int) r.getWidth() - 30, (int) r.getHeight(), juce::Justification::centredLeft, 1, 0.75f);
+        chevron (g, r.getRight() - 13.0f, r.getCentreY(), n7);
+        return;
+    }
     if (! param.choices.empty())
     {
         // A switch: a small display showing the choice
@@ -220,7 +277,7 @@ void ParamCell::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhee
 //==============================================================================
 static constexpr int kDegLo = -7, kDegHi = 14;
 
-SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p), board (b), module (m)
+SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : wide (lay::isWide (*m.info)), proc (p), board (b), module (m)
 {
     addAndMakeVisible (ideas); addAndMakeVisible (random);
     ideas.onClick = [this] { showIdeas(); };
@@ -232,10 +289,76 @@ SeqView::SeqView (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p)
         else randomNotes (board.type, proc.nextSeed(), module);
         edited();
     };
-    setSize (lay::seqW, lay::seqHeight (*m.info));
+    if (wide)
+    {
+        // The drum and note sequencers: bar buttons, the idea as a drop-down, Random, then the steps
+        const auto g = lay::geo (*m.info);
+        ideas.getProperties().set ("dropdown", true);
+        setSize (g.screen.w, g.screen.h);
+        refreshIdea();
+    }
+    else setSize (lay::seqW, lay::seqHeight (*m.info));
 }
 
-void SeqView::resized() { ideas.setBounds (0, 0, 58, 20); random.setBounds (62, 0, 66, 20); }
+void SeqView::resized()
+{
+    if (wide) { ideas.setBounds (134, 0, 150, 22); random.setBounds (288, 0, 64, 22); return; }
+    ideas.setBounds (0, 0, 58, 20); random.setBounds (62, 0, 66, 20);
+}
+
+// ---- The wide layout: where things are ----
+juce::Rectangle<int> SeqView::barButton (int k) const { return k == 0 ? juce::Rectangle<int> (0, 0, 44, 22) : juce::Rectangle<int> (46 + (k - 1) * 28, 0, 26, 22); }
+// One thin mark per bar of the pattern, under the top line: the bar on show is lit, the bar playing is yellow
+juce::Rectangle<int> SeqView::pageMark (int bar) const { const int w = lay::wideSeqW / bars(); return { bar * w + 1, 25, w - 2, 7 }; }
+juce::Rectangle<int> SeqView::stepRow() const { return { 0, 36, lay::wideSeqW, 32 }; }
+juce::Rectangle<int> SeqView::velRow() const { return { 0, 76, lay::wideSeqW, getHeight() - 76 - 2 }; }
+juce::Rectangle<int> SeqView::nameRow() const { return { 0, getHeight() - 16, lay::wideSeqW, 14 }; }
+
+void SeqView::setBars (int index)
+{
+    const int k = module.paramIndex ("bars");
+    if (k < 0) return;
+    boardWillChange (*this);
+    module.params[(size_t) k].store ((float) juce::jlimit (0, 3, index));
+    page = juce::jmin (page, bars() - 1);
+    edited();           // (a linked sequencer's length is part of its rhythm, so the others follow)
+}
+
+void SeqView::showPage (int bar) { page = juce::jlimit (0, bars() - 1, bar); repaint(); }
+
+void SeqView::toggleAccentAt (int step)
+{
+    if (module.info->seq != Seq::Drum) return;
+    boardWillChange (*this);
+    if (toggleAccent (module, step)) edited(); else boardSettled (*this);
+}
+
+void SeqView::chooseIdea (int index)
+{
+    const bool drum = module.info->seq == Seq::Drum, value = module.info->seq == Seq::Value;
+    const int count = drum ? (int) drumIdeas (ideaKind()).size() : value ? (int) valueIdeas().size() : (int) noteIdeas (board.type).size();
+    if (index < 0 || index >= count) return;
+    boardWillChange (*this);
+    if (drum) setDrum (module, drumIdeas (ideaKind())[(size_t) index].pat);
+    else if (value) setValues (module, valueIdeas()[(size_t) index].v);
+    else { auto& d = noteIdeas (board.type)[(size_t) index]; setNotes (module, d.gates, d.deg); }
+    edited();
+}
+
+// The idea the pattern is now, by name. Once it has been edited or randomised it is nobody's idea any more.
+juce::String SeqView::ideaName() const
+{
+    if (module.info->seq == Seq::Drum) { const int i = drumIdeaIndex (module, ideaKind()); return i >= 0 ? drumIdeas (ideaKind())[(size_t) i].name : "Your own"; }
+    if (module.info->seq == Seq::Note) { const int i = noteIdeaIndex (module, board.type); return i >= 0 ? noteIdeas (board.type)[(size_t) i].name : "Your own"; }
+    return "Ideas";
+}
+
+void SeqView::refreshIdea()
+{
+    if (! wide) return;
+    const auto name = ideaName();
+    if (ideas.getButtonText() != name) ideas.setButtonText (name);
+}
 
 // Which set of pattern ideas suits this unit: a trance gate has its own, otherwise the tab's kind of sound decides
 std::string SeqView::ideaKind() const { return std::string (module.info->type) == "gate" ? "gate" : board.type; }
@@ -243,14 +366,19 @@ std::string SeqView::ideaKind() const { return std::string (module.info->type) =
 void SeqView::edited()
 {
     repaint();
+    refreshIdea();
     if (module.patternLink <= 0) return;
     proc.rack.pushPattern (module);
     if (auto* view = findParentComponentOfClass<BoardView>()) view->repaintAll();
 }
 
-juce::Rectangle<int> SeqView::grid() const { return { 0, 24, lay::seqW, getHeight() - 24 - 4 }; }
+juce::Rectangle<int> SeqView::grid() const
+{
+    if (wide) return module.info->seq == Seq::Drum ? stepRow() : juce::Rectangle<int> (0, 36, lay::wideSeqW, getHeight() - 36 - 20);
+    return { 0, 24, lay::seqW, getHeight() - 24 - 4 };
+}
 // The step under the mouse, on the bar being shown
-int SeqView::stepAtX (int x) const { return page * kSteps + juce::jlimit (0, kSteps - 1, x / 20); }
+int SeqView::stepAtX (int x) const { return page * kSteps + juce::jlimit (0, kSteps - 1, x / (wide ? lay::stepW : 20)); }
 int SeqView::bars() const { return 1 << juce::jlimit (0, 3, (int) std::lround (module.P (module.paramIndex ("bars")))); }
 // One small button per bar, to the right of Random
 juce::Rectangle<int> SeqView::pill (int bar) const { return { 136 + bar * 23, 1, 21, 18 }; }
@@ -267,17 +395,112 @@ void SeqView::showIdeas()
     juce::Component::SafePointer<SeqView> safe (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&ideas), [safe, drum, value] (int r)
     {
-        if (safe == nullptr || r <= 0) return;
-        boardWillChange (*safe);
-        if (drum) setDrum (safe->module, drumIdeas (safe->ideaKind())[(size_t) (r - 1)].pat);
-        else if (value) setValues (safe->module, valueIdeas()[(size_t) (r - 1)].v);
-        else { auto& d = noteIdeas (safe->board.type)[(size_t) (r - 1)]; setNotes (safe->module, d.gates, d.deg); }
-        safe->edited();
+        juce::ignoreUnused (drum, value);
+        if (safe != nullptr && r > 0) safe->chooseIdea (r - 1);
     });
+}
+
+// The wide drum and note sequencers
+void SeqView::paintWide (juce::Graphics& g)
+{
+    const auto col = boardColour (board.colour);
+    const int len = loopSteps (module.P (module.paramIndex ("length")), module.P (module.paramIndex ("bars")));
+    const int nBars = bars(), barsIndex = juce::jlimit (0, 3, (int) std::lround (module.P (module.paramIndex ("bars"))));
+    page = juce::jmin (page, nBars - 1);
+    const bool drum = module.info->seq == Seq::Drum;
+    const float sw = (float) lay::stepW;
+
+    // How long the pattern is: 1, 2, 4 or 8 bars
+    static const char* const lengths[4] = { "1 bar", "2", "4", "8" };
+    for (int k = 0; k < 4; ++k)
+    {
+        const auto r = barButton (k);
+        if (k == barsIndex) sunken (g, r.toFloat().reduced (0.5f), radiusControl);
+        g.setFont (controlFont());
+        g.setColour (k == barsIndex ? accent : n7);
+        g.drawText (lengths[k], r, juce::Justification::centred, false);
+    }
+    // Which bar is on show
+    if (nBars > 1)
+        for (int b = 0; b < nBars; ++b)
+        {
+            const auto r = pageMark (b).toFloat().withSizeKeepingCentre ((float) pageMark (b).getWidth(), 3.0f);
+            g.setColour (shownStep >= 0 && shownStep / kSteps == b ? noteAccent : b == page ? col : n5);
+            g.fillRoundedRectangle (r, 1.5f);
+        }
+
+    if (drum)
+    {
+        const auto sr = stepRow().toFloat(), vr = velRow().toFloat();
+        sunken (g, vr, radiusControl);
+        for (int i = 0; i < kSteps; ++i)
+        {
+            const int st = page * kSteps + i;
+            const float alpha = st < len ? 1.0f : 0.3f;
+            const float d = module.data[(size_t) st].load();
+            const auto tile = juce::Rectangle<float> ((float) i * sw + 2.0f, sr.getY(), sw - 4.0f, sr.getHeight());
+            if (d > 0.5f) g.setColour (col.withAlpha ((d > 1.5f ? 1.0f : 0.5f) * alpha));
+            else g.setColour ((i % 4 == 0 ? n4 : raisedHi).withAlpha (alpha));
+            g.fillRoundedRectangle (tile, 3.0f);
+            g.setColour (materialRim);
+            g.drawRoundedRectangle (tile.reduced (0.5f), 3.0f, 1.0f);
+            if (st == shownStep) { g.setColour (noteAccent); g.drawRoundedRectangle (tile.expanded (1.0f), 4.0f, 1.6f); }
+            // its velocity: tall for an accent, shorter for a plain hit
+            if (d > 0.5f)
+            {
+                const float h = (vr.getHeight() - 12.0f) * (d > 1.5f ? 1.0f : 0.55f);
+                g.setColour (col.withAlpha ((d > 1.5f ? 0.95f : 0.6f) * alpha));
+                g.fillRoundedRectangle (tile.getX() + 1.0f, vr.getBottom() - 6.0f - h, tile.getWidth() - 2.0f, h, 2.0f);
+            }
+        }
+        return;
+    }
+
+    // Notes, piano-roll style: a short bar per note at the height of its pitch
+    const auto gr = grid().toFloat();
+    const int root = proc.rack.root.load();
+    const int* sc = scales()[(size_t) juce::jlimit (0, (int) scales().size() - 1, proc.rack.scale.load())].iv;
+    const float rowH = gr.getHeight() / (float) (kDegHi - kDegLo + 1);
+    g.setColour (juce::Colour (0xff07080b));
+    g.fillRoundedRectangle (gr, 4.0f);
+    for (int i = 0; i < kSteps; ++i)          // the playing step is shaded; steps past the end are dark
+    {
+        const int st = page * kSteps + i;
+        const auto column = juce::Rectangle<float> ((float) i * sw, gr.getY(), sw, gr.getHeight());
+        if (st == shownStep) { g.setColour (juce::Colours::white.withAlpha (0.09f)); g.fillRect (column); }
+        if (i > 0) { g.setColour (juce::Colours::white.withAlpha (i % 4 == 0 ? 0.09f : 0.03f)); g.fillRect (column.getX(), gr.getY() + 1.0f, 1.0f, gr.getHeight() - 2.0f); }
+    }
+    for (int deg : { 0, 7, 14 })               // the key note in each octave
+    {
+        g.setColour (juce::Colours::white.withAlpha (deg == 0 ? 0.10f : 0.05f));
+        g.fillRect (gr.getX() + 1.0f, gr.getBottom() - (float) (deg - kDegLo) * rowH, gr.getWidth() - 2.0f, 1.0f);
+    }
+    for (int i = 0; i < kSteps; ++i)
+    {
+        const int st = page * kSteps + i;
+        const float alpha = st < len ? 1.0f : 0.3f;
+        const bool on = module.data[(size_t) st].load() > 0.5f;
+        const int deg = juce::jlimit (kDegLo, kDegHi, (int) std::lround (module.data[(size_t) (kMaxSteps + st)].load()));
+        if (on)
+        {
+            const float y = gr.getBottom() - ((float) (deg - kDegLo) + 0.5f) * rowH;
+            g.setColour (col.withAlpha (alpha));
+            g.fillRoundedRectangle ((float) i * sw + 2.0f, y - 2.0f, sw - 4.0f, 4.0f, 2.0f);
+        }
+        // its note, named underneath (click the name to switch the step on or off)
+        const auto cell = juce::Rectangle<int> (i * lay::stepW, nameRow().getY(), lay::stepW, nameRow().getHeight());
+        g.setFont (font (8.5f, Weight::Medium));
+        g.setColour ((on ? n8 : n6).withAlpha (alpha));
+        g.drawText (kNoteNames[(((root + degreeToSemis (deg, sc)) % 12) + 12) % 12], cell, juce::Justification::centred, false);
+        if (st == shownStep) { g.setColour (noteAccent); g.fillRoundedRectangle (cell.toFloat().withTop ((float) cell.getBottom() - 2.0f).reduced (3.0f, 0.0f), 1.0f); }
+    }
+    g.setColour (col.withAlpha (0.22f));
+    g.drawRoundedRectangle (gr.reduced (0.5f), 4.0f, 1.0f);
 }
 
 void SeqView::paint (juce::Graphics& g)
 {
+    if (wide) { paintWide (g); return; }
     const auto col = boardColour (board.colour);
     const auto gr = grid();
     const int len = loopSteps (module.P (module.paramIndex ("length")), module.P (module.paramIndex ("bars")));
@@ -348,7 +571,7 @@ void SeqView::paint (juce::Graphics& g)
 void SeqView::setDegreeFromY (int step, int y)
 {
     const auto gr = grid();
-    const float barH = (float) gr.getHeight() - 18.0f;
+    const float barH = (float) gr.getHeight() - (wide ? 0.0f : 18.0f);
     const float rowH = barH / (float) (kDegHi - kDegLo + 1);
     const int deg = juce::jlimit (kDegLo, kDegHi, kDegLo + (int) (((float) gr.getY() + barH - (float) y) / rowH));
     module.data[(size_t) (kMaxSteps + step)].store ((float) deg);
@@ -359,6 +582,47 @@ void SeqView::mouseDown (const juce::MouseEvent& e)
 {
     const auto gr = grid();
     dragStep = -1;
+    if (wide)
+    {
+        const auto at = e.getPosition();
+        const int barsIndex = juce::jlimit (0, 3, (int) std::lround (module.P (module.paramIndex ("bars"))));
+        // A bar button sets the length; the one already chosen steps through the bars instead
+        for (int k = 0; k < 4; ++k)
+            if (barButton (k).contains (at)) { if (k == barsIndex) showPage ((page + 1) % bars()); else setBars (k); return; }
+        for (int b = 0; b < bars(); ++b)
+            if (bars() > 1 && pageMark (b).expanded (0, 2).contains (at)) { showPage (b); return; }
+        const int s = stepAtX (e.x);
+        if (module.info->seq == Seq::Drum)
+        {
+            if (stepRow().contains (at))
+            {
+                boardWillChange (*this);
+                const float d = module.data[(size_t) s].load();
+                module.data[(size_t) s].store (d < 0.5f ? 1.0f : d < 1.5f ? 2.0f : 0.0f);
+                edited();
+            }
+            else if (velRow().contains (at)) toggleAccentAt (s);
+            return;
+        }
+        if (nameRow().contains (at))
+        {
+            boardWillChange (*this);
+            module.data[(size_t) s].store (module.data[(size_t) s].load() > 0.5f ? 0.0f : 1.0f);
+            edited();
+        }
+        else if (gr.contains (at))
+        {
+            boardWillChange (*this);
+            // a click right on a note takes it away; anywhere else puts the step's note there
+            const bool on = module.data[(size_t) s].load() > 0.5f;
+            const int was = (int) std::lround (module.data[(size_t) (kMaxSteps + s)].load());
+            setDegreeFromY (s, e.y);
+            if (on && was == (int) std::lround (module.data[(size_t) (kMaxSteps + s)].load())) module.data[(size_t) s].store (0.0f);
+            else dragStep = s;
+            edited();
+        }
+        return;
+    }
     for (int b = 0; b < bars(); ++b)
         if (bars() > 1 && pill (b).contains (e.getPosition())) { page = b; repaint(); return; }
     if (! gr.contains (e.getPosition())) return;
@@ -387,6 +651,7 @@ void SeqView::tick()
 {
     const int s = module.playStep.load();
     if (s != shownStep) { shownStep = s; repaint(); }
+    refreshIdea();
 }
 
 //==============================================================================
@@ -463,7 +728,8 @@ ChordView::ChordView (Nebula2ModulationProcessor& p, Module& m) : proc (p), modu
             changed();
         });
     };
-    setSize (lay::chordW, lay::chordSeqH);
+    mood.getProperties().set ("dropdown", true);
+    setSize (lay::chordColX + lay::chordColW, lay::wideBodyH);
     refreshLabels();
 }
 
@@ -475,39 +741,101 @@ void ChordView::refreshLabels()
     each.setButtonText (h.chordBars == 1 ? "1 bar each" : juce::String (h.chordBars) + " bars each");
 }
 
+// The tiles and the keyboard are on the left; the unit's own buttons are in a column to the right of them.
+// (The Rhythm drop-down in that column is one of the unit's knobs, so the panel puts it there.)
 void ChordView::resized()
 {
-    mood.setBounds (0, 0, 138, 22);
-    generate.setBounds (142, 0, 82, 22);
-    length.setBounds (228, 0, 70, 22);
-    each.setBounds (302, 0, 96, 22);
-    more.setBounds (402, 0, 76, 22);
+    const int cx = lay::chordColX;
+    mood.setBounds (cx, 13, 150, 22);
+    generate.setBounds (cx + 156, 13, 94, 22);
+    more.setBounds (cx + 110, 55, 60, 22);
+    length.setBounds (cx, 101, 80, 22);
+    each.setBounds (cx + 86, 101, 104, 22);
+}
+
+juce::Rectangle<int> ChordView::tile (int i) { return { 4 + (i % 8) * 59, 4 + (i / 8) * lay::wideTileH, 57, lay::wideTileH - 2 }; }
+
+// Under the tiles, however many rows of them there are
+juce::Rectangle<int> ChordView::keyboardArea() const
+{
+    const int n = juce::jlimit (1, 32, (int) proc.rack.harmony.names.size());
+    const int top = 4 + ((n + 7) / 8) * lay::wideTileH + 2;
+    return { 4, top, lay::chordW - 8, getHeight() - top - 4 };
+}
+
+std::vector<int> ChordView::litNotes() const
+{
+    std::vector<int> notes;
+    const auto& tl = proc.rack.timeline;
+    const int i = shown >= 0 ? shown : 0;
+    if (i >= (int) tl.slots.size()) return notes;
+    const auto& slot = tl.slots[(size_t) i];
+    const int oct = (int) std::lround (module.P (module.paramIndex ("octave")));
+    notes.push_back (60 + (int) std::lround (slot.bass * 12.0f));
+    for (int k = 0; k < 4; ++k) notes.push_back (60 + (int) std::lround (slot.voice[k] * 12.0f) + 12 * oct);
+    return notes;
+}
+
+bool ChordView::hitTest (int x, int y)
+{
+    for (auto* c : getChildren()) if (c->isVisible() && c->getBounds().contains (x, y)) return true;
+    const int n = juce::jmin (32, (int) proc.rack.harmony.seq.size());
+    for (int i = 0; i < n; ++i) if (tile (i).contains (x, y)) return true;
+    return false;
 }
 
 void ChordView::paint (juce::Graphics& g)
 {
     const auto& h = proc.rack.harmony;
+    const auto kb = keyboardArea();
+    // the screen: black glass behind the tiles and the keyboard
+    const auto glass = juce::Rectangle<float> (0.0f, 0.0f, (float) lay::chordW, (float) kb.getBottom() + 4.0f);
+    g.setColour (juce::Colour (0xff07080b));
+    g.fillRoundedRectangle (glass, 4.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.07f));
+    g.drawRoundedRectangle (glass.reduced (0.5f), 4.0f, 1.0f);
+
     for (int i = 0; i < (int) h.names.size() && i < 32; ++i)
     {
         const auto r = tile (i).toFloat();
         const auto col = degreeColour (h.seq[(size_t) i].deg);
         const bool now = i == shown;
-        g.setColour (col.withAlpha (now ? 0.95f : 0.16f));
+        g.setColour (raisedHi.interpolatedWith (col, 0.10f));
         g.fillRoundedRectangle (r, 4.0f);
-        g.setColour (col.withAlpha (now ? 0.0f : 0.8f));
-        g.fillRoundedRectangle (r.getX() + 6.0f, r.getY() + 2.0f, r.getWidth() - 12.0f, 1.5f, 0.75f);
-        g.setFont (font (10.0f, Weight::Medium));
-        g.setColour (now ? n0 : n8);
-        g.drawFittedText (h.names[(size_t) i], r.toNearestInt().reduced (3, 0), juce::Justification::centred, 1, 0.7f);
+        g.setColour (col.withAlpha (0.9f));
+        g.fillRoundedRectangle (r.getX() + 3.0f, r.getY() + 1.0f, r.getWidth() - 6.0f, 2.0f, 1.0f);
+        if (now) { g.setColour (noteAccent); g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.6f); }
+        // its name, over how long it lasts
+        g.setFont (font (10.0f, Weight::SemiBold));
+        g.setColour (now ? juce::Colours::white : n8);
+        g.drawFittedText (h.names[(size_t) i], (int) r.getX() + 3, (int) r.getY() + 3, (int) r.getWidth() - 6, 11, juce::Justification::centred, 1, 0.7f);
+        const int bars = h.seq[(size_t) i].bars;
+        g.setFont (font (8.0f));
+        g.setColour (n7);
+        g.drawText (bars == 1 ? juce::String ("1 bar") : juce::String (bars) + " bars", (int) r.getX(), (int) r.getY() + 14, (int) r.getWidth(), 9, juce::Justification::centred, false);
         if (h.seq[(size_t) i].locked)        // a locked chord wears a small padlock-coloured dot
         {
-            g.setColour (now ? n0 : noteAccent);
-            g.fillEllipse (r.getRight() - 8.0f, r.getBottom() - 8.0f, 4.5f, 4.5f);
+            g.setColour (noteAccent);
+            g.fillEllipse (r.getRight() - 7.5f, r.getBottom() - 7.5f, 4.5f, 4.5f);
         }
     }
-}
 
-juce::Rectangle<int> ChordView::tile (int i) { return { (i % 8) * 60 + 1, 28 + (i / 8) * lay::chordTileH, 58, lay::chordTileH - 2 }; }
+    // the keyboard: the notes of the chord playing now (the first chord while the song is stopped)
+    const auto notes = litNotes();
+    const int lowC = 48;
+    auto lit = [&notes, lowC] (int note)
+    {
+        for (int nn : notes) { while (nn < lowC) nn += 12; while (nn >= lowC + 24) nn -= 12; if (nn == note) return true; }
+        return false;
+    };
+    const int idx = shown >= 0 ? shown : 0;
+    drawKeyboard (g, kb.toFloat(), lowC, 14, lit, shown >= 0 || idx >= (int) h.seq.size() ? noteAccent : degreeColour (h.seq[(size_t) idx].deg));
+
+    g.setFont (font (8.0f, Weight::Medium, 0.2f));        // (as the knobs are labelled)
+    g.setColour (n8);
+    g.drawText ("MOOD", lay::chordColX + 1, 0, 80, 11, juce::Justification::centredLeft, false);
+    g.drawText ("SONG", lay::chordColX + 1, 88, 80, 11, juce::Justification::centredLeft, false);
+}
 
 void ChordView::mouseDown (const juce::MouseEvent& e)
 {
@@ -569,6 +897,139 @@ void ChordView::tick()
     const int v = proc.chordsVersion.load(), s = module.playStep.load();
     if (v != seenVersion) { seenVersion = v; refreshLabels(); repaint(); }
     if (s != shown) { shown = s; repaint(); }
+}
+
+//==============================================================================
+NotesScreen::NotesScreen (Nebula2ModulationProcessor& p, Board& b, Module& m) : proc (p), board (b), module (m)
+{
+    setInterceptsMouseClicks (false, false);        // it only shows things: the panel under it can be picked up by it
+    seen = signature();
+}
+
+// Everything the picture depends on, so it is only redrawn when one of them changes
+uint64_t NotesScreen::signature() const
+{
+    uint64_t h = (uint64_t) (module.playStep.load() + 2);
+    for (auto& p : module.params) h = h * 1000003u + (uint64_t) std::lround (p.load() * 1000.0f + 100000.0f);
+    if (auto* k = dynamic_cast<KeysIn*> (&module)) h = h * 31u + k->heldLo.load() * 7u + k->heldHi.load();
+    int cabled = 0;
+    for (auto& c : board.cables) if (c.dst == module.uid) cabled += 1 << juce::jmin (20, c.dstPort);
+    return h * 31u + (uint64_t) cabled + (uint64_t) board.colour * 977u;
+}
+
+void NotesScreen::tick()
+{
+    const auto now = signature();
+    if (now != seen) { seen = now; repaint(); }
+}
+
+void NotesScreen::paint (juce::Graphics& g)
+{
+    const std::string type = module.info->type;
+    const auto col = boardColour (board.colour);
+    const auto r = getLocalBounds().toFloat();
+    g.setColour (juce::Colour (0xff07080b));
+    g.fillRoundedRectangle (r, 4.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.07f));
+    g.drawRoundedRectangle (r.reduced (0.5f), 4.0f, 1.0f);
+    const auto inner = r.reduced (6.0f);
+    auto corner = [&g, inner] (const juce::String& text, bool right)
+    {
+        g.setFont (smallCaps());
+        g.setColour (n7);
+        g.drawText (text.toUpperCase(), inner.toNearestInt(), right ? juce::Justification::bottomRight : juce::Justification::bottomLeft, false);
+    };
+    auto P = [this] (const char* id) { const int k = module.paramIndex (id); return k >= 0 ? module.P (k) : 0.0f; };
+    auto text = [this] (const char* id) { const int k = module.paramIndex (id); return k >= 0 ? juce::String (paramText (module.info->params[(size_t) k], module.P (k))) : juce::String(); };
+
+    if (auto* keys = dynamic_cast<KeysIn*> (&module))
+    {
+        // Two octaves of keys. They move to wherever the keys being held are.
+        int lowest = -1;
+        for (int n = 0; n < 128 && lowest < 0; ++n) if (keys->isHeld (n)) lowest = n;
+        bool inView = false;
+        for (int n = lowC; n < lowC + 24; ++n) inView = inView || keys->isHeld (n);
+        if (lowest >= 0 && ! inView) lowC = juce::jlimit (0, 96, (lowest / 12) * 12);
+        drawKeyboard (g, inner, lowC, 14, [keys] (int n) { return keys->isHeld (n); }, noteAccent);
+        return;
+    }
+    if (type == "arp")
+    {
+        // The order the notes play in, low at the bottom: one round of the pattern over the notes plugged in
+        int nn = 0;
+        for (auto& c : board.cables) if (c.dst == module.uid && c.dstPort < 4) ++nn;
+        if (nn == 0) nn = 4;
+        const int pattern = (int) std::lround (P ("pattern")), range = juce::jlimit (1, 4, (int) std::lround (P ("range")));
+        const int count = nn * range;
+        const int steps = pattern == 2 ? juce::jmax (1, 2 * count - 2) : count;
+        const auto plot = inner.withTrimmedBottom (14.0f).reduced (2.0f, 4.0f);
+        const float sw = plot.getWidth() / (float) steps;
+        g.setColour (juce::Colours::white.withAlpha (0.05f));
+        for (int s = nn; s < steps; s += nn) g.fillRect (plot.getX() + (float) s * sw - 0.5f, plot.getY(), 1.0f, plot.getHeight());
+        const int playing = module.playStep.load();
+        for (int s = 0; s < steps; ++s)
+        {
+            const int idx = Arpeggiator::pick (pattern, s, count, module.uid);
+            const float y = plot.getBottom() - 3.0f - (plot.getHeight() - 3.0f) * (count > 1 ? (float) idx / (float) (count - 1) : 0.5f);
+            g.setColour (idx == playing ? noteAccent : col);
+            g.fillRoundedRectangle (plot.getX() + (float) s * sw + 1.0f, y, juce::jmax (3.0f, sw - 2.0f), 3.0f, 1.5f);
+        }
+        corner (text ("pattern"), false);
+        corner (text ("rate"), true);
+        return;
+    }
+    if (type == "euclid")
+    {
+        // The steps round a ring, starting at the top: hits lit, accents ringed, the step playing marked
+        const int steps = juce::jlimit (1, 16, (int) std::lround (P ("steps"))), hits = juce::jlimit (0, steps, (int) std::lround (P ("hits")));
+        const int turn = (int) std::lround (P ("turn")), acc = (int) std::lround (P ("accent"));
+        const auto c = r.getCentre();
+        const float radius = juce::jmin (r.getWidth(), r.getHeight()) * 0.5f - 14.0f;
+        const int playing = module.playStep.load();
+        for (int k = 0; k < steps; ++k)
+        {
+            const float a = juce::MathConstants<float>::twoPi * (float) k / (float) steps;
+            const juce::Point<float> at (c.x + radius * std::sin (a), c.y - radius * std::cos (a));
+            const bool hit = Euclid::hitAt (k, steps, hits, turn);
+            if (hit)
+            {
+                g.setColour (col);
+                g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (at));
+                if (Euclid::accentAt (k, acc)) g.drawEllipse (juce::Rectangle<float> (10.5f, 10.5f).withCentre (at), 1.2f);
+            }
+            else { g.setColour (n6); g.fillEllipse (juce::Rectangle<float> (2.5f, 2.5f).withCentre (at)); }
+            if (k == playing) { g.setColour (noteAccent); g.drawEllipse (juce::Rectangle<float> (14.0f, 14.0f).withCentre (at), 1.6f); }
+        }
+        g.setFont (font (11.0f, Weight::Medium));
+        g.setColour (n8);
+        g.drawText (juce::String (hits) + " / " + juce::String (steps), r.toNearestInt(), juce::Justification::centred, false);
+        return;
+    }
+    // Ratchet and Swing: the hits going in, evenly spaced, and what comes out
+    const bool ratchet = type == "ratchet";
+    const auto plot = inner.withTrimmedBottom (12.0f);
+    const float yIn = plot.getY() + plot.getHeight() * 0.3f, yOut = plot.getY() + plot.getHeight() * 0.7f;
+    g.setFont (smallCaps());
+    g.setColour (n7);
+    g.drawText ("IN", (int) plot.getX() + 2, (int) yIn - 6, 30, 12, juce::Justification::centredLeft, false);
+    g.drawText ("OUT", (int) plot.getX() + 2, (int) yOut - 6, 30, 12, juce::Justification::centredLeft, false);
+    const float x0 = plot.getX() + 38.0f, slot = (plot.getRight() - 6.0f - x0) / 8.0f;
+    const int count = ratchet ? 1 + juce::jlimit (0, 3, (int) std::lround (P ("count"))) : 1;
+    const float fade = ratchet ? P ("fade") : 0.0f, swing = ratchet ? 0.0f : P ("amount");
+    for (int k = 0; k < 8; ++k)
+    {
+        const float x = x0 + (float) k * slot + 3.0f;
+        g.setColour (col);
+        g.fillEllipse (juce::Rectangle<float> (5.0f, 5.0f).withCentre ({ x, yIn }));
+        for (int b = 0; b < count; ++b)
+        {
+            // a burst is a tight group inside its step; an off-beat hit is held back by half the swing
+            const float ox = ratchet ? (float) b * slot * 0.8f / (float) juce::jmax (3, count) : (k % 2 == 1 ? swing * 0.5f * slot : 0.0f);
+            g.setColour (col.withAlpha (1.0f - 0.8f * fade * (float) b / (float) juce::jmax (1, count)));
+            g.fillEllipse (juce::Rectangle<float> (5.0f, 5.0f).withCentre ({ x + ox, yOut }));
+        }
+    }
+    corner (ratchet ? text ("count") + (count == 1 ? " hit" : " hits") : text ("amount"), true);
 }
 
 //==============================================================================
@@ -940,6 +1401,24 @@ ModuleComp::ModuleComp (BoardView& o, Nebula2ModulationProcessor& p, Board& b, M
 {
     const auto& info = *m.info;
     setBounds ((int) m.x, (int) m.y, lay::width (info), lay::height (info));
+    if (const auto wg = lay::geo (info); wg.wide)
+    {
+        // A wide panel (Notes and rhythm): the screen on the left, each knob or drop-down in its own place beside it
+        if (info.seq == Seq::Chord) { chords = std::make_unique<ChordView> (p, m); addAndMakeVisible (*chords); chords->setTopLeftPosition (wg.screen.x, wg.screen.y); }
+        else if (info.seq == Seq::Drum || info.seq == Seq::Note) { seq = std::make_unique<SeqView> (p, b, m); addAndMakeVisible (*seq); seq->setTopLeftPosition (wg.screen.x, wg.screen.y); }
+        else if (! wg.screen.empty()) { screen = std::make_unique<NotesScreen> (p, b, m); addAndMakeVisible (*screen); screen->setBounds (wg.screen.x, wg.screen.y, wg.screen.w, wg.screen.h); }
+        for (int i = 0; i < (int) info.params.size() && i < lay::kMaxCells; ++i)
+        {
+            const auto& box = wg.cellBox[i];
+            if (box.empty()) continue;
+            auto* c = cells.add (new ParamCell (p, m, i));
+            c->dropdown = ! info.params[(size_t) i].choices.empty();
+            addAndMakeVisible (c);
+            c->setBounds (box.x, box.y, box.w, box.h);
+        }
+        setAlpha (m.live ? 1.0f : 0.45f);
+        return;
+    }
     if (info.seq == Seq::Scope)
     {
         if (auto* sm = dynamic_cast<Scope*> (&m))
@@ -1025,6 +1504,8 @@ juce::Rectangle<int> ModuleComp::linkArea() const
     if (module.info->seq != Seq::Drum && module.info->seq != Seq::Note) return {};
     const int nameW = juce::GlyphArrangement::getStringWidthInt (font (10.0f, Weight::SemiBold, 0.5f), juce::String (module.info->name).toUpperCase());
     const int w = juce::GlyphArrangement::getStringWidthInt (font (9.0f, Weight::SemiBold, 0.4f), linkText (module)) + 14;
+    // On a wide panel the name is centred, so the labels sit at the bottom left, where a sequencer has no inputs
+    if (const auto g = lay::geo (*module.info); g.wide) return { g.midi.right() + 8, g.midi.y + 1, juce::jmin (w, lay::linkRoom), g.midi.h - 2 };
     return { 20 + nameW + 10, 4, w, 15 };
 }
 
@@ -1033,6 +1514,7 @@ juce::Rectangle<int> ModuleComp::midiArea() const
     if (! canExportMidi (module) && std::string (module.info->type) != "output") return {};
     // The Output is a narrow panel: its label sits under the name, across the panel
     if (std::string (module.info->type) == "output") return { lay::pad, lay::header + 2, getWidth() - 2 * lay::pad, 15 };
+    if (const auto g = lay::geo (*module.info); g.wide) return { g.midi.x, g.midi.y, g.midi.w, g.midi.h };
     const int nameW = juce::GlyphArrangement::getStringWidthInt (font (10.0f, Weight::SemiBold, 0.5f), juce::String (module.info->name).toUpperCase());
     const auto la = linkArea();
     const int x = la.isEmpty() ? 20 + nameW + 10 : la.getRight() + 6;
@@ -1147,10 +1629,10 @@ void ModuleComp::paint (juce::Graphics& g)
     // the name, printed on the plate, over a line in the colour of its kind
     g.setFont (font (10.0f, Weight::SemiBold, 0.5f));
     g.setColour (juce::Colours::white.withAlpha (0.92f));
-    const bool labels = ! linkArea().isEmpty() || (! midiArea().isEmpty() && std::string (info.type) != "output");
+    const bool labels = ! geo.wide && (! linkArea().isEmpty() || (! midiArea().isEmpty() && std::string (info.type) != "output"));
     g.drawFittedText (juce::String (info.name).toUpperCase(), labels ? 20 : 12, 2, getWidth() - (labels ? 28 : 24), lay::header - 5,
                       labels ? juce::Justification::centredLeft : juce::Justification::centred, 1, 0.7f);
-    g.setColour (tone.withAlpha (0.85f));
+    g.setColour ((geo.wide ? col : tone).withAlpha (0.85f));      // (a wide Notes and rhythm unit wears its sound's colour, like its steps)
     g.fillRoundedRectangle (r.getX() + 12.0f, (float) lay::header - 3.0f, r.getWidth() - 24.0f, 1.6f, 0.8f);
 
     if (const auto la = linkArea(); ! la.isEmpty())
@@ -1165,15 +1647,15 @@ void ModuleComp::paint (juce::Graphics& g)
     }
     if (const auto ma = midiArea(); ! ma.isEmpty())
     {
-        g.setColour (n4);
-        g.fillRoundedRectangle (ma.toFloat(), 4.0f);
+        if (geo.wide) raised (g, ma.toFloat().reduced (0.5f), radiusChip);
+        else { g.setColour (n4); g.fillRoundedRectangle (ma.toFloat(), 4.0f); }
         g.setFont (font (8.5f, Weight::SemiBold, 0.3f));
         g.setColour (n8);
         g.drawFittedText (std::string (info.type) == "output" ? "DRAG AUDIO" : "DRAG MIDI", ma.reduced (2, 0), juce::Justification::centred, 1, 0.7f);
     }
 
     // a screen behind the pattern, the chords, the wave: black glass with a faint glow
-    if (const int sh = lay::seqHeight (info); sh > 0)
+    if (const int sh = lay::seqHeight (info); sh > 0 && ! geo.wide)
     {
         const auto screen = juce::Rectangle<float> ((float) lay::pad - 4.0f, (float) lay::header - 0.5f, (float) getWidth() - 2.0f * (float) lay::pad + 8.0f, (float) sh + 3.0f);
         g.setColour (juce::Colour (0xff07080b));
@@ -1184,7 +1666,19 @@ void ModuleComp::paint (juce::Graphics& g)
 
     // the jack strip
     const int nIn = (int) info.ins.size(), nOut = (int) info.outs.size();
-    if (nIn + nOut > 0)
+    if (geo.wide && nOut > 0)
+    {
+        // A wide panel has no strip: the inputs sit plain on the plate and the outputs share one raised pad
+        const auto first = jackCentre (true, 0).toFloat(), last = jackCentre (true, nOut - 1).toFloat();
+        const auto padArea = juce::Rectangle<float> (first.x - 18.0f, first.y - 25.0f, last.x - first.x + 36.0f, 40.0f);
+        juce::Path pp; pp.addRoundedRectangle (padArea, radiusControl);
+        shadow (g, pp, juce::Colours::black.withAlpha (0.5f), 6.0f, 0.0f, 2.0f);
+        g.setColour (juce::Colour (0xff22242c));
+        g.fillPath (pp);
+        g.setColour (juce::Colours::white.withAlpha (0.09f));
+        g.drawRoundedRectangle (padArea.reduced (0.5f), radiusControl, 1.0f);
+    }
+    else if (nIn + nOut > 0)
     {
         const auto strip = juce::Rectangle<float> (r.getX() + 4.0f, (float) geo.jacksY - 1.0f, r.getWidth() - 8.0f, (float) (geo.jackRows * lay::jackH) + 2.0f);
         g.setColour (juce::Colours::black.withAlpha (black ? 0.45f : 0.32f));
@@ -1199,7 +1693,7 @@ void ModuleComp::paint (juce::Graphics& g)
         {
             const auto c = jackCentre (pass == 1, i).toFloat();
             // An output sits on a light pad, as on hardware, so ins and outs can be told apart at a glance
-            if (pass == 1)
+            if (pass == 1 && ! geo.wide)
             {
                 g.setColour (juce::Colours::white.withAlpha (0.13f));
                 g.fillRoundedRectangle (c.x - 14.0f, c.y - 22.0f, 28.0f, 34.0f, 4.0f);
@@ -1556,6 +2050,7 @@ void BoardView::tick()
         if (c->chords != nullptr) c->chords->tick();
         if (c->sample != nullptr) c->sample->tick();
         if (c->scope != nullptr) c->scope->tick();
+        if (c->screen != nullptr) c->screen->tick();
     }
 }
 

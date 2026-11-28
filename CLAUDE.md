@@ -55,6 +55,7 @@ Signals on cables: audio is -1..1; pitch is octaves from middle C; a gate is "ab
 
 Rules that tests hold in place:
 - Styles: every preset and idea a style names must exist. The same seed makes the same track. Make track, Variation and Random knobs each call `history.beforeAll()` first (one Undo step for the whole project). Random knobs never touches tuning, levels, lengths or switches (`knobCanRandomise`).
+- Wide units: the eight under "Notes and rhythm" (`lay::isWide`) use `lay::wideGeo` / `wideFits`: screen left, knobs right, inputs bottom left, outputs on a pad bottom right. Same height as the rest. Every other unit is a tall panel. Their screens read only atomics the unit publishes (e.g. `KeysIn::isHeld`), never audio-thread data.
 - Panels: every unit is `lay::panelH` high; `lay::geo (info)` says where its knobs and jacks go and `lay::fits (info)` must hold for every type, the plugin slot and sample player included. A unit with `perRow` keeps its knobs in groups of that many.
 - The All view: `proc.showAll`. `selectTab (i)` shows one sound alone; `showAllSounds()` shows them all; `reshow (i)` redraws whichever is up (use it after a change). `selectTab (-1)` / `reshow (-1)` lets go of the boards before the rack changes under them.
 - Timeline knob lines: `Board::autos` (`AutoLane`: unit id, knob, up to 64 points of bar and knob position). Points are atomics, so dragging one never takes the lock; adding or removing a line does (`Rack::addAuto` / `removeAuto`). Knobs are set on a fixed grid of song position (1/32 of a step) with chunks cut at its edges, so it never depends on block size. The song is `Rack::songBars()` long and goes round. Saved as `au` lines. A new line is flat at the knob's own position and changes nothing. Each stretch can be bent (`AutoLane::curve`, `shape`, `curveFor`); 0 is straight and must stay exactly the old straight line.
@@ -110,10 +111,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.25'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.26'
 ```
 
-The latest release is **v0.1.24**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
+The latest release is **v0.1.25**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
 Joe asked for that release on 27 Nov 2026, after it had built on Windows, Mac and Linux and passed every test.
 
 Windows: don't name a variable `near`, `far` or `small`. The Windows headers define them and the build breaks.

@@ -27,6 +27,7 @@ constexpr int stepW = 22, wideSeqW = kSteps * stepW;        // a sequencer's ste
 constexpr int chordColX = chordW + 10, chordColW = 250;     // the chord unit's own buttons sit in a column beside its tiles
 constexpr int wideTileH = 26;                               // a chord tile: its name over its length
 constexpr int midiW = 66, midiH = 18, linkRoom = 150;       // the DRAG MIDI label, and room beside it for a sequencer's LINK label
+constexpr int wideScreenH = 124;                            // the small screens (keyboard, arpeggiator, ring, in and out)
 constexpr int kMaxCells = 8;
 struct Box
 {
@@ -44,7 +45,7 @@ inline int screenWidth (const Info& i)
     if (i.seq == Seq::Drum || i.seq == Seq::Note) return wideSeqW;
     if (i.seq == Seq::Chord) return chordW;
     if (t == "keys") return 14 * 20 + 2;
-    if (t == "euclid") return wideBodyH;       // a square, for the ring
+    if (t == "euclid") return wideScreenH;     // a square, for the ring
     if (t == "arp" || t == "ratchet" || t == "swing") return 200;
     return 0;
 }
@@ -77,6 +78,7 @@ inline Geo wideGeo (const Info& i)
     const int nKnobs = (int) i.params.size(), nIn = (int) i.ins.size(), nOut = (int) i.outs.size();
     const bool seq = i.seq == Seq::Drum || i.seq == Seq::Note, chord = i.seq == Seq::Chord;
     g.screen = { wideSide, wideBodyY, screenWidth (i), wideBodyH };
+    if (! seq && ! chord) { g.screen.y = wideBodyY + (wideBodyH - wideScreenH) / 2; g.screen.h = wideScreenH; }      // level with the knobs
     g.extraW = chord ? chordColX - chordW + chordColW : 0;
     int x = wideSide + (g.screen.w > 0 ? g.screen.w + g.extraW + wideGap : 0);
     const int cy = wideBodyY + (wideBodyH - wideCellH) / 2;
@@ -94,7 +96,7 @@ inline Geo wideGeo (const Info& i)
     }
     if (shown > 0) x -= wideCellGap; else if (g.screen.w > 0) x -= wideGap;
     if (seq) g.midi = { wideSide + 2, wideJacksY + 10, midiW, midiH };                                // bottom left, where a sequencer has no inputs
-    if (chord) g.midi = { wideSide + chordColX + 176, wideBodyY + 59, 70, midiH };                    // beside More
+    if (chord) g.midi = { wideSide + chordColX + 176, wideBodyY + 57, 70, midiH };                    // beside More
     const int nameW = (int) std::char_traits<char>::length (i.name) * 8 + 40;
     const int jacksW = (nIn + nOut) * jackSlot + (nIn > 0 && nOut > 0 ? 16 : 0) + (seq ? midiW + 8 + linkRoom : 0);
     g.w = std::max ({ x, wideSide + nameW, wideSide + jacksW }) + wideSide;

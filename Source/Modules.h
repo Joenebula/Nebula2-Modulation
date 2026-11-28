@@ -667,7 +667,8 @@ struct DelayBuf
         if (b.empty()) return 0.0f;
         d = std::min ((float) b.size() - 2.0f, std::max (1.0f, d));
         float p = (float) w - d; if (p < 0) p += (float) b.size();
-        const int i = (int) p; const float f = p - (float) i;
+        int i = (int) p; const float f = p - (float) i;
+        if (i >= (int) b.size()) i -= (int) b.size();       // rounding can land exactly on the end: wrap, never read past it
         const int j = i + 1 >= (int) b.size() ? 0 : i + 1;
         return b[(size_t) i] + (b[(size_t) j] - b[(size_t) i]) * f;
     }

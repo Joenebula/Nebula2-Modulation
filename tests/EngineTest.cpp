@@ -1410,6 +1410,19 @@ int main()
         // D minor: A4 (69) is in the key
         play ({ { 100, 69, 100, 1, true } });
         CHECK (gate[99] == 0.0f && gate[100] == 1.0f && std::abs (pitch[100] - 9.0f / 12.0f) < 1.0e-6f, "a key starts its note on the exact sample, at the right pitch");
+        auto* shownKeys = dynamic_cast<KeysIn*> (keys);
+        CHECK (shownKeys != nullptr && shownKeys->isHeld (69) && ! shownKeys->isHeld (68) && ! shownKeys->isHeld (70), "the unit tells the screen which key is held");
+        keys->set ("channel", 2);
+        play ({});
+        CHECK (! shownKeys->isHeld (69), "a key on another channel is not this unit's to show");
+        keys->set ("channel", 0);
+        play ({ { 5, 30, 100, 1, true }, { 6, 100, 100, 1, true } });
+        CHECK (shownKeys->isHeld (69) && shownKeys->isHeld (30) && shownKeys->isHeld (100) && shownKeys->heldLo.load() == ((uint64_t) 1 << 30) && shownKeys->heldHi.load() == (((uint64_t) 1 << (69 - 64)) | ((uint64_t) 1 << (100 - 64))), "several keys at once, low and high");
+        play ({ { 5, 30, 0, 1, false }, { 6, 100, 0, 1, false } });
+        CHECK (shownKeys->isHeld (69) && ! shownKeys->isHeld (30) && ! shownKeys->isHeld (100) && ! shownKeys->isHeld (-1) && ! shownKeys->isHeld (128), "and a key let go goes out");
+        play ({ { 37, 69, 0, 1, false } });
+        CHECK (! shownKeys->isHeld (69) && shownKeys->heldLo.load() == 0 && shownKeys->heldHi.load() == 0, "no keys held, none shown");
+        play ({ { 100, 69, 100, 1, true } });
         play ({ { 37, 69, 0, 1, false } });
         CHECK (gate[36] == 1.0f && gate[37] == 0.0f && std::abs (pitch[400] - 9.0f / 12.0f) < 1.0e-6f, "letting go ends it on the exact sample, and the pitch stays for the tail");
         // one whole-block call gives the same as many small ones
@@ -1809,6 +1822,118 @@ int main()
             rack->removeModule (b, firstOf (b, "filter")->uid);
             CHECK (b.autos.empty(), "deleting a unit takes its lines with it");
         }
+    }
+
+    // ---- The Notes and rhythm units are wide panels: a screen on the left, knobs beside it, jacks along the bottom ----
+    {
+        int wide = 0;
+        for (auto* t : allTypes())
+        {
+            const auto g = lay::geo (*t);
+            CHECK (g.wide == (std::string (t->shelf) == "Notes and rhythm"), "only the Notes and rhythm units are wide");
+            if (! g.wide) continue;
+            ++wide;
+            CHECK (g.h == lay::panelH && g.w > g.h, "a wide panel is the same height as every other, and wider than it is tall");
+            CHECK (! g.screen.empty() && g.screen.x < g.w / 2, "its screen is on the left");
+            int shown = 0;
+            for (size_t k = 0; k < t->params.size(); ++k)
+            {
+                const auto& c = g.cellBox[k];
+                if (c.empty()) { CHECK (std::string (t->params[k].id) == "bars", "only a sequencer's Bars has no knob: it is the bar buttons"); continue; }
+                ++shown;
+                CHECK (c.x >= g.screen.right() && c.right() <= g.w - lay::pad && c.bottom() <= g.jacksY && c.y >= lay::header, "every knob and drop-down is to the right of the screen, inside the panel, above the jacks");
+                CHECK (! c.overlaps (g.midi), "and clear of the DRAG MIDI label");
+                for (size_t j = 0; j < k; ++j) CHECK (! c.overlaps (g.cellBox[j]), "no two knobs share a place");
+            }
+            CHECK (shown >= 1, "every wide unit has something to turn");
+            CHECK (g.jackRows == 1 && lay::wideSide + (int) t->ins.size() * lay::jackSlot <= g.w - lay::wideSide - (int) t->outs.size() * lay::jackSlot, "one row of jacks: inputs on the left, clear of the outputs on the right");
+        }
+        CHECK (wide == 8, "there are eight Notes and rhythm units");
+        // a wide layout that doesn't fit is caught
+        lay::Geo bad = lay::geo (Euclid::desc());
+        bad.cellBox[0].x = bad.screen.x + 4;
+        CHECK (! lay::wideFits (Euclid::desc(), bad), "a knob on top of the screen does not fit");
+        bad = lay::geo (Arpeggiator::desc()); bad.w -= 300;
+        CHECK (! lay::wideFits (Arpeggiator::desc(), bad), "nor does a panel too narrow for its jacks");
+        // a board made of all eight, tidied: none overlap
+        auto b = makeBoard ("empty");
+        for (auto* t : allTypes()) if (lay::isWide (*t)) b->add (t->type, 0, 0, 48000);
+        tidy (*b);
+        for (size_t i = 0; i < b->modules.size(); ++i)
+            for (size_t j = i + 1; j < b->modules.size(); ++j)
+            {
+                auto& p = *b->modules[i]; auto& q = *b->modules[j];
+                CHECK (p.x + lay::width (*p.info) <= q.x || q.x + lay::width (*q.info) <= p.x || p.y + lay::panelH <= q.y || q.y + lay::panelH <= p.y, "Tidy leaves no wide unit on top of another");
+            }
+    }
+
+    // ---- Drum accents by the velocity bars, and the name of the idea a pattern is ----
+    {
+        auto b = makeBoard ("kick");
+        auto* seq = firstOf (*b, "drumseq");
+        setDrum (*seq, "X...x...x...x...");
+        CHECK (drumIdeaIndex (*seq, "kick") == 0 && std::string (drumIdeas ("kick")[0].name) == "Four on the floor", "a pattern set from an idea is known by that idea");
+        CHECK (toggleAccent (*seq, 4) && seq->data[4].load() == 2.0f, "a plain hit becomes an accent");
+        CHECK (drumIdeaIndex (*seq, "kick") == -1, "an edited pattern is nobody's idea");
+        CHECK (toggleAccent (*seq, 4) && seq->data[4].load() == 1.0f, "and an accent a plain hit again");
+        CHECK (! toggleAccent (*seq, 1) && seq->data[1].load() == 0.0f, "an empty step stays empty");
+        CHECK (! toggleAccent (*seq, -1) && ! toggleAccent (*seq, kMaxSteps), "steps that don't exist are left alone");
+        for (int s = 0; s < kMaxSteps; ++s) { const float d = seq->data[(size_t) s].load(); CHECK (d == 0.0f || d == 1.0f || d == 2.0f, "the pattern only ever holds 0, 1 or 2"); }
+        auto bb = makeBoard ("bass");
+        auto* ns = firstOf (*bb, "noteseq");
+        for (size_t k = 0; k < noteIdeas ("bass").size(); ++k)
+        {
+            setNotes (*ns, noteIdeas ("bass")[k].gates, noteIdeas ("bass")[k].deg);
+            const int found = noteIdeaIndex (*ns, "bass");
+            CHECK (found >= 0 && std::string (noteIdeas ("bass")[(size_t) found].gates) == noteIdeas ("bass")[k].gates, "every note idea is recognised (as itself, or one that plays the same)");
+        }
+        ns->data[(size_t) kMaxSteps + 2].store (5.0f);
+        CHECK (noteIdeaIndex (*ns, "bass") == -1 || ns->data[2].load() < 0.5f, "a changed note makes it nobody's idea");
+    }
+
+    // ---- Euclidean rhythm, Accent: every so-many steps is a loud one. 0 = no accents at all ----
+    {
+        // the velocity of each hit over one bar, by step
+        auto bar = [] (int hits, int accent, int block)
+        {
+            const auto* e = findType ("euclid");
+            auto m = e->make(); m->init (*e->info, 1); m->prepare (48000);
+            m->set ("hits", (float) hits); m->set ("accent", (float) accent);
+            Ctx c; c.sr = 48000; c.bpm = 120; c.playing = true; c.ppqPerSample = 120.0 / 60.0 / 48000.0; c.scale = scales()[0].iv;
+            std::map<int, float> vels;
+            double ppq = 0; bool last = false;
+            for (int pos = 0; pos < 96000; pos += block)
+            {
+                const int n = std::min (block, 96000 - pos);
+                for (auto& in : m->in) std::fill (in.begin(), in.begin() + n, 0.0f);
+                c.ppq = ppq;
+                m->process (n, c);
+                for (int i = 0; i < n; ++i)
+                {
+                    const bool g = m->out[0][(size_t) i] > 0.5f;
+                    if (g && ! last) vels[(int) std::floor ((ppq + i * c.ppqPerSample) * 4.0 + 1.0e-6)] = m->out[1][(size_t) i];
+                    last = g;
+                }
+                ppq += n * c.ppqPerSample;
+            }
+            return vels;
+        };
+        const Info& info = Euclid::desc();
+        const auto& ap = info.params[3];
+        CHECK (std::string (ap.id) == "accent" && ap.lo == 0.0f && ap.hi == 8.0f && ap.fmt == Fmt::Int, "the Accent knob: 0 to 8, whole numbers");
+        CHECK (ap.def == 4.0f, "its starting value is what it has always been, so old projects sound the same");
+        // 5 hits of 16 land on steps 0, 4, 7, 10, 13
+        const auto none = bar (5, 0, 64);
+        CHECK (none.size() == 5 && none.count (0) && none.count (4) && none.count (7) && none.count (10) && none.count (13), "5 hits of 16");
+        for (auto& v : none) CHECK (v.second == 0.72f, "Accent at 0: no hit is louder than another");
+        const auto two = bar (5, 2, 64);
+        CHECK (two.size() == 5, "Accent never adds or removes a hit");
+        for (auto& v : two) CHECK (v.second == (v.first % 2 == 0 ? 1.0f : 0.72f), "Accent 2: hits on every second step are full velocity, the rest lower");
+        const auto four = bar (16, 4, 64);
+        int loud = 0; for (auto& v : four) loud += v.second == 1.0f ? 1 : 0;
+        CHECK (four.size() == 16 && loud == 4 && four.at (0) == 1.0f && four.at (4) == 1.0f && four.at (8) == 1.0f && four.at (12) == 1.0f, "Accent 4 on a full bar: four loud hits, evenly spread, one on each beat");
+        CHECK (bar (5, 2, 37) == two && bar (16, 4, 50) == four, "the same whatever the block size");
+        CHECK (Euclid::accentAt (0, 3) && ! Euclid::accentAt (1, 3) && Euclid::accentAt (3, 3) && ! Euclid::accentAt (0, 0) && ! Euclid::accentAt (5, 0), "the screen and the sound agree on which steps are loud");
     }
 
     // ---- Every unit fits on its panel ----

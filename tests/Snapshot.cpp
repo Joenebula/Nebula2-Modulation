@@ -1,6 +1,7 @@
 // Saves PNGs of the plugin window for checking the layout
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include <map>
 
 static void shoot (juce::AudioProcessorEditor& ed, const juce::String& path)
 {
@@ -211,6 +212,40 @@ int main (int argc, char** argv)
         p.preview.store (false);
         e->songPanel.setVisible (false);
         shoot (*ed, dir + "/ui_all_marks.png");
+    }
+    // The eight Notes and rhythm units, wide, in rows as on the design picture
+    {
+        auto nb = n2m::makeBoard ("empty", 48000);
+        nb->name = "Notes and rhythm"; nb->colour = 6;
+        std::map<std::string, n2m::Module*> u;
+        for (const char* t : { "drumseq", "noteseq", "keys", "arp", "chords", "euclid", "ratchet", "swing" }) u[t] = nb->add (t, 0, 0, 48000);
+        n2m::setDrum (*u["drumseq"], "X.x.X..xX..x.xXx");
+        u["drumseq"]->set ("bars", 1);
+        n2m::setNotes (*u["noteseq"], n2m::noteIdeas ("lead")[0].gates, n2m::noteIdeas ("lead")[0].deg);
+        u["euclid"]->set ("hits", 5); u["euclid"]->set ("steps", 16); u["euclid"]->set ("accent", 2);
+        nb->connect (u["keys"]->uid, 0, nb->modules[0]->uid, 0);          // cabled to the Output, so the keyboard runs and can show its keys
+        n2m::tidy (*nb);                                                   // (Tidy puts them all in one long row: a test checks none overlap)
+        const char* rows[4][2] = { { "drumseq", "noteseq" }, { "keys", "arp" }, { "chords", "euclid" }, { "ratchet", "swing" } };
+        for (int r = 0; r < 4; ++r)
+        {
+            int x = 16;
+            for (auto* t : rows[r]) { u[t]->x = (float) x; u[t]->y = (float) (14 + r * (n2m::lay::panelH + 10)); x += n2m::lay::width (*u[t]->info) + 6; }
+        }
+        // the Output goes between the keyboard and the arpeggiator, so the keyboard's cable is a short one
+        nb->modules[0]->x = u["arp"]->x; nb->modules[0]->y = u["arp"]->y; u["arp"]->x += (float) (n2m::lay::width (*nb->modules[0]->info) + 6);
+        p.rack.addBoard (std::move (nb));
+        for (auto& m : p.rack.boards.back()->modules) m->live = true;      // (for the picture only: units with no cable to the Output are normally drawn dimmed)
+        e->selectTab ((int) p.rack.boards.size() - 1);
+        e->setFocus (true); e->setBigWindow (true); e->stepZoom (-1);
+        {   // hold a chord on the MIDI keyboard, then let the song run a moment so the playing lights show
+            juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer held;
+            held.addEvent (juce::MidiMessage::noteOn (1, 50, 0.8f), 0); held.addEvent (juce::MidiMessage::noteOn (1, 53, 0.8f), 1); held.addEvent (juce::MidiMessage::noteOn (1, 57, 0.8f), 2);
+            p.processBlock (buf, held);
+        }
+        p.preview.store (true); run (p, 1.3);
+        shoot (*ed, dir + "/ui_notes_rhythm.png");
+        p.preview.store (false); run (p, 0.1);
+        e->stepZoom (1); e->setFocus (false); e->setBigWindow (false);
     }
     return 0;
 }

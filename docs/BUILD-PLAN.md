@@ -212,7 +212,7 @@ other unit stays a tall panel).
 - [ ] **Joe to test in Cubase**: clicking the bar buttons, velocity bars and drop-downs with a real mouse; the keyboard lighting from a real MIDI keyboard
 - Fixed on the way (v0.1.25): a delay line could read one sample past its end when the position rounded exactly onto it
 
-## Bigger views (built, not released yet: for Joe to try)
+## Bigger views (done, v0.1.26: for Joe to try)
 
 Joe: "do any of the modules need to expand? Open a bigger view? So you can do more". Each of these units has an Expand label in its top line. It opens a panel over the board (Close, Escape or a click outside closes it; Undo, Redo and Play are on it). The song keeps playing and the view follows it. It closes itself if its unit goes.
 

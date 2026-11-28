@@ -227,7 +227,7 @@ Joe: "do any of the modules need to expand? Open a bigger view? So you can do mo
 - [ ] **Joe to test in Cubase**: all of it with a real mouse, at the normal size and Full screen
 - Already has one: the plugin slot (Open). No need: single-knob units (VCA, attenuator, pan and the like)
 
-## Inside mixer (built, not released yet)
+## Inside mixer (done, v0.1.27)
 
 Joe (28 Nov 2026): mix the units inside one sound on the desk, e.g. the layers inside a kick.
 

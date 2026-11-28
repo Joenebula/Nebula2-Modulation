@@ -116,10 +116,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.27'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.28'
 ```
 
-The latest release is **v0.1.26**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
+The latest release is **v0.1.27**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
 Joe asked for that release on 27 Nov 2026, after it had built on Windows, Mac and Linux and passed every test.
 
 Windows: don't name a variable `near`, `far` or `small`. The Windows headers define them and the build breaks.

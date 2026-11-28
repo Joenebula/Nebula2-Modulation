@@ -2221,6 +2221,51 @@ int main (int argc, char** argv)
         (void) picture();
     }
 
+    {
+        // A sound made late by a plugin in a slot: the host is told, and a rendered tab still starts on bar 1.
+        // (A stand-in unit that says it is late and is: no plugin here reports any lateness.)
+        struct Lag : n2m::Module
+        {
+            static const n2m::Info& desc() { static const n2m::Info i { "testlag", "Lag", "Utilities", "test only", { { "in", "In" } }, { { "out", "Out" } }, { { "samples", "Samples", 0, 4000, 0, n2m::Fmt::Int } } }; return i; }
+            int latency() const override { return (int) P (0); }
+            void process (int n, const n2m::Ctx&) override
+            {
+                const int d = (int) P (0);
+                for (int i = 0; i < n; ++i) { ring[(size_t) at] = in[0][(size_t) i]; out[0][(size_t) i] = ring[(size_t) ((at - d) & 8191)]; at = (at + 1) & 8191; }
+            }
+            std::array<float, 8192> ring {}; int at = 0;
+        };
+        n2m::extraTypes().push_back ({ &Lag::desc(), [] { return std::unique_ptr<n2m::Module> (new Lag()); } });
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        while (r.rack.boards.size() > 0) r.rack.removeBoard (0);
+        r.rack.addBoard (n2m::makeBoard ("bass", 48000)); r.rack.addBoard (n2m::makeBoard ("hat", 48000));
+        auto& b = *r.rack.boards[0];
+        for (auto& c : std::vector<n2m::Cable> (b.cables)) if (c.dst == b.outputs[0]->uid && c.dstPort == 1) r.rack.disconnect (b, c.src, c.srcPort, c.dst, c.dstPort);
+        const auto plainWav = r.renderTab (0, 2);
+        juce::MemoryBlock plainBytes; plainWav.loadFileAsData (plainBytes);
+        song.playing = true; run (r, song, 0.2); r.syncLatency();
+        CHECK (r.getLatencySamples() == 0, "a project with nothing late tells the host no lateness");
+        auto* lag = r.rack.addModule (b, "testlag", 0, 0);
+        for (auto& c : std::vector<n2m::Cable> (b.cables)) if (c.dst == b.outputs[0]->uid) { r.rack.disconnect (b, c.src, c.srcPort, c.dst, c.dstPort); r.rack.connect (b, c.src, c.srcPort, lag->uid, 0); }
+        r.rack.connect (b, lag->uid, 0, b.outputs[0]->uid, 0);
+        lag->set ("samples", 480);
+        run (r, song, 0.2); r.syncLatency();
+        CHECK (r.getLatencySamples() == 480, "a late unit: the host is told how late, so Cubase can line the track up");
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+        const auto lateWav = r.renderTab (0, 2);
+        juce::MemoryBlock lateBytes; lateWav.loadFileAsData (lateBytes);
+        CHECK (plainBytes.getSize() > 100000 && lateBytes == plainBytes, "a rendered tab leaves the wait off the front: it still starts on bar 1");
+        lag->set ("samples", 0);
+        run (r, song, 0.2);
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (600);          // the processor's own timer tells the host
+        CHECK (r.getLatencySamples() == 0, "and when nothing is late any more the host is told that too, without being asked");
+        song.playing = false;
+        n2m::extraTypes().pop_back();
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

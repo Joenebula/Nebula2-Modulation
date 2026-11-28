@@ -100,7 +100,9 @@ Joe's own plugins to load this way: Nebula2 Drums, Voice, Chord, Glitch, EQ, War
 - [x] Pointing a knob can be undone (built, not released yet)
 - [ ] Nexus / HALion controls can only be tried on Joe's PC
 - [x] Notes out of a hosted plugin (v0.1.14): a slot has Note 1 to 4 and Gate outputs carrying whatever notes the plugin sends out, so Nebula2 Chord in a slot can play an oscillator or another slot. Tested with Nebula2 Chord
-- [ ] Latency of hosted plugins isn't compensated yet
+- [x] Latency of hosted plugins (built, not released yet): when a plugin in a slot says its sound comes out late, every other sound is held back by the same amount so the tabs stay in step, and Cubase is told the total so it lines the whole instrument up with the other tracks. A project with no such plugin sounds exactly as before. DRAG AUDIO still starts on bar 1
+- [ ] Not lined up: inside one sound, a path that goes round a late plugin (say a dry path beside it) against the path through it; and a shared-effects tab is fed by the other tabs as they are, before their wait
+- [ ] **Joe to test in Cubase** with a plugin that looks ahead (a limiter or a linear-phase EQ): no plugin here reports any lateness, so the tests use a stand-in
 - [x] Per-tab load figure (v0.1.15): each mixer channel shows LOAD n% when the desk is opened with More; orange from 40%. A Total load figure by the master adds them up (v0.1.20); orange from 70%
 
 This is the stage that can only be checked on Joe's PC in Cubase with his own plugins.

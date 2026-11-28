@@ -2368,6 +2368,102 @@ int main()
         extraTypes().pop_back();
     }
 
+    {
+        // A unit that is late (as a plugin in a slot can be): every other sound waits for it, so they stay in step
+        struct Lag : Module
+        {
+            static const Info& desc() { static const Info i { "testlag", "Lag", "Utilities", "test only", { { "in", "In" } }, { { "out", "Out" } }, { { "samples", "Samples", 0, 4000, 0, Fmt::Int } } }; return i; }
+            int latency() const override { return (int) P (0); }
+            void process (int n, const Ctx&) override
+            {
+                const int d = (int) P (0);
+                for (int i = 0; i < n; ++i)
+                {
+                    ring[(size_t) at] = in[0][(size_t) i];
+                    out[0][(size_t) i] = ring[(size_t) ((at - d) & 8191)];
+                    at = (at + 1) & 8191;
+                }
+            }
+            std::array<float, 8192> ring {}; int at = 0;
+        };
+        extraTypes().push_back ({ &Lag::desc(), [] { return std::unique_ptr<Module> (new Lag()); } });
+        // two sounds; the first can have a Lag put between its last unit and its Output
+        auto build = [] (int lag, int second = -1, bool cabled = true)
+        {
+            auto rack = std::make_unique<Rack>(); rack->prepare (48000);
+            rack->addBoard (makeBoard ("bass", 48000)); rack->addBoard (makeBoard ("hat", 48000));
+            auto& b = *rack->boards[0];
+            if (lag >= 0)
+            {
+                auto* out = b.outputs[0];
+                const auto feeding = b.cables;
+                Module* last = nullptr;
+                for (int k = 0; k < (second >= 0 ? 2 : 1); ++k)
+                {
+                    auto* unit = rack->addModule (b, "testlag", 0, 0);
+                    unit->set ("samples", (float) (k == 0 ? lag : second));
+                    if (! cabled) continue;
+                    if (last == nullptr)
+                    {
+                        for (auto& c : feeding) if (c.dst == out->uid && c.dstPort == 0) { rack->disconnect (b, c.src, c.srcPort, c.dst, c.dstPort); rack->connect (b, c.src, c.srcPort, unit->uid, 0); }
+                        for (auto& c : feeding) if (c.dst == out->uid && c.dstPort == 1) rack->disconnect (b, c.src, c.srcPort, c.dst, c.dstPort);
+                    }
+                    else { rack->disconnect (b, last->uid, 0, out->uid, 0); rack->connect (b, last->uid, 0, unit->uid, 0); }
+                    rack->connect (b, unit->uid, 0, out->uid, 0);
+                    last = unit;
+                }
+            }
+            else for (auto& c : std::vector<Cable> (b.cables)) if (c.dst == b.outputs[0]->uid && c.dstPort == 1) rack->disconnect (b, c.src, c.srcPort, c.dst, c.dstPort);
+            return rack;
+        };
+        const auto plain = render (*build (-1), 2);
+        CHECK (peakOf (plain.l) > 0.05f, "(the two sounds play)");
+        {
+            auto r0 = build (0);
+            const auto y = render (*r0, 2);
+            CHECK (r0->latency.load() == 0 && y.l == plain.l && y.r == plain.r, "a unit that isn't late changes nothing: the sound is exactly the same");
+            auto idle = build (300, -1, false);
+            const auto z = render (*idle, 2);
+            CHECK (idle->latency.load() == 0 && z.l == plain.l, "a late unit that isn't cabled to the Output holds nothing back");
+        }
+        auto shifted = [&plain] (const Render& y, int by)
+        {
+            if (y.l.size() != plain.l.size()) return false;
+            for (int i = 0; i < by; ++i) if (y.l[(size_t) i] != 0.0f || y.r[(size_t) i] != 0.0f) return false;
+            for (size_t i = (size_t) by; i < y.l.size(); ++i) if (y.l[i] != plain.l[i - (size_t) by] || y.r[i] != plain.r[i - (size_t) by]) return false;
+            return true;
+        };
+        {
+            auto r1 = build (100);
+            const auto y = render (*r1, 2);
+            CHECK (r1->latency.load() == 100, "the rack says how late it is: as late as its latest sound");
+            CHECK (shifted (y, 100), "the other sound waits exactly as long, so the mix is the same, just later");
+            // the late sound alone and the other alone are each 100 late
+            r1 = build (100); r1->boards[0]->mute.store (true);
+            auto p1 = build (-1); p1->boards[0]->mute.store (true);
+            const auto hatLate = render (*r1, 1), hat = render (*p1, 1);
+            bool same = peakOf (hat.l) > 0.01f;
+            for (size_t i = 100; i < hat.l.size(); ++i) same = same && hatLate.l[i] == hat.l[i - 100];
+            CHECK (same, "the sound without the late unit is held back by the difference");
+            for (int block : { 64, 100, 333, 1024 })
+            {
+                auto rb = build (100);
+                const auto yb = render (*rb, 2, true, block);
+                CHECK (yb.l == y.l && yb.r == y.r, "lining up doesn't depend on the block size");
+            }
+        }
+        {
+            auto r2 = build (100, 50);
+            const auto y = render (*r2, 2);
+            CHECK (r2->latency.load() == 150 && shifted (y, 150), "late units one after another add up");
+            // taking the lateness away again: back to no wait at all
+            for (auto& m : r2->boards[0]->modules) if (std::string (m->info->type) == "testlag") m->set ("samples", 0);
+            render (*r2, 1);
+            CHECK (r2->latency.load() == 0 && r2->boards[1]->heldBack == 0, "when nothing is late any more, nothing is held back");
+        }
+        extraTypes().pop_back();
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

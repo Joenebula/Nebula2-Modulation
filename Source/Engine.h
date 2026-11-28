@@ -34,6 +34,7 @@ constexpr int kLenRow = 2 * kMaxSteps;  // where the third row starts
 constexpr int kData = 3 * kMaxSteps;   // a sequencer carries three rows: hits (or note on/off), which note, then (note sequencer only) the note's own length in steps, 0 = the Length knob
 constexpr int kLinkGroups = 8;         // link groups A to H
 constexpr int kOuts = 16;              // stereo outputs to the host: 1 is the main mix, 2 to 16 are separate
+constexpr int kMaxLatency = 1 << 16;    // the most lateness (in samples) a sound can be lined up for: a plugin in a slot that reports more is treated as this
 constexpr double kPi = 3.14159265358979323846;
 
 // ---- Keys: the same scales as Nebula2 Chord, so the two stay in step ----
@@ -227,6 +228,8 @@ struct Module
     virtual ~Module() = default;
     virtual void prepare (double) {}
     virtual void process (int n, const Ctx&) = 0;
+    // How many samples late this unit's output is against its input (a plugin in a slot that looks ahead). Audio thread.
+    virtual int latency() const { return 0; }
     // Anything more than knobs and patterns that a module needs saved (one line of text, no line breaks)
     virtual std::string saveExtra() const { return {}; }
     virtual void loadExtra (const std::string&) {}
@@ -281,6 +284,7 @@ struct Module
     int patternLink = 0;                               // a sequencer's group, 0 = not linked
     int patternShare = 3;                              // what it shares: 1 rhythm, 2 notes, 3 both, 4 = keeps its own pattern and moves to match the group's leader
     bool live = true;                                  // can its signal reach the board's output
+    int lateBy = 0;                                    // audio thread: how late its output is, with everything cabled before it counted
 };
 
 struct Cable { int src, srcPort, dst, dstPort; };
@@ -535,8 +539,28 @@ struct Board
                     m->params[(size_t) a->param].store (paramFromNorm (m->info->params[(size_t) a->param], a->at (barPos)));
     }
 
-    // Adds this board's sound into l and r
-    void process (int n, const Ctx& c, float* l, float* r, bool audible)
+    // How late this sound reaches its Output: the latest path of cables into it, adding up the units on the way
+    // that say they are late. Audio thread. A loop of cables counts once.
+    int latency()
+    {
+        bool any = false;
+        for (auto& m : modules) { m->lateBy = 0; any = any || m->latency() > 0; }
+        if (! any) return 0;
+        for (int idx : order)
+        {
+            auto* m = modules[(size_t) idx].get();
+            int before = 0;
+            for (auto& rt : routes[(size_t) idx]) before = std::max (before, rt.src->lateBy);
+            m->lateBy = before + std::max (0, m->latency());
+        }
+        int late = 0;
+        for (auto* o : outputs) late = std::max (late, o->lateBy);
+        return std::min (kMaxLatency - 1, late);
+    }
+
+    // Adds this board's sound into l and r. holdBack: this many samples later, so it lines up with a sound that
+    // a plugin makes late. 0 (every project without such a plugin) takes the plain path below, exactly as before.
+    void process (int n, const Ctx& c, float* l, float* r, bool audible, int holdBack = 0)
     {
         for (int idx : order)
         {
@@ -553,6 +577,28 @@ struct Board
         const float lv = audible ? level.load() : 0.0f, p = pan.load();
         const float gl = lv * std::min (1.0f, 1.0f - p), gr = lv * std::min (1.0f, 1.0f + p);
         float pk = 0.0f;
+        if (holdBack != heldBack)
+        {
+            // the wait has changed: start it from silence
+            heldBack = holdBack;
+            if (holdBack > 0) { std::fill (waitL.begin(), waitL.end(), 0.0f); std::fill (waitR.begin(), waitR.end(), 0.0f); waitAt = 0; }
+        }
+        if (holdBack > 0)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                float a = 0.0f, b = 0.0f;
+                for (auto* o : outputs) { a += o->l[(size_t) i] * gl; b += o->r[(size_t) i] * gr; }
+                waitL[(size_t) waitAt] = a; waitR[(size_t) waitAt] = b;
+                const int from = (waitAt - holdBack) & (kMaxLatency - 1);
+                a = waitL[(size_t) from]; b = waitR[(size_t) from];
+                waitAt = (waitAt + 1) & (kMaxLatency - 1);
+                l[i] += a; r[i] += b;
+                pk = std::max (pk, std::max (std::abs (a), std::abs (b)));
+            }
+            if (pk > peak.load()) peak.store (pk);
+            return;
+        }
         for (auto* o : outputs)
             for (int i = 0; i < n; ++i)
             {
@@ -568,6 +614,9 @@ struct Board
     std::vector<int> order;
     std::vector<OutputModule*> outputs;
     bool hasReturn = false;      // this board plays a send bus, so it must run after the boards that feed it
+    // Lining up with a late plugin on another tab (audio thread): what this sound made, to be let out a little later
+    std::vector<float> waitL = std::vector<float> ((size_t) kMaxLatency, 0.0f), waitR = std::vector<float> ((size_t) kMaxLatency, 0.0f);
+    int waitAt = 0, heldBack = 0, lateNow = 0;
 };
 
 // A lock the audio thread never waits on: if the screen is changing the rack, audio skips one chunk
@@ -626,6 +675,9 @@ struct Rack
     std::atomic<float> master { 0.8f }, peakL { 0.0f }, peakR { 0.0f };
     double sr = 48000;
     std::atomic<int> outsOn { 1 };      // which outputs the host has switched on, one bit each (bit 0 = main)
+    // How late everything comes out, in samples: the lateness of the latest sound (0 unless a plugin in a slot says it
+    // is late). Every other sound is held back to match, so they stay in step, and the host is told this figure.
+    std::atomic<int> latency { 0 };
     TryLock lock;
     Harmony harmony;
     Song song;
@@ -866,6 +918,10 @@ struct Rack
         };
         Ctx resting = c; resting.playing = false;
         for (auto& b : boards) b->spent = 0;
+        // Worked out once per call from what the units say, in samples, so it is the same at any block size
+        int late = 0;
+        for (auto& b : boards) { b->lateNow = b->latency(); late = std::max (late, b->lateNow); }
+        latency.store (late);
         int sec = -1;
         // Knob movement drawn on the timeline. The song is so many bars long and goes round; knobs are set on a
         // fine fixed grid of song position (1/32 of a step) and chunks are cut at its edges, so the sample a knob
@@ -913,7 +969,7 @@ struct Rack
                     const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
                     const bool sitsOut = songOn && ((b->plays.load() >> sec) & 1u) == 0;
                     const auto began = std::chrono::steady_clock::now();
-                    b->process (len, sitsOut ? resting : c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load());
+                    b->process (len, sitsOut ? resting : c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load(), late - b->lateNow);
                     b->spent += std::chrono::duration<double> (std::chrono::steady_clock::now() - began).count();
                 }
         }

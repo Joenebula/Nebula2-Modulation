@@ -17,6 +17,13 @@ Nebula2ModulationProcessor::Nebula2ModulationProcessor()
     n2m::registerPluginSlot();
     n2m::registerSamplePlayer();
     n2m::loadStarter (rack);
+    startTimer (250);
+}
+
+void Nebula2ModulationProcessor::syncLatency()
+{
+    const int late = rack.latency.load();
+    if (late != getLatencySamples()) setLatencySamples (late);
 }
 
 void Nebula2ModulationProcessor::prepareToPlay (double sampleRate, int)
@@ -104,13 +111,17 @@ juce::File Nebula2ModulationProcessor::renderTab (int tab, int bars)
     if (bars <= 0) bars = juce::jlimit (4, 64, (copy.timeline.total + n2m::kSteps - 1) / n2m::kSteps);
     const double tempo = juce::jlimit (20.0, 400.0, bpm.load()), sr = rack.sr;
     const int total = (int) std::llround (bars * 4.0 * 60.0 / tempo * sr);
-    juce::AudioBuffer<float> audio (2, total);
+    // If a plugin in a slot makes the sound late, everything comes out that much later: play that much longer and
+    // leave the wait off the front, so the file starts on bar 1
+    juce::AudioBuffer<float> audio (2, total + n2m::kMaxLatency);
     audio.clear();
     const int block = 512;
-    for (int pos = 0; pos < total; pos += block)
+    int late = 0;
+    for (int pos = 0; pos < total + late; pos += block)
     {
-        const int n = juce::jmin (block, total - pos);
+        const int n = juce::jmin (block, total + late - pos);
         copy.process (audio.getWritePointer (0, pos), audio.getWritePointer (1, pos), n, tempo, (double) pos * tempo / 60.0 / sr, true);
+        late = juce::jlimit (late, n2m::kMaxLatency - 1, copy.latency.load());
     }
     auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Nebula2-Modulation");
     folder.createDirectory();
@@ -122,7 +133,7 @@ juce::File Nebula2ModulationProcessor::renderTab (int tab, int bars)
     std::unique_ptr<juce::AudioFormatWriter> writer (wav.createWriterFor (stream.get(), sr, 2, 24, {}, 0));
     if (writer == nullptr) return {};
     stream.release();                                  // the writer owns it now
-    if (! writer->writeFromAudioSampleBuffer (audio, 0, total)) return {};
+    if (! writer->writeFromAudioSampleBuffer (audio, late, total)) return {};
     writer.reset();
     return file;
 }

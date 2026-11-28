@@ -155,6 +155,7 @@ juce::String HostedModule::load (const juce::PluginDescription& d, const juce::M
         numIn = in; numOut = out;
         notes = NoteTracker();
         for (int k = 0; k < kKnobs; ++k) { target[k].store (found[k]); sent[k] = -1; }
+        late.store (juce::jmax (0, plugin->getLatencySamples()));
     }
     touched.store (-1);
     description = d;
@@ -169,7 +170,7 @@ void HostedModule::unload()
     if (plugin == nullptr) return;
     tellClosing (this);
     std::unique_ptr<juce::AudioPluginInstance> gone;
-    { Hold h (guard); gone.swap (plugin); for (auto& t : target) t.store (-1); }
+    { Hold h (guard); gone.swap (plugin); for (auto& t : target) t.store (-1); late.store (0); }
     for (int k = 0; k < kKnobs; ++k) knobIds.set (k, {});
     touched.store (-1);
 }
@@ -279,6 +280,7 @@ void HostedModule::process (int n, const Ctx& c)
     }
 
     plugin->processBlock (view, midi);
+    late.store (juce::jmax (0, plugin->getLatencySamples()), std::memory_order_relaxed);     // a plugin can change it as it goes
 
     // Notes the plugin itself sends out (Nebula2 Chord's chords, an arpeggiator's notes) become cable signals:
     // the notes held, lowest first, and a gate that dips for a sample on each new note so envelopes restart

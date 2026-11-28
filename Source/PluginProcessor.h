@@ -7,10 +7,11 @@
 #include "Styles.h"
 
 // The plugin as Cubase sees it: holds the rack, follows Cubase's tempo and transport, saves with the project.
-class Nebula2ModulationProcessor : public juce::AudioProcessor
+class Nebula2ModulationProcessor : public juce::AudioProcessor, private juce::Timer
 {
 public:
     Nebula2ModulationProcessor();
+    ~Nebula2ModulationProcessor() override { stopTimer(); }
 
     void prepareToPlay (double sampleRate, int) override;
     void releaseResources() override {}
@@ -54,6 +55,8 @@ public:
     uint32_t nextSeed();                        // a fresh number for each Random press
 
     bool isPlaying() const { return hostPlaying.load() || preview.load(); }
+    // Tells the host how late the sound comes out (see Rack::latency) when that has changed. Message thread; a timer calls it.
+    void syncLatency();
 
     // Sounds: one tab saved as a file, to use again in another project
     static juce::File soundsFolder();                               // Documents / Nebula2 Modulation / Sounds
@@ -92,6 +95,7 @@ public:
     int addPluginSound (const juce::String& name, const juce::String& path = {});
 
 private:
+    void timerCallback() override { syncLatency(); }
     static BusesProperties makeBuses();
     double ownPpq = 0;
     n2m::KeyEvent keyEvents[512];

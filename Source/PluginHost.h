@@ -27,6 +27,7 @@ public:
 
     void prepare (double sampleRate) override;
     void process (int n, const Ctx&) override;
+    int latency() const override { return late.load (std::memory_order_relaxed); }
     std::string saveExtra() const override;
     void loadExtra (const std::string&) override;
     void restoreExtra (const std::string&, bool whole) override;
@@ -75,6 +76,7 @@ private:
     bool posPlaying = false;
     std::shared_ptr<bool> alive;
     std::atomic<int> target[kKnobs], touched { -1 };
+    std::atomic<int> late { 0 };                       // what the plugin says its lateness is, in samples
     int heldNotes[16] {}, heldCount = 0;               // notes the plugin is sending out right now
     float noteOut[4] { 0, 0, 0, 0 }; bool gateWas = false;
     float sent[kKnobs] { -1, -1, -1, -1 };             // what each knob last told the plugin (-1 = nothing yet)

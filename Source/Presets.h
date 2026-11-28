@@ -1016,4 +1016,42 @@ inline std::unique_ptr<Board> makeCarrier (const Board& old, const char* sourceT
     tidy (*b);
     return b;
 }
+
+// The Inside mixer: which knobs of one sound get a fader on the mixing desk. This is the whole rule:
+//   - a knob called "level" on any unit (oscillators, noise, the sample player, a plugin slot, drive, VCA, Return, Output ...)
+//   - the compressor's Make-up ("makeup"): its level out
+//   - every input level of a Mixer unit
+//   - an effect's Mix ("mix"; not the Crossfader, whose knob picks between two inputs)
+//   - a Send's Amount: how much goes to the shared effects
+// Nothing else, and never a switch. Ids, not names, decide, so it holds for saved projects.
+inline bool isMixKnob (const Info& i, const Param& p)
+{
+    if (! p.choices.empty()) return false;
+    const std::string type (i.type), id (p.id);
+    if (id == "level" || id == "makeup") return true;
+    if (type == "mixer") return true;
+    if (id == "mix") return type != "xfade";
+    return type == "send" && id == "amount";
+}
+
+// One fader of the Inside mixer: the unit (by id, never by address), which of its knobs, and what to call them.
+// The strips go in the order the units sit on the board, left to right (then top to bottom), so the Output comes last.
+// Units of a kind that is on the board more than once are numbered in that order: "Oscillator 2".
+struct InsideStrip { int uid = 0, param = 0; std::string unit, knob; };
+inline std::vector<InsideStrip> insideStrips (const Board& b)
+{
+    std::vector<const Module*> order;
+    for (auto& m : b.modules) order.push_back (m.get());
+    std::stable_sort (order.begin(), order.end(), [] (const Module* p, const Module* q) { return p->x != q->x ? p->x < q->x : p->y < q->y; });
+    std::vector<InsideStrip> v;
+    for (auto* m : order)
+    {
+        int same = 0, nth = 0;
+        for (auto* o : order) if (o->info == m->info) { ++same; if (o == m) nth = same; }
+        for (size_t k = 0; k < m->info->params.size(); ++k)
+            if (isMixKnob (*m->info, m->info->params[k]))
+                v.push_back ({ m->uid, (int) k, same > 1 ? std::string (m->info->name) + " " + std::to_string (nth) : std::string (m->info->name), m->info->params[k].name });
+    }
+    return v;
+}
 } // namespace n2m

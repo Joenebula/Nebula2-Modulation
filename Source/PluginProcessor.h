@@ -46,6 +46,7 @@ public:
     std::atomic<bool> showAll { true };         // every sound on one board, instead of one tab at a time
     std::atomic<float> zoomAll { 0.0f };        // how big that one board is drawn. 0 = whatever fits it all in view
     std::atomic<bool> mixerTall { false };      // the mixing desk opened up to show its extra controls
+    std::atomic<bool> mixerInside { false };    // the mixing desk showing the units inside the selected sound, not the sounds
     std::atomic<bool> focusView { false };      // the style bar and mixing desk hidden, so the board gets the room
     std::atomic<bool> bigWindow { false };      // the plugin window grown to fill the monitor
     std::atomic<int> stateVersion { 0 };        // goes up when a project load replaces the rack

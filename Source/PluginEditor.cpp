@@ -1940,7 +1940,15 @@ void BoardView::paintOverChildren (juce::Graphics& g)
         if (auto* a = compFor (drag.uid))
             drawCable (g, (a->getPosition() + a->jackCentre (drag.fromOut, drag.port)).toFloat(), drag.at.toFloat(),
                        drag.fromOut ? boardColour (board->colour + drag.uid) : n8, true);
+    if (flashUid != 0)
+        if (auto* c = compFor (flashUid))
+        {
+            g.setColour (accent);
+            g.drawRoundedRectangle (c->getBounds().toFloat().expanded (3.0f), radiusCard + 2.0f, 2.0f);
+        }
 }
+
+void BoardView::flash (int uid) { flashUid = uid; flashUntil = juce::Time::getMillisecondCounter() + 1200; repaint(); }
 
 bool BoardView::findJack (juce::Point<int> at, ModuleComp*& comp, bool& isOut, int& port) const
 {
@@ -2066,6 +2074,7 @@ void BoardView::filesDropped (const juce::StringArray& files, int x, int y)
 
 void BoardView::tick()
 {
+    if (flashUid != 0 && juce::Time::getMillisecondCounter() > flashUntil) { flashUid = 0; repaint(); }
     // knobs the timeline is moving are redrawn as they turn
     const bool moving = board != nullptr && ! board->autos.empty() && proc.isPlaying();
     for (auto* c : comps)
@@ -2704,6 +2713,51 @@ static constexpr float kFaderTop = 1.25f;   // the top of a fader is 125%
 static constexpr int kExtraH = 124;
 int MixerStrip::heightFor (bool tall) { return tall ? kMixerH + kExtraH : kMixerH; }
 void MixerStrip::setTall (bool tall) { proc.mixerTall.store (tall); if (onResize) onResize(); repaint(); }
+
+//---- Inside: the selected sound's own levels and mixes ----
+static constexpr int kInsideHeadW = 84;
+void MixerStrip::setInside (bool on) { proc.mixerInside.store (on); dragChannel = -2; dragUid = 0; if (onResize) onResize(); repaint(); }
+Board* MixerStrip::insideBoard() const
+{
+    const int t = proc.selectedTab.load();
+    return t >= 0 && t < (int) proc.rack.boards.size() ? proc.rack.boards[(size_t) t].get() : nullptr;
+}
+std::vector<InsideStrip> MixerStrip::insideList() const { if (auto* b = insideBoard()) return insideStrips (*b); return {}; }
+juce::String MixerStrip::insideHeading() const { if (auto* b = insideBoard()) return "Inside: " + juce::String (b->name); return "Inside"; }
+juce::Rectangle<int> MixerStrip::insideStrip (int i) const { return { 12 + kInsideHeadW + 6 + i * (kChanW + 6) - scrollIn, 8, kChanW, getHeight() - 16 }; }
+juce::Rectangle<int> MixerStrip::insideFader (juce::Rectangle<int> s) { return { s.getX() + 10, s.getY() + 50, 26, s.getHeight() - 60 }; }
+juce::Rectangle<int> MixerStrip::insideName (juce::Rectangle<int> s) { return { s.getX() + 4, s.getY() + 8, s.getWidth() - 8, 34 }; }
+float MixerStrip::insideNorm (const InsideStrip& s) const
+{
+    auto* b = insideBoard();
+    auto* m = b != nullptr ? b->find (s.uid) : nullptr;
+    if (m == nullptr || s.param < 0 || s.param >= (int) m->info->params.size()) return -1.0f;
+    return paramToNorm (m->info->params[(size_t) s.param], m->P (s.param));
+}
+// A fader turns its knob the way a hand on the board does: through the knob itself (ParamCell::setNorm), so the
+// knob redraws and linked knobs follow. The unit is looked up by id on the board that is on screen now.
+bool MixerStrip::turnInside (int uid, int param, float norm)
+{
+    auto* view = boardFor ? boardFor() : nullptr;
+    if (view == nullptr || view->board == nullptr || view->board != insideBoard()) return false;
+    auto* comp = view->compFor (uid);
+    // (the unit on screen must be the one the rack holds now, looked up by id: never trust a kept address)
+    if (comp == nullptr || view->board->find (uid) != &comp->module) return false;
+    auto* cell = comp->cellFor (param);
+    if (cell == nullptr || ! isMixKnob (*comp->module.info, comp->module.info->params[(size_t) param])) return false;
+    cell->setNorm (norm);
+    repaint();
+    return true;
+}
+bool MixerStrip::moveInside (const InsideStrip& s, float norm)
+{
+    auto* view = boardFor ? boardFor() : nullptr;
+    if (view == nullptr || view->board == nullptr || view->board != insideBoard()) return false;
+    view->willChange();
+    const bool ok = turnInside (s.uid, s.param, norm);
+    view->settled();
+    return ok;
+}
 void MixerStrip::setPan (int channel, float pan)
 {
     if (channel < 0 || channel >= (int) proc.rack.boards.size()) return;
@@ -2780,6 +2834,61 @@ void MixerStrip::paint (juce::Graphics& g)
     const int sel = proc.selectedTab.load();
     const int n = (int) proc.rack.boards.size();
     shown.resize ((size_t) n, 0.0f);
+    if (proc.mixerInside.load())
+    {
+        // Inside: which sound, then a strip for each of its levels and mixes. No pan, mute, solo or output here.
+        auto* b = insideBoard();
+        const auto list = insideList();
+        const int left = 12 + kInsideHeadW, right = masterArea().getX() - 10;
+        scrollIn = juce::jlimit (0, juce::jmax (0, (int) list.size() * (kChanW + 6) - (right - left - 6)), scrollIn);
+        const auto col = boardColour (b != nullptr ? b->colour : 0);
+        g.setColour (col);
+        g.fillRoundedRectangle (12.0f, 12.0f, (float) kInsideHeadW - 12.0f, 2.0f, 1.0f);
+        caption (g, "Inside:", { 12, 22, kInsideHeadW - 8, 12 });
+        g.setFont (font (12.0f, Weight::Medium));
+        g.setColour (juce::Colours::white);
+        if (b != nullptr) g.drawFittedText (b->name, 12, 36, kInsideHeadW - 8, 30, juce::Justification::topLeft, 2, 0.8f);
+        if (list.empty())
+        {
+            g.setFont (font (11.0f));
+            g.setColour (n7);
+            g.drawText ("Nothing to mix in this sound", left + 10, 8, juce::jmax (0, right - left - 20), getHeight() - 16, juce::Justification::centredLeft, true);
+        }
+        juce::Graphics::ScopedSaveState save (g);
+        g.reduceClipRegion (left + 2, 0, juce::jmax (0, right - left - 2), getHeight());
+        for (int i = 0; i < (int) list.size(); ++i)
+        {
+            const auto& s = list[(size_t) i];
+            const auto ch = insideStrip (i);
+            if (ch.getRight() < left || ch.getX() > right) continue;
+            auto* m = b->find (s.uid);
+            if (m == nullptr) continue;
+            const auto& prm = m->info->params[(size_t) s.param];
+            const bool dim = ! m->live;                         // a unit that can't be heard: its strip is dimmed, like the unit
+            if (dim) g.beginTransparencyLayer (0.4f);
+            g.setColour (juce::Colours::white.withAlpha (0.025f));
+            g.fillRoundedRectangle (ch.toFloat(), radiusCard);
+            g.setColour (col);
+            g.fillRoundedRectangle ((float) ch.getX() + 10.0f, (float) ch.getY() + 4.0f, (float) ch.getWidth() - 20.0f, 2.0f, 1.0f);
+            const auto nm = insideName (ch);
+            g.setFont (font (10.5f, Weight::Medium));
+            g.setColour (n8);
+            g.drawFittedText (s.unit, nm.withHeight (24), juce::Justification::centred, 2, 0.8f);
+            const auto f = insideFader (ch);
+            const float norm = paramToNorm (prm, m->P (s.param));
+            drawFader (g, f, norm * kFaderTop, -1.0f, -1.0f, col);
+            // beside the fader: which knob it is, and what it is set to
+            caption (g, s.knob, { ch.getX() + 34, f.getY() - 1, ch.getWidth() - 38, 12 }, juce::Justification::centred);
+            g.setColour (n4);
+            const juce::Rectangle<int> vb (ch.getX() + 38, ch.getBottom() - 26, ch.getWidth() - 46, 18);
+            g.fillRoundedRectangle (vb.toFloat(), 4.0f);
+            g.setFont (font (9.5f, Weight::Medium));
+            g.setColour (dragUid == s.uid && dragParam == s.param ? juce::Colours::white : n8);
+            g.drawFittedText (juce::String (paramText (prm, m->P (s.param))), vb.reduced (2, 0), juce::Justification::centred, 1, 0.75f);
+            if (dim) g.endTransparencyLayer();
+        }
+    }
+    else
     {
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (0, 0, masterArea().getX() - 10, getHeight());
@@ -2849,7 +2958,7 @@ void MixerStrip::paint (juce::Graphics& g)
     g.setFont (font (10.0f));
     g.setColour (n7);
     g.drawText (juce::String ((int) std::lround (proc.rack.master.load() * 100)) + "%", m.getX() + 66, m.getBottom() - 24, 42, 12, juce::Justification::centred, false);
-    if (proc.mixerTall.load())
+    if (proc.mixerTall.load() && ! proc.mixerInside.load())
     {
         // Every sound's load added up: what the whole plugin is using
         float sum = 0;
@@ -2864,10 +2973,29 @@ void MixerStrip::paint (juce::Graphics& g)
 
 void MixerStrip::mouseDown (const juce::MouseEvent& e)
 {
-    dragChannel = -2; dragPan = false;
+    dragChannel = -2; dragPan = false; dragUid = 0; dragParam = -1;
     const auto m = masterArea();
     if (m.contains (e.getPosition())) { dragChannel = -1; mouseDrag (e); return; }
     if (e.x >= m.getX() - 10) return;
+    if (proc.mixerInside.load())
+    {
+        if (e.x < 12 + kInsideHeadW) return;
+        const auto list = insideList();
+        for (int i = 0; i < (int) list.size(); ++i)
+        {
+            const auto ch = insideStrip (i);
+            if (! ch.contains (e.getPosition())) continue;
+            if (insideName (ch).contains (e.getPosition())) { if (onShowUnit) onShowUnit (list[(size_t) i].uid); return; }
+            if (! insideFader (ch).expanded (8, 4).contains (e.getPosition())) return;
+            auto* view = boardFor ? boardFor() : nullptr;
+            if (view == nullptr || view->board != insideBoard()) return;
+            view->willChange();                 // one Undo step for the whole drag; mouseUp drops it if nothing moved
+            dragUid = list[(size_t) i].uid; dragParam = list[(size_t) i].param; dragChannel = i;
+            mouseDrag (e);
+            return;
+        }
+        return;
+    }
     for (int i = 0; i < (int) proc.rack.boards.size(); ++i)
     {
         const auto ch = channel (i);
@@ -2888,6 +3016,19 @@ void MixerStrip::mouseDown (const juce::MouseEvent& e)
 void MixerStrip::mouseDrag (const juce::MouseEvent& e)
 {
     if (dragChannel == -2) return;
+    if (dragUid != 0)
+    {
+        // the strip is found again by its unit and knob: the list may have changed under the drag
+        const auto list = insideList();
+        for (int i = 0; i < (int) list.size(); ++i)
+            if (list[(size_t) i].uid == dragUid && list[(size_t) i].param == dragParam)
+            {
+                const auto f = insideFader (insideStrip (i));
+                if (turnInside (dragUid, dragParam, 1.0f - (float) (e.y - f.getY()) / (float) f.getHeight())) return;
+            }
+        dragUid = 0; dragChannel = -2;
+        return;
+    }
     if (dragPan)
     {
         const auto bar = panIn (channel (dragChannel));
@@ -2901,11 +3042,22 @@ void MixerStrip::mouseDrag (const juce::MouseEvent& e)
     repaint();
 }
 
-void MixerStrip::mouseUp (const juce::MouseEvent&) { proc.history.discardIfUnchanged(); dragChannel = -2; dragPan = false; repaint(); }
+void MixerStrip::mouseUp (const juce::MouseEvent&) { proc.history.discardIfUnchanged(); dragChannel = -2; dragPan = false; dragUid = 0; dragParam = -1; repaint(); }
 
 void MixerStrip::mouseDoubleClick (const juce::MouseEvent& e)
 {
     if (masterArea().contains (e.getPosition())) { proc.rack.master.store (0.8f); repaint(); return; }
+    if (proc.mixerInside.load())
+    {
+        // a double-click puts the knob back where it starts, as it does on the board
+        const auto list = insideList();
+        auto* b = insideBoard();
+        for (int i = 0; i < (int) list.size(); ++i)
+            if (insideFader (insideStrip (i)).expanded (8, 4).contains (e.getPosition()) && e.x < masterArea().getX() - 10)
+                if (auto* m = b->find (list[(size_t) i].uid))
+                    moveInside (list[(size_t) i], paramToNorm (m->info->params[(size_t) list[(size_t) i].param], m->info->params[(size_t) list[(size_t) i].param].def));
+        return;
+    }
     if (proc.mixerTall.load()) for (int i = 0; i < (int) proc.rack.boards.size(); ++i) if (panIn (channel (i)).expanded (4, 6).contains (e.getPosition())) { setPan (i, 0.0f); return; }
     for (int i = 0; i < (int) proc.rack.boards.size(); ++i)
         if (faderIn (channel (i)).expanded (8, 4).contains (e.getPosition())) { proc.rack.boards[(size_t) i]->level.store (0.8f); repaint(); }
@@ -2913,6 +3065,14 @@ void MixerStrip::mouseDoubleClick (const juce::MouseEvent& e)
 
 void MixerStrip::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
 {
+    if (proc.mixerInside.load())
+    {
+        // more strips than fit: the wheel moves along them, as it does along the sounds
+        const int all = (int) insideList().size() * (kChanW + 6), space = masterArea().getX() - 10 - 12 - kInsideHeadW - 6;
+        scrollIn = juce::jlimit (0, juce::jmax (0, all - space), scrollIn - (int) ((w.deltaY + w.deltaX) * 240.0f));
+        repaint();
+        return;
+    }
     const int total = (int) proc.rack.boards.size() * (kChanW + 6);
     const int room = masterArea().getX() - 10 - 12;
     scroll = juce::jlimit (0, juce::jmax (0, total - room), scroll - (int) ((w.deltaY + w.deltaX) * 240.0f));
@@ -2934,6 +3094,24 @@ void MixerStrip::tick()
     const float l = juce::jmax (proc.rack.peakL.exchange (0.0f), shownL * 0.85f), r = juce::jmax (proc.rack.peakR.exchange (0.0f), shownR * 0.85f);
     moved = moved || std::abs (l - shownL) > 0.002f || std::abs (r - shownR) > 0.002f;
     shownL = l < 0.001f ? 0.0f : l; shownR = r < 0.001f ? 0.0f : r;
+    if (proc.mixerInside.load())
+    {
+        // Inside: follow the knobs. Anything that changes what is drawn (a knob turned on the board, by the timeline
+        // or by Undo, a unit added or removed, another sound selected or renamed) changes this number.
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&h] (uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+        if (auto* b = insideBoard())
+        {
+            mix ((uint64_t) (size_t) b); mix ((uint64_t) std::hash<std::string>() (b->name)); mix ((uint64_t) b->colour);
+            for (auto& s : insideStrips (*b))
+                if (auto* m = b->find (s.uid))
+                {
+                    uint32_t bits = 0; const float v = m->P (s.param); std::memcpy (&bits, &v, sizeof (bits));
+                    mix ((uint64_t) s.uid); mix ((uint64_t) s.param); mix (bits); mix (m->live ? 1u : 0u); mix ((uint64_t) (size_t) m->info);
+                }
+        }
+        if (h != insideSeen) { insideSeen = h; moved = true; }
+    }
     if (moved) repaint();
 }
 
@@ -3703,6 +3881,12 @@ Nebula2ModulationEditor::Nebula2ModulationEditor (Nebula2ModulationProcessor& p)
     // The desk's own tab, sitting on its top edge above the master: opens it up and closes it again
     addAndMakeVisible (deskButton);
     deskButton.onClick = [this] { mixer.setTall (! proc.mixerTall.load()); };
+    // Beside it: what the desk mixes. Sounds = one channel per sound; Inside = the levels inside the selected sound
+    for (auto* b : { &deskSounds, &deskInside }) addAndMakeVisible (b);
+    deskSounds.onClick = [this] { mixer.setInside (false); };
+    deskInside.onClick = [this] { mixer.setInside (true); };
+    mixer.boardFor = [this] { return shownBoard(); };
+    mixer.onShowUnit = [this] (int uid) { showUnit (uid); };
 
     addChildComponent (hostOverlay);
     // A unit's bigger view. What it changes shows on the unit underneath; Undo, Redo and Play are on it too,
@@ -3808,6 +3992,20 @@ void Nebula2ModulationEditor::scrollToTab (int index)
     const auto seen = viewport.getViewArea().toFloat();
     if (a.isEmpty() || seen.contains (a)) return;
     viewport.setViewPosition (juce::jmax (0, juce::roundToInt (a.getX() - 20.0f)), juce::jmax (0, juce::roundToInt (a.getY() - 20.0f)));
+}
+
+BoardView* Nebula2ModulationEditor::shownBoard() { return proc.showAll.load() ? allView.viewOf (proc.selectedTab.load()) : &boardView; }
+
+// Bring one unit of the selected sound into view (if it isn't) and outline it for a moment
+void Nebula2ModulationEditor::showUnit (int uid)
+{
+    auto* view = shownBoard();
+    auto* comp = view != nullptr ? view->compFor (uid) : nullptr;
+    if (comp == nullptr) return;
+    const auto a = boardHolder.getLocalArea (comp, comp->getLocalBounds());
+    if (! viewport.getViewArea().contains (a))
+        viewport.setViewPosition (juce::jmax (0, a.getCentreX() - viewport.getViewWidth() / 2), juce::jmax (0, a.getCentreY() - viewport.getViewHeight() / 2));
+    view->flash (uid);
 }
 
 void Nebula2ModulationEditor::refreshBoards()
@@ -4027,6 +4225,7 @@ void Nebula2ModulationEditor::resized()
     const bool focus = proc.focusView.load();
     const int top = topbarH + (focus ? 0 : StyleBar::height);
     styleBar.setVisible (! focus); mixer.setVisible (! focus); deskButton.setVisible (! focus);
+    deskSounds.setVisible (! focus); deskInside.setVisible (! focus);
     styleBar.setBounds (0, topbarH, getWidth(), StyleBar::height);
     tabs.setBounds (0, top, getWidth() - 136 - 176, kTabsH);
     fullButton.setBounds (getWidth() - 14 - 118 - 8 - 94, top + 6, 94, 26);
@@ -4040,6 +4239,11 @@ void Nebula2ModulationEditor::resized()
     deskButton.setButtonText (proc.mixerTall.load() ? "Less" : "More");
     deskButton.setToggleState (proc.mixerTall.load(), juce::dontSendNotification);
     deskButton.setBounds (getWidth() - 14 - 76, mixer.getY() - 22, 76, 22);
+    // Sounds / Inside sit on the same edge, to its left
+    deskInside.setBounds (deskButton.getX() - 10 - 66, mixer.getY() - 22, 66, 22);
+    deskSounds.setBounds (deskInside.getX() - 2 - 70, mixer.getY() - 22, 70, 22);
+    deskSounds.setToggleState (! proc.mixerInside.load(), juce::dontSendNotification);
+    deskInside.setToggleState (proc.mixerInside.load(), juce::dontSendNotification);
     // Change sound sits at the top right of the board, over it, for whichever tab is showing
     soundButton.setBounds (getWidth() - 14 - 118, top + 6, 118, 26);
     addPanel.setBounds (getLocalBounds());

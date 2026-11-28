@@ -32,8 +32,9 @@ public:
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override { repaint(); }
     bool dropdown = false;   // on a wide panel a switch is drawn as a drop-down
+    void setNorm (float n);  // turn the knob to this position (0..1). The Inside mixer's faders turn knobs through this too
+    int index() const { return idx; }
 private:
-    void setNorm (float n);
     void changed();          // after any change: linked knobs and patterns follow
     void linkMenu();
     Nebula2ModulationProcessor& proc;
@@ -202,6 +203,7 @@ public:
     Board& itsBoard() const { return board; }
     void linkMenu();
     bool jackAt (juce::Point<int> p, bool& isOut, int& port) const;
+    ParamCell* cellFor (int param) const { for (auto* c : cells) if (c->index() == param) return c; return nullptr; }
     Module& module;
     std::unique_ptr<SeqView> seq;
     std::unique_ptr<ChordView> chords;
@@ -244,6 +246,8 @@ public:
     void dragCable (juce::Point<int> at);
     void endCable (juce::Point<int> at);
     ModuleComp* compFor (int uid) const;
+    void flash (int uid);        // outline a unit for a moment, so the eye finds it
+    bool flashing (int uid) const { return flashUid == uid && uid != 0; }
 
     // Dropping a .vst3 file on the board puts it in a new Plugin slot there
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
@@ -266,6 +270,7 @@ private:
     juce::OwnedArray<ModuleComp> comps;
     struct Drag { bool active = false, fromOut = true; int uid = 0, port = 0; juce::Point<int> at; } drag;
     juce::Point<int> panStart;
+    int flashUid = 0; juce::uint32 flashUntil = 0;
 };
 
 // Every sound on one board: each tab's board in its own framed area, all drawn at one zoom.
@@ -361,7 +366,9 @@ private:
     Nebula2ModulationProcessor& proc;
 };
 
-// The mixing desk along the bottom: one small channel per tab, and the master
+// The mixing desk along the bottom: one small channel per tab, and the master.
+// Switched to Inside it shows the selected sound's own levels instead: a fader for each knob insideStrips() lists.
+// Such a fader is the knob: it reads the knob's position, and moving it turns the knob on the board.
 class MixerStrip : public juce::Component
 {
 public:
@@ -378,7 +385,22 @@ public:
     static int heightFor (bool tall);
     void setTall (bool tall);
     void setPan (int channel, float pan);           // -1 left .. 1 right
+    // Inside: the units inside the selected sound. The list is made afresh from the rack every time it is wanted,
+    // and a unit is only ever reached by its id through the board on screen, never by a kept address.
+    void setInside (bool on);
+    std::vector<InsideStrip> insideList() const;
+    float insideNorm (const InsideStrip&) const;    // where that knob is, 0..1 (-1 if it has gone)
+    bool moveInside (const InsideStrip&, float norm);   // one whole fader move, as one Undo step. False if the knob has gone
+    juce::Rectangle<int> insideStrip (int i) const;
+    static juce::Rectangle<int> insideFader (juce::Rectangle<int> strip), insideName (juce::Rectangle<int> strip);
+    juce::String insideHeading() const;             // "Inside: Kick"
+    std::function<BoardView*()> boardFor;           // the board on screen for the selected sound
+    std::function<void (int uid)> onShowUnit;       // a strip's name was clicked: show that unit on the board
 private:
+    Board* insideBoard() const;
+    bool turnInside (int uid, int param, float norm);
+    uint64_t insideSeen = 0;
+    int scrollIn = 0, dragUid = 0, dragParam = -1;
     juce::Rectangle<int> channel (int i) const, masterArea() const;
     static juce::Rectangle<int> panIn (juce::Rectangle<int> channel);
     bool dragPan = false;
@@ -487,6 +509,9 @@ public:
     n2m::BigPanel bigPanel;      // a unit's bigger view, over the board
     n2m::BoardView& board() { return boardView; }   // for the tests
     n2m::MixerStrip& desk() { return mixer; }
+    void showUnit (int uid);                        // bring a unit of the selected sound into view and outline it for a moment
+    n2m::BoardView* shownBoard();                   // the board on screen for the selected sound (on a tab, or on the All view)
+    juce::Rectangle<int> viewArea() const { return viewport.getViewArea(); }     // for the tests
     // More room for the board. Focus hides the style bar and the mixing desk. Full screen grows the plugin's
     // window to fill the monitor. Both are saved with the project.
     void setFocus (bool on);
@@ -504,7 +529,7 @@ private:
     Nebula2ModulationProcessor& proc;
     n2m::N2MLook lookAndFeel;
     juce::TextButton play { "Play" }, addUnitsButton { "Add units" }, tidyButton { "Tidy" }, undoButton { "Undo" }, redoButton { "Redo" };
-    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" }, deskButton { "More" }, focusButton { "Focus" }, fullButton { "Full screen" };
+    juce::TextButton zoomOut { "-" }, zoomIn { "+" }, songButton { "Song" }, soundButton { "Change sound" }, deskButton { "More" }, deskSounds { "Sounds" }, deskInside { "Inside" }, focusButton { "Focus" }, fullButton { "Full screen" };
     void applyWindowSize();
     juce::Component boardHolder;                 // the board sits in this so it can be drawn bigger or smaller
     std::map<std::string, juce::Image> previews;

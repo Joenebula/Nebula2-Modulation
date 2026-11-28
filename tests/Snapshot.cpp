@@ -115,6 +115,20 @@ int main (int argc, char** argv)
     e->desk().setTall (false);
     p.rack.boards[1]->pan.store (0.0f); p.rack.boards[3]->pan.store (0.0f);
 
+    // the Inside mixer: the desk showing the levels inside one sound
+    e->selectTab (0);
+    e->desk().setInside (true);
+    if (auto list = e->desk().insideList(); ! list.empty()) e->showUnit (list[0].uid);      // as after a click on the first strip's name
+    shoot (*ed, dir + "/ui_inside.png");
+    e->desk().setTall (true);
+    shoot (*ed, dir + "/ui_inside_tall.png");
+    e->desk().setTall (false);
+    e->showAllSounds();
+    e->reshow (3);
+    shoot (*ed, dir + "/ui_inside_all.png");            // on the All view it shows the sound last selected
+    e->desk().setInside (false);
+    e->selectTab (3);
+
     // the song page: off, then built up
     e->songPanel.open();
     shoot (*ed, dir + "/ui_song_off.png");

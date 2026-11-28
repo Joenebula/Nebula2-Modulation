@@ -2260,6 +2260,64 @@ int main()
         CHECK (ns->data[(size_t) (48 + 4)].load() == 0.0f && ns->data[(size_t) (kLenRow + 48 + 4)].load() == 0.0f, "...and cleared with them");
     }
 
+    {
+        // The Inside mixer: which knobs of a sound get a fader on the desk
+        auto has = [] (const std::vector<InsideStrip>& v, const Board& b, const char* type, const char* id)
+        {
+            for (auto& s : v) if (auto* m = b.find (s.uid)) if (std::strcmp (m->info->type, type) == 0 && std::strcmp (m->info->params[(size_t) s.param].id, id) == 0) return true;
+            return false;
+        };
+        auto kick = makeBoard ("kick");
+        const auto k = insideStrips (*kick);
+        size_t levels = 0;
+        for (auto& m : kick->modules) for (auto& prm : m->info->params) if (std::strcmp (prm.id, "level") == 0) ++levels;
+        CHECK (k.size() == levels && levels >= 3 && has (k, *kick, "osc", "level") && has (k, *kick, "vca", "level") && has (k, *kick, "output", "level"),
+               "inside a kick: a fader for each Level knob, and nothing else");
+        CHECK (! has (k, *kick, "drive", "drive") && ! has (k, *kick, "osc", "coarse") && ! has (k, *kick, "hitenv", "decay"), "Drive, Tune and Decay are not mixing");
+        bool known = true, ordered = true;
+        for (size_t i = 0; i < k.size(); ++i)
+        {
+            auto* m = kick->find (k[i].uid);
+            known = known && m != nullptr && k[i].param >= 0 && k[i].param < (int) m->info->params.size() && k[i].knob == m->info->params[(size_t) k[i].param].name && ! k[i].unit.empty();
+            if (i > 0 && m != nullptr) ordered = ordered && kick->find (k[i - 1].uid)->x <= m->x;
+        }
+        CHECK (known && ordered && k.back().unit == "Output" && k.back().knob == "Level", "each names its unit and knob, left to right as on the board, the Output last");
+        // every starting sound: only knobs the rule allows, and the same list every time
+        for (auto& t : boardTypes())
+        {
+            auto b = makeBoard (t.id);
+            const auto v = insideStrips (*b), again = insideStrips (*b);
+            bool ok = v.size() == again.size();
+            for (auto& s : v) { auto* m = b->find (s.uid); ok = ok && m != nullptr && isMixKnob (*m->info, m->info->params[(size_t) s.param]) && m->info->params[(size_t) s.param].choices.empty(); }
+            CHECK (ok && ! v.empty(), "every starting sound has something to mix, and only levels and mixes");
+        }
+        auto pad = makePreset ("pad", soundPresets().front().name);
+        for (auto& sp : soundPresets()) if (std::string (sp.kind) == "pad") { pad = makePreset ("pad", sp.name); break; }
+        CHECK (pad != nullptr && insideStrips (*pad).size() == insideStrips (*makeBoard ("pad")).size(), "a preset of a sound has the same faders as the sound it starts from");
+        // a Mixer unit, effects, a compressor, a Send; and the things that must stay out
+        Board b;
+        auto* o1 = b.add ("osc", 300, 0, 48000); auto* o2 = b.add ("osc", 100, 0, 48000);
+        auto* mx = b.add ("mixer", 400, 0, 48000); auto* rv = b.add ("hall", 500, 0, 48000); auto* dl = b.add ("tape", 600, 0, 48000);
+        auto* cp = b.add ("comp", 700, 0, 48000); auto* sd = b.add ("send", 800, 0, 48000);
+        b.add ("xfade", 900, 0, 48000); b.add ("parameq", 1000, 0, 48000); b.add ("atten", 1100, 0, 48000); b.add ("follow", 1200, 0, 48000); b.add ("filter", 1300, 0, 48000); b.add ("lfo", 1400, 0, 48000);
+        const auto v = insideStrips (b);
+        CHECK (v.size() == 10, "two oscillators, four mixer inputs, two effects, a compressor and a send: ten faders");
+        CHECK (v.size() == 10 && v[0].uid == o2->uid && v[0].unit == "Oscillator 1" && v[1].uid == o1->uid && v[1].unit == "Oscillator 2", "two units of a kind are numbered left to right");
+        int inputs = 0; for (auto& s : v) if (s.uid == mx->uid) ++inputs;
+        CHECK (inputs == 4 && has (v, b, "mixer", "l1") && has (v, b, "mixer", "l4"), "every input level of a Mixer unit");
+        CHECK (has (v, b, "hall", "mix") && has (v, b, "tape", "mix") && ! has (v, b, "hall", "size") && ! has (v, b, "tape", "feedback"), "an effect's Mix, not its other knobs");
+        CHECK (has (v, b, "comp", "makeup") && has (v, b, "send", "amount") && ! has (v, b, "comp", "threshold"), "the compressor's Make-up and a Send's Amount count as levels");
+        CHECK (! has (v, b, "xfade", "mix") && ! has (v, b, "atten", "amount") && ! has (v, b, "follow", "gain") && ! has (v, b, "parameq", "g1"), "a crossfader, an attenuator, a follower and EQ gains are left alone");
+        for (auto& s : v) CHECK (s.uid != 0 && b.find (s.uid) != nullptr, "each is found again by its unit's id");
+        (void) rv; (void) dl; (void) cp; (void) sd;
+        // nothing to mix
+        Board none;
+        none.add ("lfo", 0, 0, 48000); none.add ("filter", 100, 0, 48000); none.add ("adsr", 200, 0, 48000); none.add ("noteseq", 300, 0, 48000);
+        CHECK (insideStrips (none).empty() && insideStrips (Board()).empty(), "a sound with no levels or mixes lists nothing");
+        // every unit there is: a switch never gets a fader, and the plugin slot and sample player aren't needed for the rule to hold
+        for (auto* info : allTypes()) for (auto& prm : info->params) if (! prm.choices.empty()) CHECK (! isMixKnob (*info, prm), "a switch is never a fader");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

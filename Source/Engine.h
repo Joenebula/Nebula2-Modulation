@@ -230,6 +230,11 @@ struct Module
     // Anything more than knobs and patterns that a module needs saved (one line of text, no line breaks)
     virtual std::string saveExtra() const { return {}; }
     virtual void loadExtra (const std::string&) {}
+    // A copy of a file the unit plays, kept inside the save so the project still works on another computer (one
+    // line of text, no line breaks). It goes on a line of its own, after the extra line, and only when there is one:
+    // older versions skip it and older saves have none.
+    virtual std::string saveCopy() const { return {}; }
+    virtual void loadCopy (const std::string&) {}
     // Undo and redo: put the extra state back to this (empty text = it had none). whole = false: only the part that
     // can be put back without starting again (see History::beforeUnit)
     virtual void restoreExtra (const std::string& text, bool whole) { if (whole) loadExtra (text); }
@@ -1038,6 +1043,8 @@ struct Rack
             {
                 const auto extra = m->saveExtra();
                 if (! extra.empty()) o << "x " << m->uid << ' ' << clean (extra) << '\n';
+                const auto kept = m->saveCopy();
+                if (! kept.empty()) o << "xd " << m->uid << ' ' << clean (kept) << '\n';
             }
             if (m->info->seq == Seq::Drum || m->info->seq == Seq::Note || m->info->seq == Seq::Value)
                 for (int row = 0; row < 2; ++row)
@@ -1110,6 +1117,7 @@ struct Rack
         Board* b = nullptr;
         while (std::getline (in, line))
         {
+            if (! line.empty() && line.back() == '\r') line.pop_back();      // a saved sound is a text file, and on some computers its lines end this way
             std::istringstream ls (line);
             std::string tag; ls >> tag;
             if (tag == "key") { int r = 2, s = 0; ls >> r >> s; if (rootOut) *rootOut = ((r % 12) + 12) % 12; if (scaleOut) *scaleOut = std::min ((int) scales().size() - 1, std::max (0, s)); }
@@ -1191,6 +1199,13 @@ struct Rack
                 std::string rest; std::getline (ls, rest);
                 if (! rest.empty() && rest[0] == ' ') rest.erase (0, 1);
                 if (auto* m = b->find (uid)) m->loadExtra (rest);
+            }
+            else if (tag == "xd")
+            {
+                int uid = 0; ls >> uid;
+                std::string rest; std::getline (ls, rest);
+                if (! rest.empty() && rest[0] == ' ') rest.erase (0, 1);
+                if (auto* m = b->find (uid)) m->loadCopy (rest);
             }
             else if (tag == "g" || tag == "n")
             {

@@ -183,7 +183,79 @@ int main (int argc, char** argv)
         u.setStateInformation (saved.getData(), (int) saved.getSize());
         n2m::SampleModule* lost = nullptr;
         for (auto& m : u.rack.boards[0]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) lost = x;
-        CHECK (lost != nullptr && ! lost->hasSample() && lost->status.contains ("beep.wav") && u.rack.boards[0]->modules.size() == b.modules.size(), "a file that has moved is named, and nothing else is lost");
+        CHECK (lost != nullptr && lost->hasSample() && lost->usingCopy() && lost->status.isEmpty() && lost->fileName() == "beep.wav" && u.rack.boards[0]->modules.size() == b.modules.size(), "a file that has moved: the copy kept in the project plays instead");
+        {
+            // The file travels with the project
+            const auto text = s.rack.save();
+            const auto xLine = n2m::Rack::extraIn (text, smp->uid);
+            CHECK (smp->keepsCopy() && ! smp->usingCopy() && text.find ("\nxd " + std::to_string (smp->uid) + " ") != std::string::npos, "a small file is kept inside the project, on a line of its own");
+            CHECK (xLine == juce::Base64::toBase64 (wav.getFullPathName()).toStdString(), "and the line older versions read still holds just where the file is");
+            CHECK (back != nullptr && ! back->usingCopy() && back->keepsCopy(), "while the file is where it was, the file itself is used");
+            // the copy sounds exactly like the file
+            auto play = [] (Nebula2ModulationProcessor& pr)
+            {
+                FakeCubase c; pr.setPlayHead (&c); c.playing = true;
+                std::vector<float> y; run (pr, c, 0.4, &y);
+                pr.setPlayHead (nullptr);
+                return y;
+            };
+            Nebula2ModulationProcessor fresh;
+            fresh.setRateAndBufferSizeDetails (48000, 256); fresh.prepareToPlay (48000, 256);
+            wav.getParentDirectory().getChildFile ("moved.wav").copyFileTo (wav);        // (back for a moment: this one reads the file)
+            fresh.setStateInformation (saved.getData(), (int) saved.getSize());
+            wav.deleteFile();
+            const auto fromFile = play (fresh), fromCopy = play (u);
+            CHECK (fromFile.size() == fromCopy.size() && fromFile == fromCopy && juce::FloatVectorOperations::findMinAndMax (fromCopy.data(), (int) fromCopy.size()).getEnd() > 0.2f, "the copy sounds exactly like the file");
+            // saved again from the copy, it still travels
+            juce::MemoryBlock again; u.getStateInformation (again);
+            Nebula2ModulationProcessor v;
+            v.setRateAndBufferSizeDetails (48000, 256); v.prepareToPlay (48000, 256);
+            v.setStateInformation (again.getData(), (int) again.getSize());
+            CHECK (v.rack.save() == u.rack.save() && u.rack.save() == text, "a project opened from its copy saves the same again");
+            n2m::SampleModule* third = nullptr;
+            for (auto& m : v.rack.boards[0]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) third = x;
+            CHECK (third != nullptr && third->hasSample() && third->usingCopy(), "and opens from the copy again");
+            // a project saved before this (no copy line): the file is asked for by name, as it always was
+            n2m::Rack older; older.prepare (48000);
+            CHECK (older.load (n2m::Rack::withoutExtra (text, -1)) && older.save() == text, "(taking nothing out leaves the text alone)");
+            std::string oldText; { std::istringstream in (text); std::string line; while (std::getline (in, line)) if (line.compare (0, 3, "xd ") != 0) oldText += line + "\n"; }
+            CHECK (older.load (oldText), "a project saved before copies were kept still loads");
+            n2m::SampleModule* om = nullptr;
+            for (auto& m : older.boards[0]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) om = x;
+            CHECK (om != nullptr && ! om->hasSample() && om->status == "Can't find beep.wav" && older.boards[0]->modules.size() == b.modules.size(), "a missing file with no copy is named, and nothing else is lost");
+            // a saved sound carries the file too
+            const auto soundFile = dir.getChildFile ("Beep.n2msound");
+            CHECK (u.saveSound (0, soundFile), "(the sound saves)");
+            Nebula2ModulationProcessor w;
+            w.setRateAndBufferSizeDetails (48000, 256); w.prepareToPlay (48000, 256);
+            const int tab = w.loadSound (soundFile);
+            n2m::SampleModule* ws = nullptr;
+            if (tab >= 0) for (auto& m : w.rack.boards[(size_t) tab]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) ws = x;
+            CHECK (ws != nullptr && ws->hasSample() && ws->usingCopy() && std::abs (ws->seconds() - 0.25) < 0.001, "a saved sound carries its sample with it");
+            // a copy that is damaged: the player still says which file it wants
+            std::string broken = oldText; broken.insert (broken.rfind ("end\n"), "xd " + std::to_string (smp->uid) + " AAAAAAAA\n");
+            CHECK (older.load (broken), "(damaged copy loads)");
+            om = nullptr; for (auto& m : older.boards[0]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) om = x;
+            CHECK (om != nullptr && ! om->hasSample() && om->status == "Can't find beep.wav", "a damaged copy is ignored and the file is named");
+            // Too big to keep (over 10 MB): only where it is, and a plain message if it has gone
+            const auto big = dir.getChildFile ("long.wav");
+            {
+                juce::AudioBuffer<float> lb (2, 48000 * 60);
+                for (int i = 0; i < lb.getNumSamples(); ++i) { const float y = 0.4f * (float) std::sin (i * 0.05); lb.setSample (0, i, y); lb.setSample (1, i, y); }
+                std::unique_ptr<juce::AudioFormatWriter> wr (juce::WavAudioFormat().createWriterFor (new juce::FileOutputStream (big), 48000, 2, 16, {}, 0));
+                wr->writeFromAudioSampleBuffer (lb, 0, lb.getNumSamples());
+            }
+            CHECK (big.getSize() > n2m::SampleModule::kKeepBytes && ws != nullptr && ws->load (big).isEmpty() && ws->hasSample() && ! ws->keepsCopy(), "a big file loads but isn't kept in the project");
+            const auto bigText = w.rack.save();
+            CHECK (bigText.size() < 200000 && bigText.find ("xd " + std::to_string (ws != nullptr ? ws->uid : 0) + " big") != std::string::npos, "the project stays small and notes that the file was too big to keep");
+            CHECK (older.load (bigText), "(loads with the big file there)");
+            om = nullptr; for (auto& m : older.boards[(size_t) tab]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) om = x;
+            CHECK (om != nullptr && om->hasSample() && ! om->usingCopy(), "with the big file where it was, it plays");
+            big.deleteFile();
+            CHECK (older.load (bigText), "(loads with the big file gone)");
+            om = nullptr; for (auto& m : older.boards[(size_t) tab]->modules) if (auto* x = dynamic_cast<n2m::SampleModule*> (m.get())) om = x;
+            CHECK (om != nullptr && ! om->hasSample() && om->status.contains ("long.wav") && om->status.contains ("too big"), "with it gone, the player says the file was too big to keep and which file it wants");
+        }
         // Undoing a knob keeps the loaded sample
         s.history.before (b); smp->set ("tune", 7);
         s.history.undo();

@@ -33,7 +33,7 @@ Cubase. Tick things off here as they land.
 - [x] Multi-oscillator (four notes at once)
 - [x] Sample player (v0.1.9): load or drop an audio file (wav, aiff, flac, ogg). Start, Length, Tune, Forward / Reverse, Once / Loop. A Pitch cable plays it at notes. A "Sample" sound in the + menu. The project remembers where the file is; if it has moved, the unit names the file it wants
 - [x] Sample player reads mp3 (v0.1.14)
-- [ ] Sample player: copy the file into the project so it travels with it
+- [x] Sample player: the file travels with the project (built, not released yet). A file up to 10 MB is also kept inside the project and inside a saved sound. When the project opens, the file itself is used if it is still where it was; if not, the copy plays. A bigger file is kept by where it is only, and if it has gone the player says it was too big to keep and which file it wants. Projects grow by about a third more than the file's size per sample. Older projects load as before
 - [x] Clap board, with its own clap envelope (v0.1.7)
 - [x] Stereo cabling (v0.1.14): dragging a left output to a left input brings the right side along, when both units have one and the right input is free. Units themselves are as before: stereo ones have L and R jacks, mono ones have one
 - [x] Undo and redo (v0.1.8): buttons and Ctrl+Z / Ctrl+Y. Covers knobs, patterns, cables, adding, moving and deleting units, tabs, the mixer, links, chords and key. Keeps the last 100 steps. A board is put back in place, so undoing a knob never reloads a plugin in a slot
@@ -136,7 +136,8 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 - [x] Drag audio out (v0.1.14): a DRAG AUDIO label on each tab's Output. Drag it into Cubase for a WAV of that sound alone, the chords once through from bar 1, at the song's tempo. **Joe to test the drag itself in Cubase**
 - [ ] Freeze a tab (swap it for its audio inside the plugin)
 - [x] Save and load a sound (v0.1.12): right-click a tab, Save this sound. Saved sounds are listed under + (Your saved sounds), from any project. They live in Documents / Nebula2 Modulation / Sounds. A plugin in a slot is saved with its settings
-- [ ] A sound's sample file isn't copied with it; no pictures or tags in the list
+- [x] A saved sound carries its sample file with it (up to 10 MB; built, not released yet). Before this a saved sound lost its sample when loaded again: fixed
+- [ ] No pictures or tags in the list
 
 ## Change sound (done, v0.1.15)
 

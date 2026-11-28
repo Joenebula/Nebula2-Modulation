@@ -35,8 +35,23 @@ SampleModule::SampleModule() = default;
 juce::String SampleModule::load (const juce::File& f)
 {
     file = f;
+    kept.reset(); keptText.clear(); fromCopy = false;
     if (! f.existsAsFile()) { status = "Can't find " + f.getFileName(); return status; }
     std::unique_ptr<juce::AudioFormatReader> reader (formats().createReaderFor (f));
+    const auto error = read (reader.get(), f.getFileName());
+    reader.reset();
+    // Small enough: the file itself is kept too, to be saved inside the project
+    if (error.isEmpty() && f.getSize() <= kKeepBytes)
+    {
+        auto bytes = std::make_shared<juce::MemoryBlock>();
+        if (f.loadFileAsData (*bytes) && bytes->getSize() > 0) kept = bytes;
+    }
+    return error;
+}
+
+juce::String SampleModule::read (juce::AudioFormatReader* reader, const juce::String& name)
+{
+    const juce::File f (name);                        // (only its name is used below)
     if (reader == nullptr) { status = f.getFileName() + " isn't an audio file this can read"; return status; }
     // Up to ten minutes; longer files are cut there rather than filling the memory
     const int length = (int) juce::jmin<juce::int64> (reader->lengthInSamples, (juce::int64) (reader->sampleRate * 600.0));
@@ -74,6 +89,7 @@ void SampleModule::clear()
     std::shared_ptr<const juce::AudioBuffer<float>> gone;
     { Hold h (guard); gone.swap (sound); active = false; }
     peaks.clear(); fine.clear(); file = juce::File(); status.clear();
+    kept.reset(); keptText.clear(); fromCopy = false;
 }
 
 void SampleModule::process (int n, const Ctx&)
@@ -133,6 +149,37 @@ void SampleModule::loadExtra (const std::string& text)
     if (! juce::Base64::convertFromBase64 (bytes, juce::String (text))) return;
     const auto path = bytes.toString();
     if (path.isNotEmpty()) load (juce::File (path));
+}
+
+// The file itself, as text, when it is small enough. "big" says there was a file but it was too big to keep.
+std::string SampleModule::saveCopy() const
+{
+    if (file == juce::File()) return {};
+    if (kept == nullptr) return sound != nullptr ? "big" : "";
+    if (keptText.empty()) keptText = juce::Base64::toBase64 (kept->getData(), kept->getSize()).toStdString();
+    return keptText;
+}
+
+// Comes after loadExtra. If the file was found where it was, that is what plays and this is not needed.
+void SampleModule::loadCopy (const std::string& text)
+{
+    if (sound != nullptr || file == juce::File()) return;
+    if (text == "big")
+    {
+        status = "Can't find " + file.getFileName() + ". It was too big to keep a copy in the project (over 10 MB): press Load and find it";
+        return;
+    }
+    auto bytes = std::make_shared<juce::MemoryBlock>();
+    {
+        juce::MemoryOutputStream out (*bytes, false);
+        if (! juce::Base64::convertFromBase64 (out, juce::String (text))) return;
+    }
+    if (bytes->getSize() == 0) return;
+    std::unique_ptr<juce::AudioFormatReader> reader (formats().createReaderFor (std::make_unique<juce::MemoryInputStream> (*bytes, false)));
+    const auto missing = status;
+    if (read (reader.get(), file.getFileName()).isNotEmpty()) { status = missing; return; }      // a copy that can't be read: still "Can't find ..."
+    reader.reset();
+    kept = bytes; keptText = text; fromCopy = true;     // and it is saved again with the project, as it came
 }
 
 void registerSamplePlayer()

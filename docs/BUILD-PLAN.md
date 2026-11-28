@@ -136,7 +136,14 @@ Joe: assign sounds out to channels in the Cubase mixer, so they can be mixed aft
 - [ ] Song page: sections all the same length; no names for sections; no copy of a section
 - [x] Drag MIDI out (v0.1.12): a DRAG MIDI label on note sequencers, drum sequencers and the chord unit. Drag it into Cubase for a MIDI part of exactly what the unit plays (in key, following the chords and any key change). **Joe to test the drag itself in Cubase**
 - [x] Drag audio out (v0.1.14): a DRAG AUDIO label on each tab's Output. Drag it into Cubase for a WAV of that sound alone, the chords once through from bar 1, at the song's tempo. **Joe to test the drag itself in Cubase**
-- [ ] Freeze a tab (swap it for its audio inside the plugin)
+- [x] Freeze a tab (built, not released yet): Freeze in the tab's menu swaps the sound for its own audio, so it takes almost none of the computer's time (the bass here went from 0.4% to 0.01%). Unfreeze, in the same place, brings its units back exactly as they were. Both can be undone
+  - The board is dimmed and locked, with the line "Frozen: Unfreeze to edit". The mixer's level, pan, mute, solo and output still work
+  - The audio is one time round the song: as long as the chords and the longest pattern, and the song page too when it is on or the sound has knob lines. Knob lines and song sections are in it. It is played by where the song is, so it loops with the song
+  - Saved with the project as the sound itself plus a note that it is frozen; the audio is made again when the project opens (the sound plays from its units for the moment that takes). An older version opens it unfrozen
+  - If the tempo, the key, the chords or anything on the sound changes, the old audio is dropped at once and the sound plays from its units until new audio has been made, about half a second after things stop changing
+  - Can't be frozen, and says why: a sound with a Send, a Return, a MIDI keyboard unit or a sequencer that follows its link group, and a song longer than 64 bars before it comes round
+  - For Joe to decide: a frozen sound repeats exactly each time round (anything "random" in it no longer changes from one pass to the next); when the song stops it fades out in a few milliseconds instead of ringing on; making the audio holds the screen for a moment on a long song
+  - [ ] **Joe to test in Cubase**: freezing a sound that is one of his plugins (Nexus, HALion)
 - [x] Save and load a sound (v0.1.12): right-click a tab, Save this sound. Saved sounds are listed under + (Your saved sounds), from any project. They live in Documents / Nebula2 Modulation / Sounds. A plugin in a slot is saved with its settings
 - [x] A saved sound carries its sample file with it (up to 10 MB; built, not released yet). Before this a saved sound lost its sample when loaded again: fixed
 - [ ] No pictures or tags in the list

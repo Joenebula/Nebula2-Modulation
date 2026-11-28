@@ -94,6 +94,48 @@ void Nebula2ModulationProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (own) ownPpq += n * tempo / 60.0 / getSampleRate();
 }
 
+bool Nebula2ModulationProcessor::freezeTab (int tab)
+{
+    problem.clear();
+    if (tab < 0 || tab >= (int) rack.boards.size()) return false;
+    auto& b = *rack.boards[(size_t) tab];
+    if (b.frozen.load()) return true;
+    if (const char* why = rack.cantFreeze (b)) { problem = juce::String (b.name) + " can't be frozen: " + why; return false; }
+    history.before (b);
+    b.frozen.store (true);
+    refreshFrozen (true);
+    return true;
+}
+
+bool Nebula2ModulationProcessor::unfreezeTab (int tab)
+{
+    problem.clear();
+    if (tab < 0 || tab >= (int) rack.boards.size()) return false;
+    auto& b = *rack.boards[(size_t) tab];
+    if (! b.frozen.load()) return true;
+    history.before (b);
+    b.frozen.store (false);
+    rack.dropIce (b);
+    return true;
+}
+
+void Nebula2ModulationProcessor::refreshFrozen (bool now)
+{
+    const double tempo = bpm.load();
+    for (int i = 0; i < (int) rack.boards.size(); ++i)
+    {
+        auto& b = *rack.boards[(size_t) i];
+        if (! b.frozen.load()) { if (b.ice != nullptr) rack.dropIce (b); b.iceWanted.clear(); continue; }
+        if (rack.cantFreeze (b) != nullptr) { b.frozen.store (false); rack.dropIce (b); continue; }     // (it has since been given a Send, say)
+        const auto state = rack.freezeState (b, tempo);
+        if (b.ice != nullptr && b.ice->made == state) continue;
+        if (b.ice != nullptr) rack.dropIce (b);            // out of date: its units play until the new audio is ready
+        if (! now && b.iceWanted != state) { b.iceWanted = state; continue; }      // still changing: look again next time
+        b.iceWanted = state;
+        rack.makeIce (i, tempo);
+    }
+}
+
 juce::File Nebula2ModulationProcessor::renderTab (int tab, int bars)
 {
     if (tab < 0 || tab >= (int) rack.boards.size()) return {};
@@ -166,7 +208,7 @@ int Nebula2ModulationProcessor::loadSound (const juce::File& file)
     if (made.empty()) return -1;
     auto& b = *made[0];
     // It arrives on its own: not soloed, in every section, and not tied to this project's link groups
-    b.solo.store (false); b.mute.store (false); b.plays.store (0xffffffffu);
+    b.solo.store (false); b.mute.store (false); b.plays.store (0xffffffffu); b.frozen.store (false);
     for (auto& m : b.modules) { m->patternLink = 0; m->patternShare = 3; std::fill (m->paramLink.begin(), m->paramLink.end(), 0); }
     rack.addBoard (std::move (made[0]));
     history.tabAdded ((int) rack.boards.size() - 1);

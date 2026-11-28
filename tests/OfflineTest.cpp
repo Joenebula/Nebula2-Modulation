@@ -356,7 +356,7 @@ int main (int argc, char** argv)
             ed->stepHistory (false); ed->stepHistory (false); ed->stepHistory (false);
             CHECK (kick.cables.size() == cablesBefore && ! kick.find (filter->uid)->live, "three more undos: back to the Filter just added and uncabled");
             ed->stepHistory (false);
-            CHECK (kick.modules.size() == 7 && view.compFor (drive->uid) != nullptr && view.getNumChildComponents() == 7, "one more removes the Filter, and the screen shows exactly what is left");
+            CHECK (kick.modules.size() == 7 && view.compFor (drive->uid) != nullptr && view.getNumChildComponents() == 7 + 1 /* the units, and the hidden cover that locks a frozen board */, "one more removes the Filter, and the screen shows exactly what is left");
             for (int k = 0; k < 5; ++k) ed->stepHistory (true);
             CHECK (r.rack.save() == now, "Redo, five times, is back where we were");
             filter = kick.modules.back().get();                          // the Filter was made afresh on the way back
@@ -2264,6 +2264,116 @@ int main (int argc, char** argv)
         CHECK (r.getLatencySamples() == 0, "and when nothing is late any more the host is told that too, without being asked");
         song.playing = false;
         n2m::extraTypes().pop_back();
+    }
+
+    {
+        // Freeze a tab, through the screen
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        const int tab = 3;
+        ed->selectTab (tab);
+        auto& b = *r.rack.boards[(size_t) tab];
+        auto alone = [&] (double seconds, std::vector<float>* keep = nullptr)
+        {
+            for (auto& o : r.rack.boards) o->solo.store (o.get() == &b);
+            song.playing = true; song.ppq = 0;
+            const float v = run (r, song, seconds, keep);
+            song.playing = false; run (r, song, 2.0);
+            for (auto& o : r.rack.boards) o->solo.store (false);
+            return v;
+        };
+        const float liveLevel = alone (4.0);
+        const float liveLoad = b.load.load();
+        const auto textBefore = n2m::Rack::boardText (b);
+        r.history.clear();
+        CHECK (! ed->board().locked(), "(a board starts unlocked)");
+        ed->tabBar().toggleFreeze (tab);
+        ed->board().tick();
+        CHECK (b.frozen.load() && b.iced() && r.problem.isEmpty(), "Freeze in the tab's menu freezes the sound and makes its audio");
+        CHECK (ed->board().locked(), "a frozen sound's board is locked");
+        auto* unitComp = ed->board().compFor (b.modules[0]->uid);
+        CHECK (unitComp != nullptr && ed->board().getComponentAt (unitComp->getBounds().getCentre()) != unitComp && dynamic_cast<n2m::ModuleComp*> (ed->board().getComponentAt (unitComp->getBounds().getCentre())) == nullptr, "a click on a frozen board reaches none of its units");
+        CHECK (! ed->board().isInterestedInFileDrag ({ "kick.wav" }), "and nothing can be dropped on it");
+        const size_t unitsBefore = b.modules.size();
+        ed->addUnits ({ "hall" });
+        CHECK (b.modules.size() == unitsBefore, "and no unit can be added to it");
+        std::vector<float> frozenAudio;
+        const float frozenLevel = alone (4.0, &frozenAudio);
+        std::printf ("freeze: level live %.3f frozen %.3f, load live %.4f frozen %.4f\n", (double) liveLevel, (double) frozenLevel, (double) liveLoad, (double) b.load.load());
+        CHECK (liveLevel > 0.05f && std::abs (frozenLevel - liveLevel) < 0.25f * liveLevel, "frozen, it sounds as loud as it did");
+        // the mixer still works
+        b.level.store (b.level.load() * 0.5f);
+        const float halfLevel = alone (4.0);
+        CHECK (std::abs (halfLevel - 0.5f * frozenLevel) < 0.02f, "the mixer's fader still works on a frozen sound");
+        b.level.store (b.level.load() * 2.0f);
+        b.mute.store (true);
+        song.playing = true; song.ppq = 0; for (auto& o : r.rack.boards) o->mute.store (o.get() == &b ? true : true);
+        CHECK (run (r, song, 1.0) == 0.0f, "and mute");
+        for (auto& o : r.rack.boards) o->mute.store (false);
+        song.playing = false; run (r, song, 2.0);
+        // tempo: the old audio goes at once, and new audio is made when the tempo has settled
+        r.refreshFrozen();
+        CHECK (b.iced(), "(nothing has changed: the audio is kept)");
+        song.bpm = 140; song.playing = true; run (r, song, 0.1); song.playing = false;
+        r.refreshFrozen();
+        CHECK (b.frozen.load() && ! b.iced(), "a change of tempo: the out-of-date audio is dropped at once, and the units play meanwhile");
+        r.refreshFrozen();
+        CHECK (b.iced() && std::abs (b.ice->perQ - 60.0 / 140.0 * 48000.0) < 1.0e-6, "and it is made again at the new tempo once the tempo has settled");
+        r.history.beforeChords(); r.rack.setKey ((r.rack.root.load() + 2) % 12, r.rack.scale.load());
+        r.refreshFrozen(); r.refreshFrozen();
+        CHECK (b.iced() && b.ice->made == r.rack.freezeState (b, 140.0), "a change of key makes it again too");
+        song.bpm = 124; song.playing = true; run (r, song, 0.1); song.playing = false; run (r, song, 2.0);
+        r.refreshFrozen (true);
+        // saved with the project
+        juce::MemoryBlock saved; r.getStateInformation (saved);
+        Nebula2ModulationProcessor q;
+        FakeCubase song2; q.setPlayHead (&song2);
+        q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        q.setStateInformation (saved.getData(), (int) saved.getSize());
+        auto& qb = *q.rack.boards[(size_t) tab];
+        CHECK (qb.frozen.load() && ! qb.iced(), "a frozen sound is saved frozen; its audio is made again after loading");
+        q.refreshFrozen(); q.refreshFrozen();
+        CHECK (qb.iced(), "(made again)");
+        for (auto& o : q.rack.boards) o->solo.store (o.get() == &qb);
+        song2.playing = true;
+        CHECK (run (q, song2, 2.0) > 0.05f, "and it plays");
+        // Unfreeze, and Undo
+        ed->tabBar().toggleFreeze (tab);
+        ed->board().tick();
+        CHECK (! b.frozen.load() && ! b.iced() && ! ed->board().locked(), "Unfreeze brings the board back, unlocked");
+        CHECK (n2m::Rack::boardText (b) == textBefore, "exactly as it was");
+        ed->stepHistory (false);
+        CHECK (b.frozen.load() && ed->board().locked(), "Undo of Unfreeze freezes it again");
+        r.refreshFrozen(); r.refreshFrozen();
+        CHECK (b.iced(), "(and its audio is made again)");
+        ed->stepHistory (true);
+        r.refreshFrozen();
+        CHECK (! b.frozen.load() && ! b.iced() && ! ed->board().locked(), "Redo unfreezes");
+        // a sound that can't be frozen says why
+        r.rack.addModule (b, "send", 0, 0);
+        CHECK (! r.freezeTab (tab) && ! b.frozen.load() && r.problem.startsWith (juce::String (b.name) + " can't be frozen") && r.problem.contains ("Send"), "a sound that feeds a shared effect can't be frozen, and it says why");
+        // a loaded sound arrives unfrozen
+        r.freezeTab (0);
+        const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-frozen.n2msound");
+        CHECK (r.saveSound (0, file), "(saves)");
+        const int loaded = r.loadSound (file);
+        CHECK (loaded >= 0 && ! r.rack.boards[(size_t) loaded]->frozen.load(), "a saved sound loads unfrozen");
+        file.deleteFile();
+        if (argc > 2)
+        {
+            // a sound that is a plugin in a slot freezes too
+            CHECK (r.changeToPlugin (1, "Nebula2 Chord", argv[2]), "(a plugin as the sound)");
+            auto& pb = *r.rack.boards[1];
+            CHECK (r.freezeTab (1) && pb.iced(), "a sound made by a plugin in a slot can be frozen");
+            for (auto& o : r.rack.boards) o->solo.store (o.get() == &pb);
+            song.playing = true; song.ppq = 0;
+            CHECK (run (r, song, 3.0) > 0.01f, "and its kept audio plays");
+            song.playing = false;
+        }
     }
 
     if (failures == 0) std::printf ("All passed\n");

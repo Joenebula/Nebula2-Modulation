@@ -400,6 +400,16 @@ inline std::vector<const Info*> allTypes()
     return v;
 }
 
+// A frozen sound: its own output played once through the song and kept, to be played back in place of its units.
+// Taken before the sound's level and pan, so the mixer still works on it.
+struct Ice
+{
+    std::vector<float> l, r;
+    double lenQ = 64;            // how long the loop is, in quarter notes
+    double perQ = 0;             // samples in a quarter note at the tempo it was made at
+    std::string made;            // what it was made from (see Rack::freezeState): if that changes, it is out of date
+};
+
 // ---- A board: one sound ----
 struct Board
 {
@@ -411,6 +421,13 @@ struct Board
     std::atomic<float> load { 0.0f };  // how much of the computer's time this sound takes: 1 = all of it. For the mixer
     double spent = 0;                 // audio thread only
     std::atomic<uint32_t> plays { 0xffffffffu };   // the song page: one bit per section, set = this sound plays in it
+    // Frozen: the units are left alone and not run; the kept audio (ice) plays instead. Frozen with no ice yet (just
+    // loaded, or something it depends on has changed) plays its units as usual until the ice is made again.
+    std::atomic<bool> frozen { false };
+    std::shared_ptr<const Ice> ice;                // swapped under the rack's lock
+    std::string iceWanted;                         // screen side: the state seen at the last look, so a change is left to settle
+    std::vector<float>* tapL = nullptr; std::vector<float>* tapR = nullptr;   // while being frozen: its output is written here too
+    bool iced() const { return ice != nullptr && frozen.load (std::memory_order_relaxed); }
     std::vector<std::unique_ptr<Module>> modules;
     std::vector<Cable> cables;
     std::vector<std::unique_ptr<AutoLane>> autos;   // knob movement drawn on the timeline
@@ -562,6 +579,7 @@ struct Board
     // a plugin makes late. 0 (every project without such a plugin) takes the plain path below, exactly as before.
     void process (int n, const Ctx& c, float* l, float* r, bool audible, int holdBack = 0)
     {
+        if (iced()) { playIce (n, c, l, r, audible, holdBack); return; }
         for (int idx : order)
         {
             auto* m = modules[(size_t) idx].get();
@@ -583,6 +601,13 @@ struct Board
             heldBack = holdBack;
             if (holdBack > 0) { std::fill (waitL.begin(), waitL.end(), 0.0f); std::fill (waitR.begin(), waitR.end(), 0.0f); waitAt = 0; }
         }
+        if (tapL != nullptr && tapR != nullptr)
+            for (int i = 0; i < n; ++i)
+            {
+                float a = 0.0f, b = 0.0f;
+                for (auto* o : outputs) { a += o->l[(size_t) i]; b += o->r[(size_t) i]; }
+                tapL->push_back (a); tapR->push_back (b);
+            }
         if (holdBack > 0)
         {
             for (int i = 0; i < n; ++i)
@@ -608,6 +633,50 @@ struct Board
             }
         if (pk > peak.load()) peak.store (pk);
     }
+
+    // A frozen sound: the kept audio, found by where the song is, so it loops with the song and never depends on
+    // the block size. When the song stops it fades over a few milliseconds rather than cutting.
+    void playIce (int n, const Ctx& c, float* l, float* r, bool audible, int holdBack)
+    {
+        const Ice& f = *ice;
+        const long last = (long) std::min (f.l.size(), f.r.size()) - 1;
+        const float lv = audible ? level.load() : 0.0f, p = pan.load();
+        const float gl = lv * std::min (1.0f, 1.0f - p), gr = lv * std::min (1.0f, 1.0f + p);
+        if (holdBack != heldBack)
+        {
+            heldBack = holdBack;
+            if (holdBack > 0) { std::fill (waitL.begin(), waitL.end(), 0.0f); std::fill (waitR.begin(), waitR.end(), 0.0f); waitAt = 0; }
+        }
+        float pk = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            if (c.playing)
+            {
+                double q = std::fmod (c.ppq + i * c.ppqPerSample, f.lenQ);
+                if (q < 0) q += f.lenQ;
+                iceAt = (long) std::floor (q * f.perQ + 0.5);
+                iceGain = 1.0f;
+            }
+            else { ++iceAt; iceGain = std::max (0.0f, iceGain - 1.0f / 256.0f); }
+            float a = 0.0f, b = 0.0f;
+            if (last >= 0 && iceGain > 0.0f)
+            {
+                const size_t k = (size_t) std::min (last, std::max (0L, iceAt));
+                a = f.l[k] * iceGain * gl; b = f.r[k] * iceGain * gr;
+            }
+            if (holdBack > 0)
+            {
+                waitL[(size_t) waitAt] = a; waitR[(size_t) waitAt] = b;
+                const int from = (waitAt - holdBack) & (kMaxLatency - 1);
+                a = waitL[(size_t) from]; b = waitR[(size_t) from];
+                waitAt = (waitAt + 1) & (kMaxLatency - 1);
+            }
+            l[i] += a; r[i] += b;
+            pk = std::max (pk, std::max (std::abs (a), std::abs (b)));
+        }
+        if (pk > peak.load()) peak.store (pk);
+    }
+    long iceAt = 0; float iceGain = 0.0f;          // audio thread
 
     struct Route { Module* src; int srcPort, dstPort; };
     std::vector<std::vector<Route>> routes;
@@ -927,7 +996,7 @@ struct Rack
         // fine fixed grid of song position (1/32 of a step) and chunks are cut at its edges, so the sample a knob
         // moves on never depends on the host's block size.
         bool anyAuto = false;
-        if (playing) for (auto& b : boards) anyAuto = anyAuto || ! b->autos.empty();
+        if (playing) for (auto& b : boards) anyAuto = anyAuto || (! b->autos.empty() && ! b->iced());      // a frozen sound's knob lines are in its kept audio
         const double songBars = (double) (nSec * secBars);
         auto gridAt = [] (double q) { return (long) std::floor (q * 128.0 + 1.0e-9); };
         double barNow = -1.0;
@@ -957,7 +1026,7 @@ struct Rack
                 while (k < len && gridAt (c.ppq + k * c.ppqPerSample) == cellNow) ++k;
                 len = k;
                 const double at = std::fmod (std::max (0.0, (double) cellNow / 128.0) / 4.0, songBars);
-                for (auto& b : boards) if (! b->autos.empty()) b->applyAutos (at);
+                for (auto& b : boards) if (! b->autos.empty() && ! b->iced()) b->applyAutos (at);
             }
             for (int k = 0; k < 2; ++k) { std::fill (buses.l[k].begin(), buses.l[k].begin() + len, 0.0f); std::fill (buses.r[k].begin(), buses.r[k].begin() + len, 0.0f); }
             // Tabs that play a send bus run after the tabs that feed it, wherever they sit in the tab row
@@ -967,7 +1036,7 @@ struct Rack
                     if (b->hasReturn != (pass == 1)) continue;
                     const int k = b->out.load();
                     const bool separate = k > 0 && k < kOuts && (on & (1 << k)) != 0;
-                    const bool sitsOut = songOn && ((b->plays.load() >> sec) & 1u) == 0;
+                    const bool sitsOut = songOn && ((b->plays.load() >> sec) & 1u) == 0 && ! b->iced();      // (a frozen sound's sections are in its kept audio)
                     const auto began = std::chrono::steady_clock::now();
                     b->process (len, sitsOut ? resting : c, (separate ? outs->l[k] : l) + pos, (separate ? outs->r[k] : r) + pos, anySolo ? b->solo.load() : ! b->mute.load(), late - b->lateNow);
                     b->spent += std::chrono::duration<double> (std::chrono::steady_clock::now() - began).count();
@@ -1087,6 +1156,7 @@ struct Rack
     {
         o << "board " << b.type << '|' << clean (b.name) << '|' << b.colour << '|' << b.level.load() << '|' << b.pan.load()
           << '|' << (b.mute.load() ? 1 : 0) << '|' << (b.solo.load() ? 1 : 0) << '|' << b.out.load() << '|' << b.plays.load() << '\n';
+        if (b.frozen.load()) o << "frozen 1\n";        // only when it is: older versions skip the line and open the sound unfrozen
         for (auto& m : b.modules)
         {
             o << "mod " << m->uid << ' ' << m->info->type << ' ' << m->x << ' ' << m->y << '\n';
@@ -1149,15 +1219,20 @@ struct Rack
             if (s && d) o << "cable " << c.src << ' ' << s->info->outs[(size_t) c.srcPort].id << ' ' << c.dst << ' ' << d->info->ins[(size_t) c.dstPort].id << '\n';
         }
     }
-    std::string save() const
+    // Everything that isn't a board: the key, the song page, the chords
+    void writeHead (std::ostringstream& o) const
     {
-        std::ostringstream o;
         o << "N2M 1\n" << "key " << root.load() << ' ' << scale.load() << '\n' << "master " << master.load() << '\n';
         o << "style " << style << '\n';
         o << "song " << (song.on.load() ? 1 : 0) << ' ' << song.sections.load() << ' ' << song.bars.load() << '\n';
         o << "harmony " << harmony.mood << ' ' << harmony.seed << ' ' << harmony.lenBars << ' ' << harmony.chordBars << ' ' << harmony.strange << ' ' << harmony.variation << ' ' << harmony.lift << '\n';
         for (auto& c : harmony.seq)
             o << "chord " << c.deg << ' ' << c.bars << ' ' << c.tr << ' ' << c.inv << ' ' << (c.t.empty() ? "-" : c.t) << ' ' << (c.locked ? 1 : 0) << '\n';
+    }
+    std::string save() const
+    {
+        std::ostringstream o;
+        writeHead (o);
         for (auto& b : boards) writeBoard (o, *b);
         o << "end\n";
         return o.str();
@@ -1218,6 +1293,7 @@ struct Rack
                 if (f.size() > 8) b->plays.store ((uint32_t) std::strtoul (f[8].c_str(), nullptr, 10));
             }
             else if (b == nullptr) continue;
+            else if (tag == "frozen") { int v = 0; ls >> v; b->frozen.store (v != 0); }
             else if (tag == "mod")
             {
                 int uid = 0; std::string type; float x = 0, y = 0; ls >> uid >> type >> x >> y;
@@ -1427,8 +1503,87 @@ struct Rack
             dst.type = src.type; dst.name = src.name; dst.colour = src.colour;
             dst.level.store (src.level.load()); dst.pan.store (src.pan.load());
             dst.mute.store (src.mute.load()); dst.solo.store (src.solo.load()); dst.out.store (src.out.load()); dst.plays.store (src.plays.load());
+            dst.frozen.store (src.frozen.load());        // its kept audio, if any, is checked by the screen side (freezeState)
             dst.rebuild();
         }
+    }
+
+    // ---- Freezing a sound ----
+    // Why this sound can't be frozen, in plain words to follow "... can't be frozen: ", or nullptr if it can.
+    // Each of these would make the kept audio depend on something outside the sound.
+    const char* cantFreeze (const Board& b) const
+    {
+        for (auto& m : b.modules)
+        {
+            const std::string t = m->info->type;
+            if (t == "send") return "it feeds a shared effect (it has a Send unit), and that would go quiet.";
+            if (t == "return") return "it plays what other sounds send it (it has a Return unit).";
+            if (t == "keys") return "it is played from the keyboard (it has a MIDI keyboard unit).";
+            if (m->patternLink > 0 && m->patternShare == 4) return "one of its sequencers follows a sequencer in its link group.";
+        }
+        if (freezeBars (b) > 64) return "the song is longer than 64 bars before it comes round again.";
+        return nullptr;
+    }
+    // How many bars before everything this sound does comes round again: the chords, 8-bar patterns, and the song
+    // page when it is on or the sound has knob lines on the timeline
+    int freezeBars (const Board& b) const
+    {
+        auto lcm = [] (int x, int y) { int g = x, h = y; while (h != 0) { const int t = g % h; g = h; h = t; } return x / g * y; };
+        int bars = lcm (kMaxBars, std::max (1, (timeline.total + kSteps - 1) / kSteps));
+        if (song.on.load() || ! b.autos.empty()) bars = lcm (bars, songBars());
+        return bars;
+    }
+    // Everything the kept audio was made from: the sound's units, knobs, patterns, cables and knob lines (not its
+    // mixer channel, which still works on a frozen sound), the tempo, the key, the chords and the song page.
+    std::string freezeState (const Board& b, double bpm) const
+    {
+        const auto none = std::function<bool (int)> ([] (int) { return false; });
+        const auto text = boardText (b, &none);
+        std::ostringstream o;
+        o << bpm << ' ' << sr << ' ' << root.load() << ' ' << scale.load() << ' ' << harmony.lift << ' ' << freezeBars (b);
+        for (auto& c : harmony.seq) o << ' ' << c.deg << ' ' << c.bars << ' ' << c.tr << ' ' << c.inv << ' ' << c.t;
+        if (song.on.load()) o << " song " << song.sections.load() << ' ' << song.bars.load() << ' ' << b.plays.load();
+        o << '\n' << text.substr (std::min (text.size(), text.find ('\n') + 1));       // without the line holding the mixer channel
+        return o.str();
+    }
+    // Makes the kept audio for a frozen sound, or makes it again. Screen side; the sound keeps playing meanwhile.
+    // A private copy of the sound plays the loop twice from bar 1 and the second time round is kept, so what rings
+    // on past the end of the loop is there at its start. Knob lines and song sections are in it.
+    bool makeIce (int index, double bpm)
+    {
+        if (index < 0 || index >= (int) boards.size() || bpm < 1.0) return false;
+        auto& b = *boards[(size_t) index];
+        if (cantFreeze (b) != nullptr) return false;
+        auto f = std::make_shared<Ice>();
+        f->made = freezeState (b, bpm);
+        f->lenQ = freezeBars (b) * 4.0;
+        f->perQ = 60.0 / bpm * sr;
+        std::ostringstream o;
+        writeHead (o); writeBoard (o, b); o << "end\n";
+        Rack copy;
+        copy.prepare (sr);
+        if (! copy.load (o.str()) || copy.boards.size() != 1) return false;
+        auto& cb = *copy.boards[0];
+        cb.frozen.store (false); cb.mute.store (false); cb.solo.store (false); cb.out.store (0);
+        const double loop = f->lenQ * f->perQ;                         // in samples, and seldom a whole number
+        const long first = (long) std::floor (loop + 0.5), keep = (long) std::ceil (loop) + 2, total = first + keep;
+        std::vector<float> tl, tr;
+        tl.reserve ((size_t) total + 4096); tr.reserve ((size_t) total + 4096);
+        cb.tapL = &tl; cb.tapR = &tr;
+        std::vector<float> ml (2048), mr (2048);
+        for (long pos = 0; pos < total; pos += 2048)
+            copy.process (ml.data(), mr.data(), (int) std::min (2048L, total - pos), bpm, (double) pos / f->perQ, true);
+        cb.tapL = nullptr; cb.tapR = nullptr;
+        if ((long) tl.size() < total) return false;
+        f->l.assign (tl.begin() + first, tl.begin() + total); f->r.assign (tr.begin() + first, tr.begin() + total);
+        std::shared_ptr<const Ice> fresh = f;
+        { Hold h (lock); b.ice.swap (fresh); }
+        return true;
+    }
+    void dropIce (Board& b)
+    {
+        std::shared_ptr<const Ice> gone;
+        { Hold h (lock); gone.swap (b.ice); }
     }
 
     // A copy of one board, as a new board

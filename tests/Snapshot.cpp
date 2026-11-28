@@ -402,5 +402,20 @@ int main (int argc, char** argv)
         b->selectTab ((int) q.rack.boards.size() - 1);
         shoot (*holder, dir + "/ui_inside_none.png");       // a sound with nothing to mix
     }
+    {
+        // A frozen sound: its board dimmed and locked, with a line saying why
+        Nebula2ModulationProcessor q;
+        q.setRateAndBufferSizeDetails (48000, 256);
+        q.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (q.createEditor());
+        auto* b = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        b->selectTab (3);
+        b->tabBar().toggleFreeze (3);
+        b->board().tick();
+        shoot (*holder, dir + "/ui_frozen.png");
+        b->showAllSounds();
+        b->reshow (3);
+        shoot (*holder, dir + "/ui_frozen_all.png");        // on the All view: only that sound's frame is dimmed
+    }
     return 0;
 }

@@ -80,6 +80,16 @@ public:
     bool changeToPlugin (int tab, const juce::String& name, const juce::String& path = {});   // an instrument
     bool changeToSaved (int tab, const juce::File& soundFile);                              // a .n2msound
 
+    // Freeze: a tab is swapped for its own audio, played once through the song and kept (Rack::makeIce), so it costs
+    // almost nothing to play. Its units stay as they are; Unfreeze brings them back. Both can be undone.
+    // freezeTab returns false, with the reason in problem, for a sound that can't be frozen.
+    bool freezeTab (int tab);
+    bool unfreezeTab (int tab);
+    // Keeps every frozen tab's audio up to date: if the tempo, the key, the chords or anything on the sound has
+    // changed, the old audio is dropped at once (the sound plays from its units meanwhile) and made again once things
+    // have stopped changing. Message thread; the timer calls it. now: don't wait for things to settle.
+    void refreshFrozen (bool now = false);
+
     // Styles: a whole track in one go. Each can be undone as one step. The screen must let go of the boards first.
     void makeTrack (const juce::String& style, bool add);      // every sound of the style: instead of what is there, or added to it
     void variation();                                          // the sounds stay, every pattern is made again in the style
@@ -95,7 +105,7 @@ public:
     int addPluginSound (const juce::String& name, const juce::String& path = {});
 
 private:
-    void timerCallback() override { syncLatency(); }
+    void timerCallback() override { syncLatency(); refreshFrozen(); }
     static BusesProperties makeBuses();
     double ownPpq = 0;
     n2m::KeyEvent keyEvents[512];

@@ -233,6 +233,8 @@ public:
     void unitWillChange (int uid, bool whole = true);   // just before a plugin slot's plugin (or, whole = false, what its knobs point at) changes
     void repaintAll();           // after a linked knob or pattern changed others on this board
     void fitToContent();
+    void resized() override;
+    bool locked() const { return cover.isVisible(); }   // a frozen sound: dimmed, and nothing on it can be clicked
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;
     void tick();
@@ -273,6 +275,9 @@ private:
     struct Drag { bool active = false, fromOut = true; int uid = 0, port = 0; juce::Point<int> at; } drag;
     juce::Point<int> panStart;
     int flashUid = 0; juce::uint32 flashUntil = 0;
+    // Over a frozen sound's board: dims it, says why, and takes the clicks so nothing under it can be changed
+    struct Cover : juce::Component { void paint (juce::Graphics&) override; } cover;
+    void syncCover();
 };
 
 // Every sound on one board: each tab's board in its own framed area, all drawn at one zoom.
@@ -339,6 +344,7 @@ private:
     void rename (int index);
     void added (int index);      // after a tab has been added: show it
 public:
+    void toggleFreeze (int index);   // the tab menu's Freeze / Unfreeze
     void soundMenu (int index, juce::Component* target = nullptr);   // Change sound: presets, a sample, a plugin, a saved sound
 private:
     Nebula2ModulationProcessor& proc;
@@ -510,6 +516,7 @@ public:
     n2m::HostOverlay hostOverlay;
     n2m::BigPanel bigPanel;      // a unit's bigger view, over the board
     n2m::BoardView& board() { return boardView; }   // for the tests
+    n2m::TabBar& tabBar() { return tabs; }
     n2m::MixerStrip& desk() { return mixer; }
     void showUnit (int uid);                        // bring a unit of the selected sound into view and outline it for a moment
     n2m::BoardView* shownBoard();                   // the board on screen for the selected sound (on a tab, or on the All view)

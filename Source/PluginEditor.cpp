@@ -1825,7 +1825,25 @@ void ModuleComp::mouseUp (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-BoardView::BoardView (Nebula2ModulationProcessor& p) : proc (p) {}
+BoardView::BoardView (Nebula2ModulationProcessor& p) : proc (p) { addChildComponent (cover); }
+
+void BoardView::resized() { cover.setBounds (getLocalBounds()); }
+void BoardView::syncCover()
+{
+    const bool frozen = board != nullptr && board->frozen.load();
+    if (frozen != cover.isVisible()) { cover.setVisible (frozen); repaint(); }
+    if (frozen) { cover.setBounds (getLocalBounds()); cover.toFront (false); }
+}
+void BoardView::Cover::paint (juce::Graphics& g)
+{
+    g.fillAll (windowBottom.withAlpha (0.62f));
+    const juce::String text ("Frozen: Unfreeze to edit");
+    g.setFont (titleFont());
+    const juce::Rectangle<int> pill (12, 10, juce::GlyphArrangement::getStringWidthInt (g.getCurrentFont(), text) + 28, 30);
+    raised (g, pill.toFloat(), radiusControl);
+    g.setColour (accent);
+    g.drawText (text, pill, juce::Justification::centred, false);
+}
 
 void BoardView::setBoard (Board* b) { board = b; rebuild(); }
 
@@ -1837,6 +1855,7 @@ void BoardView::rebuild()
         for (auto& m : board->modules)
             addAndMakeVisible (comps.add (new ModuleComp (*this, proc, *board, *m)));
     fitToContent();
+    syncCover();
     repaint();
     if (onChanged) onChanged();
     if (onRebuilt) onRebuilt();
@@ -1933,7 +1952,7 @@ void BoardView::paintOverChildren (juce::Graphics& g)
     {
         auto* a = compFor (c.src); auto* b = compFor (c.dst);
         if (a == nullptr || b == nullptr) continue;
-        const bool dead = ! (a->module.live && b->module.live);
+        const bool dead = ! (a->module.live && b->module.live) || cover.isVisible();      // a frozen board's cables are dimmed with the rest
         drawCable (g, (a->getPosition() + a->jackCentre (true, c.srcPort)).toFloat(),
                    (b->getPosition() + b->jackCentre (false, c.dstPort)).toFloat(),
                    boardColour (board->colour + c.src), dead);
@@ -2047,7 +2066,7 @@ void BoardView::mouseUp (const juce::MouseEvent&) { setMouseCursor (juce::MouseC
 
 bool BoardView::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    for (auto& f : files) if (f.endsWithIgnoreCase (".vst3") || SampleModule::canRead (f)) return board != nullptr;
+    for (auto& f : files) if (f.endsWithIgnoreCase (".vst3") || SampleModule::canRead (f)) return board != nullptr && ! board->frozen.load();
     return false;
 }
 
@@ -2077,6 +2096,7 @@ void BoardView::filesDropped (const juce::StringArray& files, int x, int y)
 
 void BoardView::tick()
 {
+    syncCover();
     if (flashUid != 0 && juce::Time::getMillisecondCounter() > flashUntil) { flashUid = 0; repaint(); }
     // knobs the timeline is moving are redrawn as they turn
     const bool moving = board != nullptr && ! board->autos.empty() && proc.isPlaying();
@@ -2619,6 +2639,7 @@ void TabBar::tabMenu (int index)
     m.addItem (7, "Change sound...");
     m.addItem (2, "Duplicate");
     m.addItem (6, "Save this sound...");
+    m.addItem (8, index < n && proc.rack.boards[(size_t) index]->frozen.load() ? "Unfreeze" : "Freeze");
     m.addSeparator();
     m.addItem (3, "Move left", index > 0);
     m.addItem (4, "Move right", index < n - 1);
@@ -2633,6 +2654,7 @@ void TabBar::tabMenu (int index)
         int select = index;
         if (r == 1) { safe->rename (index); return; }
         if (r == 7) { safe->soundMenu (index); return; }
+        if (r == 8) { safe->toggleFreeze (index); return; }
         if (r == 6)
         {
             const auto start = Nebula2ModulationProcessor::soundsFolder().getChildFile (juce::File::createLegalFileName (rack.boards[(size_t) index]->name) + ".n2msound");
@@ -2667,6 +2689,17 @@ void TabBar::tabMenu (int index)
         if (safe->onShow) safe->onShow (select);
         safe->showSelected();
     });
+}
+
+// Freeze: the sound is swapped for its own audio, so it takes almost none of the computer's time. Unfreeze brings
+// its units back as they were.
+void TabBar::toggleFreeze (int index)
+{
+    if (index < 0 || index >= (int) proc.rack.boards.size()) return;
+    const bool done = proc.rack.boards[(size_t) index]->frozen.load() ? proc.unfreezeTab (index) : proc.freezeTab (index);
+    if (! done && proc.problem.isNotEmpty()) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Not frozen", proc.problem);
+    if (onChanged) onChanged();
+    repaint();
 }
 
 void TabBar::rename (int index)
@@ -4108,7 +4141,7 @@ void Nebula2ModulationEditor::stepHistory (bool redo)
 void Nebula2ModulationEditor::addUnits (const std::vector<std::string>& types)
 {
     auto* b = current();
-    if (b == nullptr) return;
+    if (b == nullptr || b->frozen.load()) return;         // a frozen sound is locked
     proc.history.before (*b);
     // New units go in a row under everything already on the board, unconnected
     int bottom = 0;

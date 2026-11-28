@@ -2464,6 +2464,139 @@ int main()
         extraTypes().pop_back();
     }
 
+    {
+        // Freezing a sound: its kept audio plays in place of its units
+        auto build = []
+        {
+            auto rack = std::make_unique<Rack>(); rack->prepare (48000);
+            rack->harmony.lenBars = 8; rack->generateChords (7);
+            rack->addBoard (makeBoard ("bass", 48000)); rack->addBoard (makeBoard ("hat", 48000));
+            return rack;
+        };
+        auto live = build();
+        CHECK (live->freezeBars (*live->boards[0]) == 8 && live->cantFreeze (*live->boards[0]) == nullptr, "a sound comes round with the chords and the longest pattern");
+        const auto plain = render (*live, 16);
+        const size_t loop = plain.l.size() / 2;
+        auto second = [loop] (const Render& a, const Render& b)
+        {
+            if (a.l.size() != b.l.size()) return false;
+            for (size_t i = loop + 1; i < a.l.size(); ++i) if (a.l[i] != b.l[i] || a.r[i] != b.r[i]) return false;
+            return true;
+        };
+        auto frozenRack = [&build] { auto r = build(); r->boards[0]->frozen.store (true); r->makeIce (0, 124.0); return r; };
+        {
+            auto r = frozenRack();
+            CHECK (r->boards[0]->iced(), "a frozen sound has its audio kept");
+            const std::string before = Rack::boardText (*build()->boards[0]);
+            for (auto& m : r->boards[0]->modules) m->playStep.store (-7);
+            const auto y = render (*r, 16);
+            bool ran = false; for (auto& m : r->boards[0]->modules) ran = ran || m->playStep.load() != -7;
+            CHECK (! ran, "a frozen sound's units are not run at all");
+            CHECK (peakOf (y.l) > 0.05f && second (y, plain), "frozen, the second time round the song sounds exactly as it did live");
+            for (int block : { 64, 100, 333, 1024 })
+            {
+                auto rb = frozenRack();
+                const auto yb = render (*rb, 16, true, block);
+                CHECK (yb.l == y.l && yb.r == y.r, "a frozen sound doesn't depend on the block size");
+            }
+            // the mixer still works on it
+            auto half = frozenRack(), halfLive = build();
+            half->boards[0]->level.store (0.4f); half->boards[0]->pan.store (-0.5f);
+            halfLive->boards[0]->level.store (0.4f); halfLive->boards[0]->pan.store (-0.5f);
+            CHECK (second (render (*half, 16), render (*halfLive, 16)), "level and pan still work on a frozen sound");
+            auto muted = frozenRack(), mutedLive = build();
+            muted->boards[0]->mute.store (true); mutedLive->boards[0]->mute.store (true);
+            CHECK (second (render (*muted, 16), render (*mutedLive, 16)), "and so does mute");
+            auto solo = frozenRack(), soloLive = build();
+            solo->boards[0]->solo.store (true); soloLive->boards[0]->solo.store (true);
+            const auto soloY = render (*solo, 16);
+            CHECK (peakOf (soloY.l) > 0.02f && second (soloY, render (*soloLive, 16)), "and solo");
+            // stopping: a short fade, then silence
+            const auto stopped = render (*solo, 0.25, false);
+            CHECK (peakOf (stopped.l, 300) == 0.0f, "when the song stops a frozen sound is silent within a few milliseconds");
+            // unfreezing brings the board back exactly
+            r->boards[0]->frozen.store (false); r->dropIce (*r->boards[0]);
+            CHECK (Rack::boardText (*r->boards[0]) == before && ! r->boards[0]->iced(), "unfreezing brings the board back exactly as it was");
+        }
+        {
+            // saved with the project: the board's own text, and a line saying it is frozen
+            auto r = frozenRack();
+            const auto text = r->save();
+            CHECK (text.find ("\nfrozen 1\n") != std::string::npos && build()->save().find ("frozen") == std::string::npos, "frozen is saved on a line of its own, and only when it is");
+            Rack back; back.prepare (48000);
+            CHECK (back.load (text) && back.boards[0]->frozen.load() && ! back.boards[0]->iced() && ! back.boards[1]->frozen.load(), "a frozen sound opens frozen, with its audio still to make");
+            CHECK (back.save() == text, "(and saves the same again)");
+            const auto y = render (back, 16);
+            CHECK (y.l == plain.l, "until its audio is made again it plays from its units, so nothing is ever missing");
+            Rack again; again.prepare (48000);
+            CHECK (again.load (text) && again.makeIce (0, 124.0) && again.boards[0]->iced() && second (render (again, 16), plain), "made again after loading, it sounds the same");
+            std::string older; { std::istringstream in (text); std::string line; while (std::getline (in, line)) if (line != "frozen 1") older += line + "\n"; }
+            CHECK (older == build()->save(), "without that line the project is exactly an unfrozen one, which is what an older version sees");
+            // undo
+            auto u = build();
+            History hist (*u);
+            hist.before (*u->boards[0]); u->boards[0]->frozen.store (true); hist.discardIfUnchanged();
+            CHECK (hist.canUndo() && hist.undo() && ! u->boards[0]->frozen.load(), "Undo unfreezes");
+            CHECK (hist.redo() && u->boards[0]->frozen.load(), "and Redo freezes again");
+        }
+        {
+            // what makes the kept audio out of date
+            auto r = frozenRack();
+            auto& b = *r->boards[0];
+            auto stale = [&r, &b] (double bpm = 124.0) { return b.ice->made != r->freezeState (b, bpm); };
+            CHECK (! stale(), "(fresh)");
+            b.level.store (0.3f); b.pan.store (0.4f); b.mute.store (true); b.solo.store (true); b.out.store (2); b.name = "Other";
+            CHECK (! stale(), "the mixer channel and the name don't make a frozen sound out of date");
+            CHECK (stale (125.0), "a change of tempo does");
+            r->setKey ((r->root.load() + 1) % 12, r->scale.load());
+            CHECK (stale(), "a change of key does");
+            r->setKey ((r->root.load() + 11) % 12, r->scale.load());
+            CHECK (! stale(), "(and back)");
+            r->generateChords (99);
+            CHECK (stale(), "new chords do");
+            auto r2 = frozenRack();
+            auto& b2 = *r2->boards[0];
+            auto* seq = firstOf (b2, "noteseq");
+            CHECK (seq != nullptr && b2.ice->made == r2->freezeState (b2, 124.0), "(fresh again)");
+            seq->data[0].store (seq->data[0].load() > 0.5f ? 0.0f : 1.0f);
+            CHECK (b2.ice->made != r2->freezeState (b2, 124.0), "a change to its pattern does");
+            // what can't be frozen
+            auto sends = build(); sends->addModule (*sends->boards[0], "send", 0, 0);
+            auto returns = build(); returns->addModule (*returns->boards[0], "return", 0, 0);
+            auto keyed = build(); keyed->addModule (*keyed->boards[0], "keys", 0, 0);
+            CHECK (sends->cantFreeze (*sends->boards[0]) != nullptr && returns->cantFreeze (*returns->boards[0]) != nullptr && keyed->cantFreeze (*keyed->boards[0]) != nullptr, "a sound with a Send, a Return or a MIDI keyboard can't be frozen");
+            CHECK (! sends->makeIce (0, 124.0) && ! sends->boards[0]->iced(), "and no audio is made for one");
+            CHECK (sends->cantFreeze (*sends->boards[1]) == nullptr, "(the other sound still can)");
+        }
+        {
+            // knob lines on the timeline are in the kept audio
+            auto withLine = [&build] (bool freeze)
+            {
+                auto r = build();
+                auto& b = *r->boards[0];
+                Module* filter = nullptr; int knob = -1;
+                for (auto& m : b.modules) if (filter == nullptr && m->paramIndex ("cutoff") >= 0) { filter = m.get(); knob = m->paramIndex ("cutoff"); }
+                const int lane = r->addAuto (b, filter->uid, knob);
+                b.autos[(size_t) lane]->move (0, 0.0f, 0.15f); b.autos[(size_t) lane]->move (1, (float) r->songBars(), 0.95f);
+                if (freeze) { b.frozen.store (true); r->makeIce (0, 124.0); }
+                return r;
+            };
+            auto a = withLine (false), f = withLine (true);
+            const int bars = a->freezeBars (*a->boards[0]);
+            CHECK (bars == 32 && f->boards[0]->iced(), "a sound with a knob line comes round with the song page");
+            const auto ya = render (*a, bars * 2), yf = render (*f, bars * 2);
+            bool same = peakOf (yf.l) > 0.05f;
+            // (to within a hair: the knob steps on a grid of song position, and adding the position up block by block
+            // can land a step one sample to either side)
+            for (size_t i = ya.l.size() / 2 + 1; i < ya.l.size(); ++i) same = same && std::abs (ya.l[i] - yf.l[i]) < 1.0e-4f;
+            CHECK (same, "a frozen sound's knob lines are in its kept audio");
+            auto plainBass = build();
+            const auto yp = render (*plainBass, 4);
+            bool differs = false; for (size_t i = 0; i < yp.l.size(); ++i) differs = differs || yp.l[i] != ya.l[i];
+            CHECK (differs, "(the line is heard)");
+        }
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

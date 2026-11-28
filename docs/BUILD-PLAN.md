@@ -227,6 +227,19 @@ Joe: "do any of the modules need to expand? Open a bigger view? So you can do mo
 - [ ] **Joe to test in Cubase**: all of it with a real mouse, at the normal size and Full screen
 - Already has one: the plugin slot (Open). No need: single-knob units (VCA, attenuator, pan and the like)
 
+## Inside mixer (built, not released yet)
+
+Joe (28 Nov 2026): mix the units inside one sound on the desk, e.g. the layers inside a kick.
+
+- [x] **Sounds / Inside** on the desk's top edge, left of More / Less. Sounds is the desk as it was. Inside shows the selected sound: its name, then a fader for each of its levels and mixes. Saved with the project; older projects open on Sounds
+- [x] **What gets a fader** (one rule, `isMixKnob` in `Presets.h`): every knob called Level, the compressor's Make-up, every input of a Mixer unit, every effect's Mix, and a Send's Amount. Nothing else
+- [x] A fader is the knob: moving one turns the other at once. Undo, linked knobs and the timeline work as they do on the board
+- [x] Each strip says the unit and the knob, and what it is set to. Click the name and the board shows that unit, outlined for a moment
+- [x] Units that can't be heard are dimmed. More strips than fit: the mouse wheel moves along them. More / Less gives longer faders. The master stays where it is. No pan, mute, solo or output in Inside
+- [x] On the All view it shows the sound last selected. A sound with nothing to mix says so
+- For Joe to decide: the strips go left to right as the units sit on the board; a Mixer unit shows all four inputs, used or not; the Crossfader, Attenuator and EQ gains are left out; the Output unit's Level is in (it is the last strip)
+- [ ] **Joe to test in Cubase** with a real mouse
+
 ## Screen polish (Joe: "we can work the UI later")
 
 - [x] The mixing desk opens up (v0.1.17). Joe: "the mix at the bottom needs to be able to be made taller showing the other hidden options, and reduced hiding them again". A More / Less tab sits on the desk's top edge above the master. Opened, the desk is about twice as tall: every fader, the master included, grows to fill it, and each channel shows Pan and its load figure (v0.1.19; Joe: "make it taller, the master level needs to grow also", and the More / Less was "badly placed" beside the master fader). Saved with the project. Change sound was there in v0.1.17 and came out in v0.1.18 (Joe: "this is mixing elements"): the desk is for mixing only

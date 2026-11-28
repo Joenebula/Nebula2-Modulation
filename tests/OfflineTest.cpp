@@ -1821,6 +1821,293 @@ int main (int argc, char** argv)
         }
     }
 
+    {
+        // The Inside mixer: the desk showing the levels and mixes inside the selected sound
+        Nebula2ModulationProcessor r;
+        FakeCubase song; r.setPlayHead (&song);
+        r.setRateAndBufferSizeDetails (48000, 256);
+        r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto& desk = ed->desk();
+        ed->selectTab (0);
+        auto& kick = *r.rack.boards[0];
+        auto event = [&desk] (juce::Point<int> at) { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys::leftButtonModifier, 0, 0, 0, 0, 0, &desk, &desk, juce::Time::getCurrentTime(), at.toFloat(), juce::Time::getCurrentTime(), 1, false); };
+        auto picture = [&desk] { return desk.createComponentSnapshot (desk.getLocalBounds(), true, 1.0f); };
+        auto differ = [] (const juce::Image& a, const juce::Image& b)
+        {
+            if (a.getBounds() != b.getBounds()) return true;
+            for (int y = 0; y < a.getHeight(); y += 2) for (int x = 0; x < a.getWidth(); x += 2) if (a.getPixelAt (x, y) != b.getPixelAt (x, y)) return true;
+            return false;
+        };
+        auto sameList = [] (const std::vector<n2m::InsideStrip>& a, const std::vector<n2m::InsideStrip>& b)
+        {
+            if (a.size() != b.size()) return false;
+            for (size_t i = 0; i < a.size(); ++i) if (a[i].uid != b[i].uid || a[i].param != b[i].param || a[i].unit != b[i].unit || a[i].knob != b[i].knob) return false;
+            return true;
+        };
+        auto stripOf = [&desk] (const char* type, const char* knob) -> int
+        {
+            const auto list = desk.insideList();
+            auto* b = desk.boardFor()->board;
+            for (int i = 0; i < (int) list.size(); ++i)
+                if (auto* m = b->find (list[(size_t) i].uid))
+                    if (std::string (m->info->type) == type && std::string (m->info->params[(size_t) list[(size_t) i].param].id) == knob) return i;
+            return -1;
+        };
+        // what a hand on fader i does: press, drag to a position (0 bottom .. 1 top), let go
+        auto dragFader = [&] (int i, float from, float to)
+        {
+            const auto f = n2m::MixerStrip::insideFader (desk.insideStrip (i));
+            auto at = [f] (float n) { return juce::Point<int> (f.getCentreX() - 6, f.getY() + juce::roundToInt ((1.0f - n) * (float) f.getHeight())); };
+            desk.mouseDown (event (at (from))); desk.mouseDrag (event (at (to))); desk.mouseUp (event (at (to)));
+        };
+        auto loudness = [&]
+        {
+            for (auto& b : r.rack.boards) b->mute.store (true);
+            r.rack.boards[0]->mute.store (false);
+            song.playing = true; song.ppq = 0;
+            const float pk = run (r, song, 1.0);
+            song.playing = false; run (r, song, 0.3);
+            return pk;
+        };
+
+        CHECK (! r.mixerInside.load(), "the desk starts on Sounds");
+        const auto soundsPicture = picture();
+        const int deskH = desk.getHeight();
+        desk.setInside (true);
+        CHECK (r.mixerInside.load() && desk.getHeight() == deskH && differ (soundsPicture, picture()), "Inside changes what the desk shows, not its size");
+        CHECK (desk.insideHeading() == "Inside: Kick", "the heading says which sound");
+        CHECK (! desk.insideList().empty() && sameList (desk.insideList(), n2m::insideStrips (kick)), "Inside lists the strips for the current tab");
+        const int oscStrip = stripOf ("osc", "level"), outStrip = stripOf ("output", "level"), vcaStrip = stripOf ("vca", "level");
+        CHECK (oscStrip >= 0 && outStrip >= 0 && vcaStrip >= 0, "(the kick has an oscillator, a VCA and an Output to mix)");
+        const auto oscS = desk.insideList()[(size_t) oscStrip], outS = desk.insideList()[(size_t) outStrip], vcaS = desk.insideList()[(size_t) vcaStrip];
+        auto* osc = kick.find (oscS.uid); auto* out = kick.find (outS.uid); auto* vca = kick.find (vcaS.uid);
+        const auto& outParam = out->info->params[(size_t) outS.param];
+
+        // a fader is the knob: same position, same range
+        const float outBefore = out->P (outS.param);
+        CHECK (std::abs (desk.insideNorm (outS) - n2m::paramToNorm (outParam, outBefore)) < 1.0e-5f, "a fader sits where its knob is");
+        const float loud = loudness();
+        const std::string saveBefore = r.rack.save();
+        const int stepsBefore = r.history.canUndo() ? 1 : 0;
+        dragFader (outStrip, n2m::paramToNorm (outParam, outBefore), 0.25f);
+        CHECK (std::abs (out->P (outS.param) - n2m::paramFromNorm (outParam, 0.25f)) < 0.02f && out->P (outS.param) < outBefore - 0.1f, "moving a fader turns the knob");
+        CHECK (std::abs (desk.insideNorm (outS) - 0.25f) < 0.02f, "...and the fader shows where it was put");
+        const float quiet = loudness();
+        CHECK (loud > 0.05f && quiet < loud * 0.6f && quiet > 0.001f, "the sound's level follows the fader");
+        CHECK (r.history.canUndo() && stepsBefore == 0, "a fader move is one step for Undo");
+        const auto lowPicture = picture();
+        ed->stepHistory (false);
+        CHECK (std::abs (out->P (outS.param) - outBefore) < 1.0e-5f && r.rack.save() == saveBefore, "Undo puts the knob back");
+        CHECK (std::abs (desk.insideNorm (outS) - n2m::paramToNorm (outParam, outBefore)) < 1.0e-5f && differ (lowPicture, picture()), "...and the fader with it");
+        CHECK (! r.history.canUndo(), "(one step, now undone)");
+        ed->stepHistory (true);
+        CHECK (std::abs (out->P (outS.param) - n2m::paramFromNorm (outParam, 0.25f)) < 0.02f, "Redo moves it again");
+        ed->stepHistory (false);
+        // a press that moves nothing leaves no step
+        {
+            const auto f = n2m::MixerStrip::insideFader (desk.insideStrip (outStrip));
+            const juce::Point<int> where (f.getCentreX() - 6, f.getY() + juce::roundToInt ((1.0f - desk.insideNorm (outS)) * (float) f.getHeight()));
+            const float was = out->P (outS.param);
+            desk.mouseDown (event (where)); desk.mouseUp (event (where));
+            CHECK (std::abs (out->P (outS.param) - was) < 0.02f, "(a press on the handle hardly moves it)");
+            out->params[(size_t) outS.param].store (was);
+        }
+        // only that knob moves
+        {
+            const float oscWas = osc->P (oscS.param), vcaWas = vca->P (vcaS.param), levelWas = kick.level.load();
+            dragFader (outStrip, 0.5f, 0.9f);
+            CHECK (osc->P (oscS.param) == oscWas && vca->P (vcaS.param) == vcaWas && kick.level.load() == levelWas, "one fader moves one knob: no other knob, and not the sound's own channel");
+            ed->stepHistory (false);
+        }
+
+        // the knob turned on the board: the fader follows
+        {
+            ed->desk().tick();
+            const auto before = picture();
+            auto* comp = ed->board().compFor (oscS.uid);
+            auto* cell = comp != nullptr ? comp->cellFor (oscS.param) : nullptr;
+            CHECK (cell != nullptr, "(the oscillator's Level knob is on the board)");
+            if (cell != nullptr)
+            {
+                cell->setNorm (0.15f);
+                CHECK (std::abs (desk.insideNorm (oscS) - 0.15f) < 1.0e-4f && differ (before, picture()), "turning the knob on the board moves the fader");
+                // ...and by the timeline or anything else that sets the knob without the screen knowing
+                const auto mid = picture();
+                osc->params[(size_t) oscS.param].store (n2m::paramFromNorm (osc->info->params[(size_t) oscS.param], 0.9f));
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (120);         // the screen's own timer notices
+                CHECK (std::abs (desk.insideNorm (oscS) - 0.9f) < 1.0e-4f && differ (mid, picture()), "a knob moved from elsewhere moves the fader too");
+            }
+        }
+        // linked knobs follow a fader as they follow a knob
+        {
+            osc->paramLink[(size_t) oscS.param] = 2; vca->paramLink[(size_t) vcaS.param] = 2;
+            dragFader (oscStrip, 0.5f, 0.3f);
+            CHECK (std::abs (desk.insideNorm (oscS) - 0.3f) < 0.02f && std::abs (desk.insideNorm (vcaS) - desk.insideNorm (oscS)) < 1.0e-4f, "a linked knob follows the fader");
+            ed->stepHistory (false);
+            osc->paramLink[(size_t) oscS.param] = 0; vca->paramLink[(size_t) vcaS.param] = 0;
+        }
+        // a double-click puts a knob back where it starts
+        {
+            dragFader (outStrip, 0.5f, 0.1f);
+            const auto f = n2m::MixerStrip::insideFader (desk.insideStrip (outStrip));
+            desk.mouseDoubleClick (event (f.getCentre()));
+            CHECK (std::abs (out->P (outS.param) - outParam.def) < 1.0e-5f, "a double-click on a fader puts its knob back where it starts");
+        }
+
+        // More and Less still work: taller just gives longer faders
+        {
+            const int shortFader = n2m::MixerStrip::insideFader (desk.insideStrip (0)).getHeight();
+            desk.setTall (true);
+            const int longFader = n2m::MixerStrip::insideFader (desk.insideStrip (0)).getHeight();
+            CHECK (desk.getHeight() == n2m::MixerStrip::heightFor (true) && longFader > shortFader + 60, "MORE gives longer faders");
+            dragFader (outStrip, 0.5f, 0.7f);
+            CHECK (std::abs (desk.insideNorm (outS) - 0.7f) < 0.01f, "...that still move their knobs");
+            ed->stepHistory (false);
+            (void) picture();
+            desk.setTall (false);
+            CHECK (n2m::MixerStrip::insideFader (desk.insideStrip (0)).getHeight() == shortFader, "LESS puts them back");
+        }
+
+        // the name shows the unit on the board
+        {
+            const auto nameAt = n2m::MixerStrip::insideName (desk.insideStrip (outStrip)).getCentre();
+            CHECK (! ed->board().flashing (outS.uid), "(nothing outlined yet)");
+            desk.mouseDown (event (nameAt)); desk.mouseUp (event (nameAt));
+            auto* comp = ed->board().compFor (outS.uid);
+            auto* holderComp = ed->board().getParentComponent();
+            CHECK (ed->board().flashing (outS.uid) && comp != nullptr && ed->viewArea().contains (holderComp->getLocalArea (comp, comp->getLocalBounds())), "clicking a strip's name brings its unit into view and outlines it");
+            CHECK (std::abs (out->P (outS.param) - outParam.def) < 1.0e-5f, "...and changes nothing");
+        }
+
+        // a unit added: its strip appears, dimmed until it can be heard; a unit removed: its strip goes
+        {
+            const size_t had = desk.insideList().size();
+            ed->addUnits ({ "noise", "hall" });
+            CHECK (desk.insideList().size() == had + 2 && stripOf ("noise", "level") >= 0 && stripOf ("hall", "mix") >= 0, "adding units adds their strips");
+            (void) picture();
+            const auto noiseS = desk.insideList()[(size_t) stripOf ("noise", "level")];
+            CHECK (! kick.find (noiseS.uid)->live, "(not cabled: it can't be heard)");
+            // press its fader, then take the unit away under the hand
+            const auto f = n2m::MixerStrip::insideFader (desk.insideStrip (stripOf ("noise", "level")));
+            desk.mouseDown (event (f.getCentre()));
+            ed->board().willChange (noiseS.uid);
+            r.rack.removeModule (kick, noiseS.uid);
+            ed->board().rebuild();
+            const std::string after = r.rack.save();
+            desk.mouseDrag (event (f.getCentre().translated (0, -20)));
+            desk.mouseDrag (event (f.getCentre().translated (0, 10)));
+            desk.mouseUp (event (f.getCentre()));
+            (void) picture(); desk.tick();
+            CHECK (desk.insideList().size() == had + 1 && stripOf ("noise", "level") < 0 && desk.insideNorm (noiseS) < 0.0f, "removing a unit removes its strip");
+            CHECK (r.rack.save() == after, "...and a hand still on that fader moves nothing");
+            CHECK (! desk.moveInside (noiseS, 0.5f) && r.rack.save() == after, "a strip whose unit has gone can't be moved");
+            ed->stepHistory (false);
+            CHECK (stripOf ("noise", "level") >= 0, "Undo brings the unit and its strip back");
+            for (int k = 0; k < 2 && desk.insideList().size() != had; ++k) ed->stepHistory (false);       // (the press on the fader, then adding the units)
+            CHECK (desk.insideList().size() == had && sameList (desk.insideList(), n2m::insideStrips (kick)), "...and going further back takes the added units away again");
+            (void) picture();
+        }
+
+        // another tab: another list
+        ed->selectTab (1);
+        CHECK (desk.insideHeading() == "Inside: " + juce::String (r.rack.boards[1]->name) && sameList (desk.insideList(), n2m::insideStrips (*r.rack.boards[1])), "changing tab swaps the list");
+        (void) picture();
+        // Change sound
+        {
+            ed->reshow (-1);
+            (void) picture();                                   // drawn while the boards are let go: must be safe
+            CHECK (! desk.moveInside (desk.insideList()[0], 0.5f), "nothing moves while the board is let go");
+            CHECK (r.changeToPreset (1, "kick", "Deep"), "(the snare becomes a kick)");
+            ed->reshow (1);
+            CHECK (sameList (desk.insideList(), n2m::insideStrips (*r.rack.boards[1])) && stripOf ("osc", "level") >= 0, "Change sound makes the list again");
+            const auto s = desk.insideList()[(size_t) stripOf ("osc", "level")];
+            CHECK (desk.moveInside (s, 0.4f) && std::abs (desk.insideNorm (s) - 0.4f) < 1.0e-4f, "...and its faders work");
+            (void) picture();
+        }
+        // on the All view it is the sound last selected
+        {
+            ed->showAllSounds();
+            ed->reshow (3);
+            auto& bass = *r.rack.boards[3];
+            CHECK (desk.insideHeading() == "Inside: " + juce::String (bass.name) && sameList (desk.insideList(), n2m::insideStrips (bass)), "on the All view, Inside shows the sound last selected");
+            const auto list = desk.insideList();
+            CHECK (! list.empty() && desk.boardFor() != nullptr && desk.boardFor()->board == &bass, "(that sound's board is on screen)");
+            const auto s = list.back();
+            const float was = desk.insideNorm (s);
+            dragFader ((int) list.size() - 1, 0.5f, was > 0.5f ? 0.2f : 0.8f);
+            CHECK (std::abs (desk.insideNorm (s) - (was > 0.5f ? 0.2f : 0.8f)) < 0.02f, "its faders move its knobs there too");
+            ed->stepHistory (false);
+            CHECK (std::abs (desk.insideNorm (s) - was) < 1.0e-5f, "...and Undo puts them back");
+            (void) picture();
+            ed->selectTab (0);
+        }
+        // more strips than fit: the wheel moves along them
+        {
+            std::vector<std::string> many (14, "noise");
+            ed->addUnits (many);
+            const int last = (int) desk.insideList().size() - 1;
+            const int edge = desk.getWidth() - 12 - 112 - 10;            // where the master's part starts
+            CHECK (desk.insideStrip (last).getRight() > edge, "(more strips than fit)");
+            const int x0 = desk.insideStrip (0).getX();
+            juce::MouseWheelDetails w; w.deltaX = 0; w.deltaY = -1.0f; w.isReversed = false; w.isSmooth = false; w.isInertial = false;
+            for (int k = 0; k < 12; ++k) desk.mouseWheelMove (event ({ 300, 60 }), w);
+            CHECK (desk.insideStrip (0).getX() < x0 && desk.insideStrip (last).getRight() <= edge && desk.insideStrip (last).getRight() > edge - 40, "the wheel scrolls to the last strip and stops there");
+            (void) picture();
+            dragFader (last, 0.5f, 0.2f);
+            CHECK (std::abs (desk.insideNorm (desk.insideList()[(size_t) last]) - 0.2f) < 0.02f, "a scrolled strip's fader is where it is drawn");
+            ed->stepHistory (false); ed->stepHistory (false);
+            (void) picture();
+            CHECK (desk.insideStrip (0).getX() == x0, "with fewer strips again it scrolls back");
+        }
+        // a sound with nothing to mix
+        {
+            r.rack.addBoard (std::make_unique<n2m::Board>());
+            const int t = (int) r.rack.boards.size() - 1;
+            ed->reshow (t);
+            CHECK (desk.insideList().empty() && desk.insideHeading().startsWith ("Inside: "), "a sound with nothing to mix has no strips");
+            (void) picture();
+            dragFader (0, 0.5f, 0.2f);
+            ed->selectTab (0);
+        }
+        // the master is where it was, and still works
+        {
+            const float was = r.rack.master.load();
+            const juce::Point<int> at (desk.getWidth() - 12 - 112 + 20, 70);
+            desk.mouseDown (event (at)); desk.mouseDrag (event (at.translated (0, 20))); desk.mouseUp (event (at.translated (0, 20)));
+            CHECK (r.rack.master.load() != was, "the master fader is the same in both");
+            r.rack.master.store (was);
+        }
+        // remembered with the project
+        juce::MemoryBlock saved; r.getStateInformation (saved);
+        Nebula2ModulationProcessor q; q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+        CHECK (! q.mixerInside.load(), "(a new project is on Sounds)");
+        q.setStateInformation (saved.getData(), (int) saved.getSize());
+        CHECK (q.mixerInside.load(), "Inside is remembered with the project");
+        desk.setInside (false);
+        CHECK (! r.mixerInside.load() && ! differ (soundsPicture.getClippedImage ({ 0, 0, 80, 40 }), picture().getClippedImage ({ 0, 0, 80, 40 })), "Sounds puts the desk back as it was");
+        juce::MemoryBlock back; r.getStateInformation (back);
+        q.setStateInformation (back.getData(), (int) back.getSize());
+        CHECK (! q.mixerInside.load(), "...and so is Sounds");
+        q.mixerInside.store (true);
+        juce::MemoryBlock old;
+        {
+            // a project saved before the Inside mixer: everything up to the window size, and no more
+            juce::MemoryOutputStream o (old, false);
+            o.writeString (juce::String (r.rack.save())); o.writeInt (0); o.writeFloat (1.0f); o.writeBool (true); o.writeBool (false); o.writeFloat (0.0f); o.writeBool (false); o.writeBool (false);
+        }
+        q.setStateInformation (old.getData(), (int) old.getSize());
+        CHECK (! q.mixerInside.load() && q.mixerTall.load(), "a project from before this loads on Sounds");
+        // a project loaded while Inside is up: the list is the new project's
+        desk.setInside (true);
+        r.setStateInformation (saved.getData(), (int) saved.getSize());
+        (void) picture();
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+        CHECK (r.mixerInside.load() && sameList (desk.insideList(), n2m::insideStrips (*r.rack.boards[(size_t) r.selectedTab.load()])), "after a project load the list is the loaded project's");
+        (void) picture();
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

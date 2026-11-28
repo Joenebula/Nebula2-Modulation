@@ -2291,7 +2291,7 @@ int main()
             for (auto& s : v) { auto* m = b->find (s.uid); ok = ok && m != nullptr && isMixKnob (*m->info, m->info->params[(size_t) s.param]) && m->info->params[(size_t) s.param].choices.empty(); }
             CHECK (ok && ! v.empty(), "every starting sound has something to mix, and only levels and mixes");
         }
-        auto pad = makePreset ("pad", soundPresets().front().name);
+        std::unique_ptr<Board> pad;
         for (auto& sp : soundPresets()) if (std::string (sp.kind) == "pad") { pad = makePreset ("pad", sp.name); break; }
         CHECK (pad != nullptr && insideStrips (*pad).size() == insideStrips (*makeBoard ("pad")).size(), "a preset of a sound has the same faders as the sound it starts from");
         // a Mixer unit, effects, a compressor, a Send; and the things that must stay out

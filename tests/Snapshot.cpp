@@ -115,20 +115,6 @@ int main (int argc, char** argv)
     e->desk().setTall (false);
     p.rack.boards[1]->pan.store (0.0f); p.rack.boards[3]->pan.store (0.0f);
 
-    // the Inside mixer: the desk showing the levels inside one sound
-    e->selectTab (0);
-    e->desk().setInside (true);
-    if (auto list = e->desk().insideList(); ! list.empty()) e->showUnit (list[0].uid);      // as after a click on the first strip's name
-    shoot (*ed, dir + "/ui_inside.png");
-    e->desk().setTall (true);
-    shoot (*ed, dir + "/ui_inside_tall.png");
-    e->desk().setTall (false);
-    e->showAllSounds();
-    e->reshow (3);
-    shoot (*ed, dir + "/ui_inside_all.png");            // on the All view it shows the sound last selected
-    e->desk().setInside (false);
-    e->selectTab (3);
-
     // the song page: off, then built up
     e->songPanel.open();
     shoot (*ed, dir + "/ui_song_off.png");
@@ -393,6 +379,28 @@ int main (int argc, char** argv)
             b->bigPanel.close();
         }
         shoot (*holder, dir + "/ui_big_units.png");                  // those four units on their board, each with its Expand label
+    }
+    {
+        // The Inside mixer: the desk showing the levels inside one sound
+        Nebula2ModulationProcessor q;
+        q.setRateAndBufferSizeDetails (48000, 256);
+        q.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (q.createEditor());
+        auto* b = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        b->selectTab (1);                                   // the snare: two layers and a Mixer unit
+        b->desk().setInside (true);
+        b->addUnits ({ "hall" });                           // not cabled yet, so it can't be heard: its strip is dimmed
+        for (auto& s : b->desk().insideList()) if (s.unit == "Mixer" && s.knob == "Level 1") b->showUnit (s.uid);      // as after a click on that strip's name
+        shoot (*holder, dir + "/ui_inside.png");
+        b->desk().setTall (true);
+        shoot (*holder, dir + "/ui_inside_tall.png");
+        b->desk().setTall (false);
+        b->showAllSounds();
+        b->reshow (3);
+        shoot (*holder, dir + "/ui_inside_all.png");        // on the All view it shows the sound last selected
+        q.rack.addBoard (std::make_unique<n2m::Board>());
+        b->selectTab ((int) q.rack.boards.size() - 1);
+        shoot (*holder, dir + "/ui_inside_none.png");       // a sound with nothing to mix
     }
     return 0;
 }

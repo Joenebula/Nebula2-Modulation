@@ -30,7 +30,8 @@ constexpr int kBlock = 64;    // the engine works in chunks of up to 64 samples
 constexpr int kSteps = 16;    // steps in a bar
 constexpr int kMaxBars = 8;   // the longest pattern
 constexpr int kMaxSteps = kSteps * kMaxBars;
-constexpr int kData = 2 * kMaxSteps;   // a sequencer carries two rows: hits (or note on/off), then which note
+constexpr int kLenRow = 2 * kMaxSteps;  // where the third row starts
+constexpr int kData = 3 * kMaxSteps;   // a sequencer carries three rows: hits (or note on/off), which note, then (note sequencer only) the note's own length in steps, 0 = the Length knob
 constexpr int kLinkGroups = 8;         // link groups A to H
 constexpr int kOuts = 16;              // stereo outputs to the host: 1 is the main mix, 2 to 16 are separate
 constexpr double kPi = 3.14159265358979323846;
@@ -737,6 +738,9 @@ struct Rack
                 if (a >= 0 && c >= 0) to.params[(size_t) c].store (from.P (a));
             }
         }
+        // a note's own length is part of the rhythm
+        if ((share & 1) && from.info->seq == Seq::Note && to.info->seq == Seq::Note)
+            for (int k = 0; k < kMaxSteps; ++k) to.data[(size_t) (kLenRow + k)].store (from.data[(size_t) (kLenRow + k)].load());
         if ((share & 2) && ! fromDrum && ! toDrum)
             for (int k = 0; k < kMaxSteps; ++k) to.data[(size_t) (kMaxSteps + k)].store (from.data[(size_t) (kMaxSteps + k)].load());
     }
@@ -1042,6 +1046,19 @@ struct Rack
                     for (int k = 0; k < used; ++k) o << ' ' << m->data[(size_t) (row * kMaxSteps + k)].load();
                     o << '\n';
                 }
+            // Notes with a length of their own go on a line of their own, and only when there are some: older
+            // versions skip it, and a pattern without any saves exactly as it always did
+            if (m->info->seq == Seq::Note)
+            {
+                int used = 0;
+                for (int k = 0; k < kMaxSteps; ++k) if (m->data[(size_t) (kLenRow + k)].load() != 0.0f) used = ((k / kSteps) + 1) * kSteps;
+                if (used > 0)
+                {
+                    o << "gl " << m->uid;
+                    for (int k = 0; k < used; ++k) o << ' ' << m->data[(size_t) (kLenRow + k)].load();
+                    o << '\n';
+                }
+            }
         }
         for (auto& a : b.autos)
             if (auto* m = b.find (a->uid))
@@ -1177,6 +1194,13 @@ struct Rack
                 int uid = 0; ls >> uid;
                 const int base = tag == "g" ? 0 : kMaxSteps;
                 if (auto* m = b->find (uid)) for (int k = 0; k < kMaxSteps; ++k) { float v = 0; if (ls >> v) m->data[(size_t) (base + k)].store (v); else break; }
+            }
+            else if (tag == "gl")
+            {
+                int uid = 0; ls >> uid;
+                if (auto* m = b->find (uid))
+                    if (m->info->seq == Seq::Note)
+                        for (int k = 0; k < kMaxSteps; ++k) { float v = 0; if (ls >> v) m->data[(size_t) (kLenRow + k)].store (std::min ((float) kMaxSteps, std::max (0.0f, std::round (v)))); else break; }
             }
             else if (tag == "d")
             {

@@ -333,7 +333,31 @@ inline int loopSteps (float stepsParam, float barsParam)
     return (bars - 1) * kSteps + std::min (kSteps, std::max (1, (int) std::lround (stepsParam)));
 }
 
-// Drum sequencer: up to 8 bars of 16 steps. data[step] = 0 off, 1 hit, 2 accent.
+// How hard a drum step hits, from the number stored for it. Anything above 0.5 is a hit. 1 is the plain hit
+// (0.72) and 2 the accent (1.0), exactly as they always were; in between and below 1 the hit is softer or harder.
+inline float drumVel (float d)
+{
+    if (d >= 2.0f) return 1.0f;
+    if (d == 1.0f) return 0.72f;
+    if (d > 1.0f) return 0.72f + 0.28f * (d - 1.0f);
+    return 0.10f + 0.62f * (std::max (0.5f, d) - 0.5f) * 2.0f;
+}
+// ...and the number to store for a hit this hard (0.1 to 1)
+inline float drumData (float vel)
+{
+    vel = std::min (1.0f, std::max (0.1f, vel));
+    if (vel >= 0.72f) return std::min (2.0f, 1.0f + (vel - 0.72f) / 0.28f);
+    return std::max (0.51f, 0.5f + (vel - 0.10f) / 0.62f * 0.5f);
+}
+// The same as a MIDI velocity: the plain hit is 92 and the accent 127, as before
+inline int drumMidiVel (float d)
+{
+    const float v = drumVel (d);
+    return std::min (127, std::max (1, (int) std::lround (v >= 0.72f ? 92.0f + (v - 0.72f) / 0.28f * 35.0f : v / 0.72f * 92.0f)));
+}
+
+// Drum sequencer: up to 8 bars of 16 steps. data[step] = 0 off, 1 hit, 2 accent; other values above 0.5 are
+// hits of other strengths (see drumVel).
 struct DrumSeq : Module
 {
     static const Info& desc()
@@ -358,7 +382,7 @@ struct DrumSeq : Module
                     const int k = wrapStep (s, len);
                     playStep.store (k);
                     const float d = data[(size_t) k].load (std::memory_order_relaxed);
-                    if (d > 0.5f) { left = gateLen; vel = d > 1.5f ? 1.0f : 0.72f; }
+                    if (d > 0.5f) { left = gateLen; vel = drumVel (d); }
                 }
             }
             else if (last != noStep) { last = noStep; left = 0; playStep.store (-1); }
@@ -395,7 +419,21 @@ inline int leaderShift (const Module& leader, long step)
     return 0;
 }
 
-// Note sequencer: up to 8 bars. First row of data = note on/off, second row = which note of the key.
+// A note's own length, in steps, as it will sound: 0 if it has none (the Length knob sets it). A note with its
+// own length is cut where the next note of the pattern starts, so one line never plays two notes at once.
+inline int ownNoteSteps (const Module& m, int k, int len)
+{
+    const int want = std::min (len, (int) std::lround (m.data[(size_t) (kLenRow + k)].load (std::memory_order_relaxed)));
+    if (want <= 0) return 0;
+    for (int j = 1; j < want; ++j)
+        if (m.data[(size_t) wrapStep (k + j, len)].load (std::memory_order_relaxed) > 0.5f) return j;
+    return want;
+}
+// How long such a note's gate is up, in steps: a little short of its length, so the next note starts afresh
+inline double ownNoteGate (int steps) { return (double) steps - 0.04; }
+
+// Note sequencer: up to 8 bars. First row of data = note on/off, second row = which note of the key, third row =
+// the note's own length in steps (0 = none: the Length knob sets it, as it always did).
 // Notes are stored as scale steps, so changing the key moves every pattern with it.
 // With Follow on, the steps count from the chord playing now, so the line moves with the chords.
 struct NoteSeq : Module
@@ -441,7 +479,8 @@ struct NoteSeq : Module
                             deg += leaderShift (*c.leaders[patternLink], s);
                         const int semis = c.root + degreeToSemis (deg, c.scale) + lift + 12 * (int) std::lround (P (0));
                         pitch = (float) semis / 12.0f;
-                        left = gateLen;
+                        const int own = ownNoteSteps (*this, k, len);
+                        left = own > 0 ? std::max (8, (int) (stepSamples * ownNoteGate (own))) : gateLen;
                     }
                 }
             }

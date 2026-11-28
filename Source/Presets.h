@@ -221,7 +221,7 @@ inline NoteList notesOf (const Rack& rack, const Module& m)
         for (int k = 0; k < len; ++k)
         {
             const float d = m.data[(size_t) k].load();
-            if (d > 0.5f) out.notes.push_back ({ (double) k, 0.5, 36, d > 1.5f ? 127 : 92 });
+            if (d > 0.5f) out.notes.push_back ({ (double) k, 0.5, 36, drumMidiVel (d) });
         }
         out.steps = ((len + kSteps - 1) / kSteps) * kSteps;
         return out;
@@ -248,7 +248,8 @@ inline NoteList notesOf (const Rack& rack, const Module& m)
         int deg = (int) std::lround (m.data[(size_t) (kMaxSteps + k)].load()), lift = 0;
         if (follow) { const int ci = tl.indexAt (s); if (ci >= 0) { deg += tl.slots[(size_t) ci].deg; lift = tl.slots[(size_t) ci].tr; } }
         if (leader != nullptr) deg += leaderShift (*leader, s);
-        out.notes.push_back ({ (double) s, gl >= 0.995f ? 1.0 : (double) std::min (0.96f, gl), 60 + root + degreeToSemis (deg, scale) + lift + 12 * octave, 100 });
+        const int own = ownNoteSteps (m, k, len);
+        out.notes.push_back ({ (double) s, own > 0 ? ownNoteGate (own) : gl >= 0.995f ? 1.0 : (double) std::min (0.96f, gl), 60 + root + degreeToSemis (deg, scale) + lift + 12 * octave, 100 });
     }
     out.steps = total;
     return out;
@@ -307,7 +308,32 @@ inline void setNotesBar (Module& m, int bar, const char* gates, const int* degre
     {
         m.data[(size_t) (bar * kSteps + i)].store (gates[i] == 'x' ? 1.0f : 0.0f);
         m.data[(size_t) (kMaxSteps + bar * kSteps + i)].store ((float) degrees[i]);
+        if (m.info != nullptr && m.info->seq == Seq::Note) m.data[(size_t) (kLenRow + bar * kSteps + i)].store (0.0f);   // a fresh pattern: no note keeps a length of its own
     }
+}
+
+// ---- One bar of a pattern, to copy, paste or clear (the bigger views) ----
+struct BarClip { bool full = false; float row[3][kSteps] {}; };
+inline BarClip copyBar (const Module& m, int bar)
+{
+    BarClip c;
+    if (bar < 0 || bar >= kMaxBars) return c;
+    for (int r = 0; r < 3; ++r) for (int i = 0; i < kSteps; ++i) c.row[r][i] = m.data[(size_t) (r * kMaxSteps + bar * kSteps + i)].load();
+    c.full = true;
+    return c;
+}
+inline bool pasteBar (Module& m, int bar, const BarClip& c)
+{
+    if (! c.full || bar < 0 || bar >= kMaxBars) return false;
+    for (int r = 0; r < 3; ++r) for (int i = 0; i < kSteps; ++i) m.data[(size_t) (r * kMaxSteps + bar * kSteps + i)].store (c.row[r][i]);
+    return true;
+}
+// Takes every hit or note out of a bar. Which note each step would play is left alone, as when a step is clicked off.
+inline bool clearBar (Module& m, int bar)
+{
+    if (bar < 0 || bar >= kMaxBars) return false;
+    for (int i = 0; i < kSteps; ++i) { m.data[(size_t) (bar * kSteps + i)].store (0.0f); m.data[(size_t) (kLenRow + bar * kSteps + i)].store (0.0f); }
+    return true;
 }
 // A one-bar idea fills every bar, so making the pattern longer keeps it playing
 inline void setDrum (Module& m, const char* pat) { for (int b = 0; b < kMaxBars; ++b) setDrumBar (m, b, pat); }
@@ -948,7 +974,7 @@ inline void keepPattern (const Board& old, Board& fresh)
         for (int s = 0; s < kMaxSteps; ++s)
         {
             const float hit = a.data[(size_t) s].load();
-            if (aDrum == bDrum) { b.data[(size_t) s].store (hit); b.data[(size_t) (kMaxSteps + s)].store (a.data[(size_t) (kMaxSteps + s)].load()); }
+            if (aDrum == bDrum) { b.data[(size_t) s].store (hit); b.data[(size_t) (kMaxSteps + s)].store (a.data[(size_t) (kMaxSteps + s)].load()); b.data[(size_t) (kLenRow + s)].store (a.data[(size_t) (kLenRow + s)].load()); }
             else if (bDrum) { b.data[(size_t) s].store (hit > 0.5f ? 1.0f : 0.0f); b.data[(size_t) (kMaxSteps + s)].store (0.0f); }
             else { b.data[(size_t) s].store (hit > 0.5f ? 1.0f : 0.0f); b.data[(size_t) (kMaxSteps + s)].store (0.0f); }
         }

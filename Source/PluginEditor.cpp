@@ -3773,7 +3773,9 @@ void Nebula2ModulationEditor::show()
 
 void Nebula2ModulationEditor::selectTab (int index)
 {
-    if (index < 0) { letGo(); return; }
+    // (letting go of the boards means a sound is about to be changed, replaced or deleted: a bigger view closes.
+    // Undo and Redo let go without closing it, and it stays if its unit is still there afterwards.)
+    if (index < 0) { bigPanel.close(); letGo(); return; }
     proc.showAll.store (false);
     proc.selectedTab.store (index);
     show();
@@ -3789,7 +3791,7 @@ void Nebula2ModulationEditor::showAllSounds()
 
 void Nebula2ModulationEditor::reshow (int index)
 {
-    if (index < 0) { letGo(); return; }
+    if (index < 0) { bigPanel.close(); letGo(); return; }
     proc.selectedTab.store (index);
     const auto pos = viewport.getViewPosition();
     show();

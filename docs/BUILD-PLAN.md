@@ -212,17 +212,19 @@ other unit stays a tall panel).
 - [ ] **Joe to test in Cubase**: clicking the bar buttons, velocity bars and drop-downs with a real mouse; the keyboard lighting from a real MIDI keyboard
 - Fixed on the way (v0.1.25): a delay line could read one sample past its end when the position rounded exactly onto it
 
-## Units that would gain from a bigger view (ideas, not started)
+## Bigger views (built, not released yet: for Joe to try)
 
-Joe: "do any of the modules need to expand? Open a bigger view? So you can do more". Proposed, in order of how much they would gain:
+Joe: "do any of the modules need to expand? Open a bigger view? So you can do more". Each of these units has an Expand label in its top line. It opens a panel over the board (Close, Escape or a click outside closes it; Undo, Redo and Play are on it). The song keeps playing and the view follows it. It closes itself if its unit goes.
 
-- [ ] **Note sequencer**: a full piano roll. All 8 bars at once, note lengths you can drag, more than one octave in view
-- [ ] **Drum sequencer**: all 8 bars at once with velocity per hit, and copy / paste of a bar
-- [ ] **Chord generator**: every chord of the song in one view, with its notes on a keyboard, and the choices that are in menus today laid out to click
-- [ ] **Sample player**: a large waveform to set start and length by dragging, with zoom
-- [ ] **Parametric EQ**: the curve drawn large, with the bands as points to drag
-- [ ] **Step modulator**: all its bars at once, with a pencil to draw shapes
-- [ ] **Scope and tuner**: a large scope
+- [x] **Note sequencer**: a piano roll. Every bar of the pattern at once (up to 8), three octaves of the key. Click to add or remove a note, drag up and down for pitch, drag a note's right-hand end for its own length (new: a note without one still takes the Length knob). Copy / paste / clear a bar
+- [x] **Drum sequencer**: every bar at once, one row each. A bar under every hit to drag for how hard it hits (new: any strength, not just hit and accent). Copy / paste / clear a bar
+- [x] **Chord generator**: every chord of the song with its name, length and notes on a keyboard; the picked chord's colour, bass note, change to, length and lock as buttons
+- [x] **Sample player**: a large wave; drag the start and the end; zoom in and out (buttons or the mouse wheel); the playhead
+- [x] **Parametric EQ**: the curve drawn large; drag a band's point for where and how much; mouse wheel or right-button drag for how wide
+- [x] **Step modulator**: every bar in one row; drag across the steps to draw, right-drag to switch steps off. Copy / paste / clear a bar
+- [x] **Scope and tuner**: a large scope, with the note, cents and frequency in large letters, and Freeze
+- Different from the list, for Joe to decide: the piano roll shows the same three octaves as the unit (a wider range would not show properly on the unit); a long note is cut where the next note starts (one line, one note at a time); notes move up and down only, not sideways; the sample view has no Load button of its own
+- [ ] **Joe to test in Cubase**: all of it with a real mouse, at the normal size and Full screen
 - Already has one: the plugin slot (Open). No need: single-knob units (VCA, attenuator, pan and the like)
 
 ## Screen polish (Joe: "we can work the UI later")

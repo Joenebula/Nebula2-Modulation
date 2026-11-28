@@ -38,6 +38,7 @@ Sister project: Nebula2 Chord (`Joenebula/Nebula2-Chord`). Same look, same build
 - `Source/Sampler.*`: the Sample player (SampleModule). Also registered through `extraTypes()`.
 - `Source/PluginProcessor.*`: holds the rack, follows Cubase's tempo and transport, saves with the project.
 - `Source/PluginEditor.*`: the screen. StyleBar, TabBar, BoardView (inside `boardHolder`, which is what makes zoom work), AllView (one embedded BoardView per sound), ModuleComp, ParamCell, SeqView, ChordView, HostView, SampleView, ScopeView, HostOverlay, MixerStrip, AddPanel, SongPanel (the timeline).
+- `Source/BigViews.*`: the bigger views (BigPanel, and one BigView per unit that has an Expand label: BigNoteRoll, BigDrumGrid, BigChords, BigSample, BigEq, BigStepMod, BigScope).
 - `Source/Look.h`: design tokens and materials (ParaEQ design system, shared with Nebula2 Chord).
 - `tests/EngineTest.cpp`: the engine on its own (plain C++).
 - `tests/OfflineTest.cpp`: the plugin in a fake Cubase.
@@ -59,6 +60,9 @@ Rules that tests hold in place:
 - Panels: every unit is `lay::panelH` high; `lay::geo (info)` says where its knobs and jacks go and `lay::fits (info)` must hold for every type, the plugin slot and sample player included. A unit with `perRow` keeps its knobs in groups of that many.
 - The All view: `proc.showAll`. `selectTab (i)` shows one sound alone; `showAllSounds()` shows them all; `reshow (i)` redraws whichever is up (use it after a change). `selectTab (-1)` / `reshow (-1)` lets go of the boards before the rack changes under them.
 - Timeline knob lines: `Board::autos` (`AutoLane`: unit id, knob, up to 64 points of bar and knob position). Points are atomics, so dragging one never takes the lock; adding or removing a line does (`Rack::addAuto` / `removeAuto`). Knobs are set on a fixed grid of song position (1/32 of a step) with chunks cut at its edges, so it never depends on block size. The song is `Rack::songBars()` long and goes round. Saved as `au` lines. A new line is flat at the knob's own position and changes nothing. Each stretch can be bent (`AutoLane::curve`, `shape`, `curveFor`); 0 is straight and must stay exactly the old straight line.
+- Bigger views: `BigPanel::has (info)` says which units have one; `ModuleComp::expandArea()` is the label. A view never trusts its unit is still there: `BigView::alive()` looks it up in the rack by address, and nothing is drawn or changed without it. The panel closes in `selectTab (-1)` / `reshow (-1)`, and `check()` (after any redraw of the boards) and `tick()` close it if its unit has gone. Undo and Redo keep it open when the unit survives. Every change goes through `begin()` / `end()` (History, linked units, redraw the board).
+- A note's own length: third row of a note sequencer's data (`kLenRow`), in steps, 0 = the Length knob (exactly as before). `ownNoteSteps` cuts it at the next note. Saved on a `gl` line only when there is one. `notesOf` uses the same functions.
+- Drum hits: 0 off, 1 plain (Vel exactly 0.72), 2 accent (exactly 1.0), anything else above 0.5 a strength in between or below (`drumVel`, `drumData`, `drumMidiVel`). Stored to two decimal places.
 - A knob at 0% does nothing at all (Drive at 0% is identical to no Drive). Every effect at Mix 0% passes its input through exactly, and gives silence for silence.
 - Anything rhythmic is stored as a note length and worked out from the tempo, never milliseconds.
 - Saves are text, named by id. Unknown modules and knobs are skipped on load, so never rename an id.
@@ -111,10 +115,10 @@ libfreetype-dev libfontconfig1-dev libgl1-mesa-dev`.
 Push to main, then start the release through the API (pushing tags doesn't work through the proxy):
 
 ```
-gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.26'
+gh api -X POST repos/Joenebula/Nebula2-Modulation/actions/workflows/build.yml/dispatches -f ref=main -f 'inputs[version]=v0.1.27'
 ```
 
-The latest release is **v0.1.25**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
+The latest release is **v0.1.26**. v0.1.22 was the first with the Modurand rework (styles, All view, rack panels, timeline).
 Joe asked for that release on 27 Nov 2026, after it had built on Windows, Mac and Linux and passed every test.
 
 Windows: don't name a variable `near`, `far` or `small`. The Windows headers define them and the build breaks.

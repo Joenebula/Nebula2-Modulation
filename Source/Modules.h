@@ -346,8 +346,9 @@ inline float drumVel (float d)
 inline float drumData (float vel)
 {
     vel = std::min (1.0f, std::max (0.1f, vel));
-    if (vel >= 0.72f) return std::min (2.0f, 1.0f + (vel - 0.72f) / 0.28f);
-    return std::max (0.51f, 0.5f + (vel - 0.10f) / 0.62f * 0.5f);
+    const float d = vel >= 0.72f ? 1.0f + (vel - 0.72f) / 0.28f : 0.5f + (vel - 0.10f) / 0.62f * 0.5f;
+    // kept to two decimal places, so a save holds it exactly and the plain hit and the accent are easy to land on
+    return std::min (2.0f, std::max (0.51f, std::round (d * 100.0f) / 100.0f));
 }
 // The same as a MIDI velocity: the plain hit is 92 and the accent 127, as before
 inline int drumMidiVel (float d)

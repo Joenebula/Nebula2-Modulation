@@ -1354,6 +1354,473 @@ int main (int argc, char** argv)
         CHECK (ed->getWidth() == w0 && ed->getHeight() == h0 && ed->boardArea() == board0, "Normal size puts the window back as it was");
     }
 
+    {
+        // The bigger views: each opens for its unit, edits it, can be undone, and closes itself when its unit goes
+        Nebula2ModulationProcessor r;
+        r.setRateAndBufferSizeDetails (48000, 256); r.prepareToPlay (48000, 256);
+        std::unique_ptr<juce::AudioProcessorEditor> holder (r.createEditor());
+        auto* ed = dynamic_cast<Nebula2ModulationEditor*> (holder.get());
+        auto& big = ed->bigPanel;
+        auto unit = [&r] (int tab, const char* type) -> n2m::Module*
+        {
+            for (auto& m : r.rack.boards[(size_t) tab]->modules) if (std::string (m->info->type) == type) return m.get();
+            return nullptr;
+        };
+        auto event = [] (juce::Component& c, juce::Point<float> at, juce::Point<float> downAt, bool right = false)
+        {
+            return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, right ? juce::ModifierKeys::rightButtonModifier : juce::ModifierKeys::leftButtonModifier,
+                                     0, 0, 0, 0, 0, &c, &c, juce::Time::getCurrentTime(), downAt, juce::Time::getCurrentTime(), 1, at != downAt);
+        };
+        auto drag = [&event] (juce::Component& c, juce::Point<float> from, juce::Point<float> to, bool right = false)
+        {
+            c.mouseDown (event (c, from, from, right));
+            for (int k = 1; k <= 4; ++k) c.mouseDrag (event (c, from + (to - from) * ((float) k / 4.0f), from, right));
+            c.mouseUp (event (c, to, from, right));
+        };
+        auto click = [&event] (juce::Component& c, juce::Point<float> at, bool right = false) { c.mouseDown (event (c, at, at, right)); c.mouseUp (event (c, at, at, right)); };
+        {   // a board with the other kinds of unit on it
+            auto eb = n2m::makeBoard ("empty", 48000);
+            for (const char* t : { "sample", "parameq", "stepmod", "scope", "filter", "arp" }) eb->add (t, 0, 0, 48000);
+            n2m::tidy (*eb);
+            r.rack.addBoard (std::move (eb));
+        }
+        const int extra = (int) r.rack.boards.size() - 1;
+
+        // Which units have one, and where its label sits
+        for (auto* info : n2m::allTypes())
+        {
+            const std::string t = info->type;
+            const bool want = t == "noteseq" || t == "drumseq" || t == "chords" || t == "sample" || t == "parameq" || t == "stepmod" || t == "scope";
+            CHECK (n2m::BigPanel::has (*info) == want, "the seven units on the list have a bigger view, and no others");
+        }
+        ed->selectTab (3);
+        for (int tab : { 0, 3, 4, extra })
+        {
+            ed->selectTab (tab);
+            for (auto& m : r.rack.boards[(size_t) tab]->modules)
+            {
+                auto* comp = ed->board().compFor (m->uid);
+                if (comp == nullptr) { CHECK (false, "every unit is on its board"); continue; }
+                const auto ea = comp->expandArea();
+                if (! n2m::BigPanel::has (*m->info)) { CHECK (ea.isEmpty(), "a unit with no bigger view has no Expand label"); continue; }
+                CHECK (! ea.isEmpty() && comp->getLocalBounds().reduced (10, 0).contains (ea) && ea.getBottom() <= n2m::lay::header, "the Expand label sits in the unit's top line, clear of the corner screws");
+                CHECK (! ea.intersects (comp->linkArea()) && ! ea.intersects (comp->midiArea()), "clear of LINK and DRAG MIDI");
+                bool overChild = false;
+                for (auto* ch : comp->getChildren()) overChild = overChild || (ch->isVisible() && ch->getBounds().intersects (ea));
+                CHECK (! overChild, "and over none of the unit's own controls");
+                // a click on it opens that unit's view
+                const auto at = ea.getCentre().toFloat();
+                comp->mouseDown (event (*comp, at, at));
+                CHECK (big.isOpen() && big.isVisible() && big.content() != nullptr && big.content()->unitId() == m->uid && big.content()->alive(), "a click on Expand opens that unit's bigger view");
+                CHECK (big.getBounds() == ed->getLocalBounds() && ed->getLocalBounds().contains (big.card()) && big.card().reduced (10).contains (big.content()->getBounds()), "it is a card over the whole window, with the view inside it");
+                CHECK (big.content()->getWidth() > 1000 && big.content()->getHeight() > 500, "with plenty of room at the normal window size");
+                (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+                big.close();
+                CHECK (! big.isOpen() && ! big.isVisible(), "Close closes it");
+            }
+        }
+
+        // ---- 1. The piano roll
+        ed->selectTab (3);
+        auto* notes = unit (3, "noteseq");
+        notes->set ("bars", 2);          // four bars
+        const int quiet[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        for (int b = 0; b < 4; ++b) n2m::setNotesBar (*notes, b, "x...............", quiet);
+        r.history.clear();
+        CHECK (big.open (*r.rack.boards[3], *notes) && big.as<n2m::BigNoteRoll>() != nullptr && big.as<n2m::BigDrumGrid>() == nullptr, "the note sequencer opens a piano roll");
+        if (auto* v = big.as<n2m::BigNoteRoll>())
+        {
+            CHECK (v->bars() == 4 && v->grid().getWidth() > 900 && v->cell (63, 14).getRight() <= (float) v->grid().getRight() + 0.5f && v->cell (0, -7).getBottom() <= (float) v->grid().getBottom() + 0.5f, "all four bars and three octaves are in view at once");
+            v->setNote (20, 4);
+            CHECK (notes->data[20].load() == 1.0f && notes->data[(size_t) (n2m::kMaxSteps + 20)].load() == 4.0f && notes->data[(size_t) (n2m::kLenRow + 20)].load() == 0.0f, "a note can be added anywhere in the four bars");
+            v->setNoteLength (20, 6);
+            CHECK (notes->data[(size_t) (n2m::kLenRow + 20)].load() == 6.0f && v->noteRect (20).getWidth() > v->cell (20, 4).getWidth() * 5.0f, "it can be given a length of its own, and is drawn that long");
+            ed->stepHistory (false);
+            CHECK (notes->data[(size_t) (n2m::kLenRow + 20)].load() == 0.0f && notes->data[20].load() == 1.0f, "Undo takes the length away again");
+            CHECK (big.isOpen() && big.as<n2m::BigNoteRoll>() == v && v->alive(), "and the view stays open, because its unit is still there");
+            ed->stepHistory (false);
+            CHECK (notes->data[20].load() == 0.0f && big.isOpen(), "Undo again takes the note away");
+            ed->stepHistory (true); ed->stepHistory (true);
+            CHECK (notes->data[20].load() == 1.0f && notes->data[(size_t) (n2m::kLenRow + 20)].load() == 6.0f, "Redo brings both back");
+            // with the mouse: click an empty place, drag its end, drag it up, click it away
+            click (*v, v->cell (40, 2).getCentre());
+            CHECK (notes->data[40].load() == 1.0f && notes->data[(size_t) (n2m::kMaxSteps + 40)].load() == 2.0f, "a click on an empty place adds the note there");
+            const auto nr = v->noteRect (40);
+            drag (*v, { nr.getRight() - 1.0f, nr.getCentreY() }, { v->cell (44, 2).getRight() - 1.0f, nr.getCentreY() });
+            CHECK (notes->data[(size_t) (n2m::kLenRow + 40)].load() == 5.0f && notes->data[(size_t) (n2m::kMaxSteps + 40)].load() == 2.0f, "dragging a note's right-hand end sets its own length");
+            drag (*v, v->noteRect (40).getCentre(), v->cell (41, 9).getCentre().withX (v->noteRect (40).getCentreX()));
+            CHECK (notes->data[(size_t) (n2m::kMaxSteps + 40)].load() == 9.0f && notes->data[(size_t) (n2m::kLenRow + 40)].load() == 5.0f && notes->data[40].load() == 1.0f, "dragging a note up changes its pitch and keeps its length");
+            click (*v, v->noteRect (40).getCentre(), true);
+            CHECK (notes->data[(size_t) (n2m::kLenRow + 40)].load() == 0.0f && notes->data[40].load() == 1.0f, "a right-click puts it back on the Length knob");
+            const bool couldUndo = r.history.canUndo();
+            click (*v, v->noteRect (40).getCentre());
+            CHECK (notes->data[40].load() == 0.0f && couldUndo, "a click on a note takes it away");
+            ed->stepHistory (false);
+            CHECK (notes->data[40].load() == 1.0f && notes->data[(size_t) (n2m::kMaxSteps + 40)].load() == 9.0f, "and Undo brings it back");
+            // one drag on an empty place: a new note, as long as the drag
+            drag (*v, v->cell (50, 0).getCentre(), v->cell (53, 0).getCentre().translated (v->cell (0, 0).getWidth() * 0.4f, 0.0f));
+            CHECK (notes->data[50].load() == 1.0f && notes->data[(size_t) (n2m::kLenRow + 50)].load() == 4.0f, "pressing on an empty place and dragging right draws a long note");
+            v->setBars (3);
+            CHECK (v->bars() == 8 && notes->P (notes->paramIndex ("bars")) == 3.0f, "the pattern can be made eight bars long from here");
+            v->setBars (2);
+            // copy and paste a bar
+            v->copyBarAt (1); CHECK (v->canPaste() && v->pasteBarAt (3), "a bar of notes can be copied and pasted");
+            CHECK (notes->data[(size_t) (48 + 4)].load() == 1.0f && notes->data[(size_t) (n2m::kLenRow + 48 + 4)].load() == 6.0f, "with its lengths");
+            ed->stepHistory (false);
+            CHECK (notes->data[(size_t) (48 + 4)].load() == 0.0f, "Undo takes the pasted bar back out");
+            // the unit underneath shows the same pattern, and the song plays on with the view open
+            r.preview.store (true);
+            for (int k = 0; k < 60; ++k) { juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer mm; r.processBlock (buf, mm); }
+            big.tick();
+            CHECK (big.isOpen() && notes->playStep.load() >= 0, "the song keeps playing while the view is open");
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+            r.preview.store (false);
+            for (int k = 0; k < 8; ++k) { juce::AudioBuffer<float> buf (2, 256); juce::MidiBuffer mm; r.processBlock (buf, mm); }
+        }
+        // Escape, and a click outside the card, both close it
+        CHECK (ed->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)) && ! big.isOpen(), "Escape closes the view");
+        big.open (*r.rack.boards[3], *notes);
+        big.mouseDown (event (big, { 3.0f, 3.0f }, { 3.0f, 3.0f }));
+        CHECK (! big.isOpen(), "a click outside the card closes it");
+        big.open (*r.rack.boards[3], *notes);
+        big.mouseDown (event (big, big.card().getCentre().toFloat(), big.card().getCentre().toFloat()));
+        CHECK (big.isOpen(), "a click on the card does not");
+        big.close();
+
+        // ---- 2. The drum grid
+        ed->selectTab (0);
+        auto* drums = unit (0, "drumseq");
+        drums->set ("bars", 2);
+        for (int b = 0; b < 8; ++b) n2m::setDrumBar (*drums, b, "x...x...x...x...");
+        n2m::setDrumBar (*drums, 1, "X.x.x..xX..x.xXx");
+        CHECK (big.open (*r.rack.boards[0], *drums) && big.as<n2m::BigDrumGrid>() != nullptr, "the drum sequencer opens a grid");
+        if (auto* v = big.as<n2m::BigDrumGrid>())
+        {
+            CHECK (v->bars() == 4 && v->row (3).getBottom() <= v->getHeight() && v->tile (63).getRight() <= (float) v->getWidth() + 0.5f && ! v->row (0).intersects (v->row (1)), "all four bars are on show, one under another");
+            v->toggleHit (33);
+            CHECK (drums->data[33].load() == 1.0f, "a step can be given a hit");
+            v->setVelocity (33, 0.4f);
+            CHECK (std::abs (n2m::drumVel (drums->data[33].load()) - 0.4f) < 0.013f, "and the hit a strength");
+            v->setVelocity (34, 0.9f);
+            CHECK (drums->data[34].load() == 0.0f, "a step with no hit is left alone");
+            ed->stepHistory (false);
+            CHECK (drums->data[33].load() == 1.0f && big.isOpen(), "Undo puts the strength back");
+            ed->stepHistory (false);
+            CHECK (drums->data[33].load() == 0.0f, "and Undo again takes the hit away");
+            // the mouse: click a step; drag in the bars underneath across three hits
+            click (*v, v->tile (37).getCentre());
+            CHECK (drums->data[37].load() == 1.0f, "a click on a step puts a hit there");
+            click (*v, v->tile (37).getCentre());
+            CHECK (drums->data[37].load() == 0.0f, "another click takes it away");
+            const auto a = v->velLane (16), c = v->velLane (20);
+            drag (*v, { a.getCentreX(), a.getY() + 2.0f }, { c.getCentreX(), c.getBottom() - 4.0f });
+            CHECK (drums->data[16].load() == 2.0f && n2m::drumVel (drums->data[20].load()) < 0.2f, "dragging in the bars under the steps sets how hard each hit is: the top is an accent, the bottom very soft");
+            CHECK (n2m::drumVel (drums->data[18].load()) < 1.0f && n2m::drumVel (drums->data[18].load()) > n2m::drumVel (drums->data[20].load()) && drums->data[17].load() == 0.0f, "each hit the drag passes over takes the strength at that point; empty steps stay empty");
+            ed->stepHistory (false);
+            CHECK (drums->data[16].load() == 2.0f && drums->data[18].load() == 1.0f && drums->data[20].load() == 1.0f, "the whole drag is one Undo step");
+            // copy, paste and clear the picked bar
+            v->selectBar (1); v->copyBarAt (v->selectedBar());
+            v->selectBar (3);
+            CHECK (v->selectedBar() == 3 && v->pasteBarAt (3), "a bar can be picked, copied and pasted over another");
+            bool same = true; for (int i = 0; i < 16; ++i) same = same && drums->data[(size_t) (48 + i)].load() == drums->data[(size_t) (16 + i)].load();
+            CHECK (same, "the pasted bar is the copied one");
+            ed->stepHistory (false);
+            CHECK (drums->data[(size_t) (48 + 2)].load() == 0.0f, "Undo takes the paste back");
+            v->clearBarAt (0);
+            bool empty = true; for (int i = 0; i < 16; ++i) empty = empty && drums->data[(size_t) i].load() == 0.0f;
+            CHECK (empty && drums->data[16].load() == 2.0f, "Clear bar empties that bar only");
+            ed->stepHistory (false);
+            CHECK (drums->data[0].load() == 1.0f, "and can be undone");
+            // a bar of drums can't be pasted into notes
+            big.close(); ed->selectTab (3); big.open (*r.rack.boards[3], *notes);
+            CHECK (big.as<n2m::BigNoteRoll>() != nullptr && ! big.as<n2m::BigNoteRoll>()->canPaste() && ! big.as<n2m::BigNoteRoll>()->pasteBarAt (0), "a bar copied from drums is not pasted into notes");
+        }
+        big.close();
+
+        // saved with the project: the lengths and the strengths
+        {
+            drums->data[5].store (n2m::drumData (0.33f));
+            juce::MemoryBlock saved; r.getStateInformation (saved);
+            Nebula2ModulationProcessor q; q.setRateAndBufferSizeDetails (48000, 256); q.prepareToPlay (48000, 256);
+            q.setStateInformation (saved.getData(), (int) saved.getSize());
+            n2m::Module* n2 = nullptr; n2m::Module* d2 = nullptr;
+            for (auto& m : q.rack.boards[3]->modules) if (std::string (m->info->type) == "noteseq") n2 = m.get();
+            for (auto& m : q.rack.boards[0]->modules) if (std::string (m->info->type) == "drumseq") d2 = m.get();
+            bool same = n2 != nullptr && d2 != nullptr;
+            for (int k = 0; same && k < n2m::kData; ++k) same = n2->data[(size_t) k].load() == notes->data[(size_t) k].load() && d2->data[(size_t) k].load() == drums->data[(size_t) k].load();
+            CHECK (same && n2->data[(size_t) (n2m::kLenRow + 20)].load() == 6.0f && d2->data[5].load() == drums->data[5].load(), "what the bigger views change is saved with the project");
+        }
+
+        // ---- 3. The chords
+        ed->selectTab (4);
+        auto* chordUnit = unit (4, "chords");
+        CHECK (big.open (*r.rack.boards[4], *chordUnit) && big.as<n2m::BigChords>() != nullptr, "the chord generator opens the chords view");
+        if (auto* v = big.as<n2m::BigChords>())
+        {
+            auto& h = r.rack.harmony;
+            const int n = (int) h.seq.size();
+            bool inside = n > 0;
+            for (int i = 0; i < n; ++i) inside = inside && v->getLocalBounds().contains (v->tile (i)) && (i == 0 || ! v->tile (i).intersects (v->tile (i - 1)));
+            CHECK (inside, "every chord of the song has its own tile in view");
+            v->select (1);
+            CHECK (v->selected() == 1, "a chord can be picked");
+            auto laidOut = [v]
+            {
+                const auto chips = v->chips();
+                bool ok = ! chips.empty(); bool kinds[5] {};
+                for (size_t i = 0; i < chips.size(); ++i)
+                {
+                    ok = ok && v->getLocalBounds().contains (chips[i].r) && chips[i].r.getY() > v->tile (v->selected()).getBottom() && chips[i].text.isNotEmpty();
+                    for (size_t j = 0; j < i; ++j) ok = ok && ! chips[i].r.intersects (chips[j].r);
+                    kinds[chips[i].kind] = true;
+                }
+                return ok && kinds[0] && kinds[1] && kinds[2] && kinds[3] && kinds[4];
+            };
+            CHECK (laidOut(), "its colour, bass note, change to, length and lock are laid out as buttons, none overlapping, all in view");
+            const auto before = h.seq[1];
+            const auto nameBefore = h.names[1];
+            const int otherDeg = (before.deg + 3) % 7;
+            v->setDegree (otherDeg);
+            CHECK (h.seq[1].deg == otherDeg && h.names[1] != nameBefore, "Change to makes it another chord of the key");
+            ed->stepHistory (false);
+            CHECK (h.seq[1].deg == before.deg && h.names[1] == nameBefore && big.isOpen(), "Undo puts the chord back, with the view still open");
+            v->setBars (4);
+            CHECK (h.seq[1].bars == 4 && r.rack.timeline.slots[1].len == 64, "Length sets how long it lasts");
+            ed->stepHistory (false);
+            CHECK (h.seq[1].bars == before.bars, "(undone)");
+            v->toggleLock();
+            CHECK (h.seq[1].locked, "Lock locks it");
+            ed->stepHistory (false);
+            CHECK (! h.seq[1].locked, "(undone)");
+            const auto colours = v->colourNames();
+            CHECK (colours.size() > 1 && v->bassNames().size() >= 1 && v->degreeNames().size() == 7, "the choices are the ones the chord's menu has");
+            int otherColour = -1;
+            for (auto& c : v->chips()) if (c.kind == 0 && ! c.on && otherColour < 0) otherColour = c.value;
+            v->setColour (otherColour);
+            CHECK (h.names[1] != nameBefore && h.seq[1].deg == before.deg, "Colour changes the kind of chord, not which step of the key it is");
+            ed->stepHistory (false);
+            CHECK (h.names[1] == nameBefore, "(undone)");
+            if (v->bassNames().size() > 1)
+            {
+                v->setBass (1);
+                CHECK (h.seq[1].inv == 1, "Bass note puts another note of the chord at the bottom");
+                ed->stepHistory (false);
+                CHECK (h.seq[1].inv == before.inv, "(undone)");
+            }
+            // with the mouse: click a tile to pick it, click a button to change it
+            click (*v, v->tile (2).getCentre().toFloat());
+            CHECK (v->selected() == 2, "a click on a chord picks it");
+            for (auto& c : v->chips()) if (c.kind == 3 && c.value == 1) { click (*v, c.r.getCentre().toFloat()); break; }
+            CHECK (h.seq[2].bars == 1, "a click on a button changes the picked chord");
+            ed->stepHistory (false);
+            // the most there can be: 32 chords still fit
+            r.rack.harmony.lenBars = 32; r.rack.harmony.chordBars = 1; r.rack.generateChords (11); r.chordsVersion.fetch_add (1);
+            v->select (31);
+            bool fit = h.seq.size() == 32;
+            for (int i = 0; i < 32 && fit; ++i) fit = v->getLocalBounds().contains (v->tile (i)) && v->tile (i).getHeight() >= 48;
+            CHECK (fit && laidOut(), "a song of 32 chords still fits, with the buttons under it");
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+        }
+        big.close();
+
+        // ---- 4 to 7, on the extra board
+        ed->selectTab (extra);
+        auto& eb = *r.rack.boards[(size_t) extra];
+        const auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("n2m-test-bigview.wav");
+        wav.deleteFile();
+        {
+            juce::AudioBuffer<float> buf (1, 24000);
+            for (int i = 0; i < 24000; ++i) buf.setSample (0, i, 0.8f * std::sin (0.05f * (float) i) * (1.0f - (float) i / 24000.0f));
+            juce::WavAudioFormat fmt;
+            if (auto os = std::unique_ptr<juce::FileOutputStream> (wav.createOutputStream()))
+                if (auto w = std::unique_ptr<juce::AudioFormatWriter> (fmt.createWriterFor (os.get(), 48000, 1, 16, {}, 0))) { os.release(); w->writeFromAudioSampleBuffer (buf, 0, 24000); }
+        }
+        auto* sampler = dynamic_cast<n2m::SampleModule*> (unit (extra, "sample"));
+        CHECK (sampler != nullptr && sampler->load (wav).isEmpty() && sampler->fine.size() > sampler->peaks.size(), "a loaded sample keeps a fine picture of itself for zooming");
+        CHECK (big.open (eb, *sampler) && big.as<n2m::BigSample>() != nullptr, "the sample player opens the wave view");
+        if (auto* v = big.as<n2m::BigSample>())
+        {
+            v->setRegion (0.25f, 0.75f);
+            CHECK (std::abs (sampler->P (0) - 0.25f) < 1.0e-4f && std::abs (v->regionEnd() - 0.75f) < 1.0e-3f, "Start and Length follow the part set");
+            ed->stepHistory (false);
+            CHECK (sampler->P (0) == 0.0f && sampler->P (1) == 1.0f && big.isOpen(), "Undo puts them back");
+            v->setRegion (0.2f, 0.8f);
+            // drag the end in, then the start in
+            const float y = (float) v->well().getCentreY();
+            drag (*v, { v->xFor (0.8f) - 2.0f, y }, { v->xFor (0.6f), y });
+            CHECK (std::abs (v->regionEnd() - 0.6f) < 0.01f && std::abs (v->regionStart() - 0.2f) < 1.0e-4f, "dragging the end moves the end and leaves the start");
+            drag (*v, { v->xFor (0.2f) + 2.0f, y }, { v->xFor (0.4f), y });
+            CHECK (std::abs (v->regionStart() - 0.4f) < 0.01f && std::abs (v->regionEnd() - 0.6f) < 0.01f, "dragging the start moves the start and leaves the end");
+            drag (*v, { v->xFor (0.4f) + 2.0f, y }, { v->xFor (0.95f), y });
+            CHECK (v->regionStart() < v->regionEnd(), "the start can't be dragged past the end");
+            v->zoomBy (4.0f, 0.5f);
+            CHECK (std::abs ((v->viewEnd() - v->viewStart()) - 0.25f) < 1.0e-3f && v->viewStart() < 0.5f && v->viewEnd() > 0.5f, "zooming in shows a quarter of the file, around the same place");
+            CHECK (std::abs (v->atFor (v->xFor (0.5f)) - 0.5f) < 1.0e-3f, "(places on screen and in the file agree when zoomed)");
+            v->zoomBy (0.01f, 0.5f);
+            CHECK (v->viewStart() == 0.0f && v->viewEnd() == 1.0f, "zooming out stops at the whole file");
+            v->zoomBy (1000000.0f, 0.5f); v->showWhole();
+            CHECK (v->viewStart() == 0.0f && v->viewEnd() == 1.0f, "Whole file shows it all again");
+            sampler->playhead.store (0.5f); big.tick();
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+            sampler->playhead.store (-1.0f);
+        }
+        big.close();
+        wav.deleteFile();
+
+        auto* eq = unit (extra, "parameq");
+        CHECK (big.open (eb, *eq) && big.as<n2m::BigEq>() != nullptr, "the parametric EQ opens the curve view");
+        if (auto* v = big.as<n2m::BigEq>())
+        {
+            CHECK (std::abs (v->curveDb (0.3f)) < 1.0e-6f, "a flat EQ draws a flat line");
+            v->setBand (1, 0.3f, 6.0f);
+            CHECK (eq->P (3) == 0.3f && eq->P (4) == 6.0f, "a band's point sets its Freq and Gain");
+            CHECK (std::abs (v->curveDb (0.3f) - 6.0f) < 0.3f && std::abs (v->curveDb (0.95f)) < 1.0f, "the curve drawn is the curve the unit makes: 6 dB up at the band, flat far away");
+            ed->stepHistory (false);
+            CHECK (eq->P (4) == 0.0f && big.isOpen(), "Undo puts the band back");
+            v->setWidth (2, 4.0f);
+            CHECK (eq->P (8) == 4.0f, "its width can be set");
+            ed->stepHistory (false);
+            const auto p0 = v->pointOf (0);
+            const auto pl = v->plot().toFloat();
+            drag (*v, p0, { pl.getX() + 0.6f * pl.getWidth(), pl.getCentreY() - 0.25f * pl.getHeight() });
+            CHECK (std::abs (eq->P (0) - 0.6f) < 0.01f && std::abs (eq->P (1) - 0.5f * n2m::BigEq::topDb) < 0.3f, "dragging a point: across is where, up is how much");
+            const float w0 = eq->P (2);
+            drag (*v, v->pointOf (0), v->pointOf (0).translated (0.0f, -60.0f), true);
+            CHECK (eq->P (2) > w0 && std::abs (eq->P (0) - 0.6f) < 0.01f, "a right-button drag up makes the band wider and leaves it where it is");
+            juce::MouseWheelDetails wheel; wheel.deltaX = 0; wheel.deltaY = -0.3f; wheel.isReversed = false; wheel.isSmooth = false; wheel.isInertial = false;
+            const float w1 = eq->P (2);
+            v->mouseWheelMove (event (*v, v->pointOf (0), v->pointOf (0)), wheel);
+            CHECK (eq->P (2) < w1, "the mouse wheel over a point changes its width");
+            ed->stepHistory (false);
+            CHECK (std::abs (eq->P (2) - w1) < 1.0e-5f, "(one Undo step)");
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+        }
+        big.close();
+
+        auto* mod = unit (extra, "stepmod");
+        mod->set ("bars", 1);
+        CHECK (big.open (eb, *mod) && big.as<n2m::BigStepMod>() != nullptr, "the step modulator opens the drawing view");
+        if (auto* v = big.as<n2m::BigStepMod>())
+        {
+            CHECK (v->bars() == 2 && v->pointFor (31, 14).x < (float) v->grid().getRight(), "both bars are in view");
+            v->drawLine (0, -7, 21, 14);
+            bool ramp = true;
+            for (int st = 0; st <= 21; ++st) ramp = ramp && mod->data[(size_t) st].load() == 1.0f && (int) mod->data[(size_t) (n2m::kMaxSteps + st)].load() == st - 7;
+            CHECK (ramp, "one stroke sets every step it passes over");
+            ed->stepHistory (false);
+            CHECK (mod->data[0].load() == 0.0f && big.isOpen(), "and is one Undo step");
+            // a fast stroke of the mouse, a few movements for many steps: none is missed
+            drag (*v, v->pointFor (2, -7), v->pointFor (29, 14));
+            bool drawn = true, rising = true;
+            for (int st = 2; st <= 29; ++st) { drawn = drawn && mod->data[(size_t) st].load() == 1.0f; rising = rising && (st == 2 || mod->data[(size_t) (n2m::kMaxSteps + st)].load() >= mod->data[(size_t) (n2m::kMaxSteps + st - 1)].load()); }
+            CHECK (drawn && rising && mod->data[(size_t) (n2m::kMaxSteps + 2)].load() == -7.0f && mod->data[(size_t) (n2m::kMaxSteps + 29)].load() == 14.0f, "dragging across the steps draws a shape like a pencil, with no step skipped");
+            drag (*v, v->pointFor (10, 0), v->pointFor (12, 0), true);
+            CHECK (mod->data[10].load() == 0.0f && mod->data[11].load() == 0.0f && mod->data[12].load() == 0.0f && mod->data[13].load() == 1.0f, "a right-drag switches steps off");
+            v->setValue (11, 3);
+            CHECK (mod->data[11].load() == 1.0f && mod->data[(size_t) (n2m::kMaxSteps + 11)].load() == 3.0f, "one step can be set on its own");
+            v->setHold (11);
+            CHECK (mod->data[11].load() == 0.0f, "and switched off again");
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+        }
+        big.close();
+
+        auto* scope = dynamic_cast<n2m::Scope*> (unit (extra, "scope"));
+        CHECK (scope != nullptr && big.open (eb, *scope) && big.as<n2m::BigScope>() != nullptr, "the scope opens the large scope");
+        if (auto* v = big.as<n2m::BigScope>())
+        {
+            for (int i = 0; i < n2m::Scope::size; ++i) scope->ring[(size_t) i] = 0.7f * std::sin (0.0575f * (float) i);
+            scope->hz.store (220.0f); scope->level.store (0.7f);
+            big.tick();
+            v->setFrozen (true);
+            CHECK (v->frozen(), "Freeze holds the picture");
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.5f);
+            v->setFrozen (false);
+        }
+
+        // ---- Full screen: the view grows with the window
+        {
+            const auto normal = big.content()->getBounds();
+            ed->setBigWindow (true);
+            CHECK (big.getBounds() == ed->getLocalBounds() && ed->getLocalBounds().contains (big.card()) && big.card().reduced (10).contains (big.content()->getBounds()), "Full screen: the card still sits inside the window");
+            CHECK (big.content()->getWidth() > normal.getWidth() + 250 && big.content()->getHeight() > normal.getHeight() + 80, "and the view takes the extra room");
+            (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.25f);
+            big.close();
+            for (auto pick : { std::pair<int, const char*> { 3, "noteseq" }, { 0, "drumseq" }, { 4, "chords" }, { extra, "sample" }, { extra, "parameq" }, { extra, "stepmod" } })
+            {
+                ed->selectTab (pick.first);
+                CHECK (big.open (*r.rack.boards[(size_t) pick.first], *unit (pick.first, pick.second)), "each view opens with Full screen on");
+                CHECK (big.card().reduced (10).contains (big.content()->getBounds()) && big.content()->getWidth() > 1400, "and is laid out from the bigger window");
+                if (auto* v = big.as<n2m::BigChords>()) { bool ok = true; for (auto& c : v->chips()) ok = ok && v->getLocalBounds().contains (c.r); for (int i = 0; i < 32; ++i) ok = ok && v->getLocalBounds().contains (v->tile (i)); CHECK (ok, "the chords and their buttons all fit"); }
+                if (auto* v = big.as<n2m::BigDrumGrid>()) CHECK (v->row (v->bars() - 1).getBottom() <= v->getHeight() && v->tile (15).getRight() <= (float) v->getWidth() + 0.5f, "the drum grid fits");
+                if (auto* v = big.as<n2m::BigNoteRoll>()) CHECK (v->getLocalBounds().contains (v->grid()), "the piano roll fits");
+                (void) ed->createComponentSnapshot (ed->getLocalBounds(), true, 0.25f);
+                big.close();
+            }
+            ed->setBigWindow (false);
+        }
+
+        // ---- The view closes itself when its unit goes
+        // deleted from its right-click menu (this is what that menu item does)
+        ed->selectTab (extra);
+        big.open (eb, *mod);
+        {
+            const int uid = mod->uid;
+            ed->board().willChange (uid); r.rack.removeModule (eb, uid); ed->board().rebuild();
+            CHECK (! big.isOpen() && ! big.isVisible(), "deleting the unit closes its bigger view");
+            ed->stepHistory (false);
+            CHECK (unit (extra, "stepmod") != nullptr && ! big.isOpen(), "Undo brings the unit back (its view stays closed)");
+        }
+        // gone by any other road: nothing is drawn from it, and the next tick closes it
+        mod = unit (extra, "stepmod");
+        big.open (eb, *mod);
+        auto* stale = big.content();
+        r.rack.removeModule (eb, mod->uid);
+        CHECK (big.isOpen() && ! stale->alive(), "a unit taken away behind the view's back is noticed");
+        (void) big.createComponentSnapshot (big.getLocalBounds(), true, 0.5f);       // (the panel alone: the board under it is drawn again by whoever took the unit away)
+        if (auto* v = big.as<n2m::BigStepMod>()) { v->drawLine (0, 0, 5, 5); v->setBars (3); v->pasteBarAt (0); click (*v, { 300.0f, 300.0f }); }
+        big.tick();
+        CHECK (! big.isOpen(), "and the view closes itself without touching it");
+        ed->selectTab (extra);
+        // Undo of the unit's own creation
+        ed->addUnits ({ "stepmod" });
+        mod = unit (extra, "stepmod");
+        CHECK (mod != nullptr && big.open (eb, *mod), "a unit just added opens its view");
+        ed->stepHistory (false);
+        CHECK (unit (extra, "stepmod") == nullptr && ! big.isOpen(), "undoing the unit's creation closes its view");
+        // its tab deleted
+        big.open (eb, *eq);
+        CHECK (big.isOpen(), "(open on the extra tab)");
+        r.history.tabRemoving (extra); ed->reshow (-1); r.rack.removeBoard (extra); ed->reshow (0);
+        CHECK (! big.isOpen(), "deleting the tab closes the view of a unit on it");
+        ed->stepHistory (false);
+        CHECK ((int) r.rack.boards.size() == extra + 1 && ! big.isOpen(), "(the tab comes back with Undo)");
+        // Change sound
+        ed->selectTab (0);
+        drums = unit (0, "drumseq");
+        big.open (*r.rack.boards[0], *drums);
+        ed->reshow (-1);
+        CHECK (r.changeToPreset (0, "kick", "Deep"), "(the kick changes to another kick)");
+        ed->reshow (0);
+        CHECK (! big.isOpen(), "Change sound closes the view: its unit was replaced");
+        // Make track
+        drums = unit (0, "drumseq");
+        big.open (*r.rack.boards[0], *drums);
+        ed->styles().onMake ("techno");
+        CHECK (! big.isOpen(), "Make track closes it");
+        // a project load
+        ed->selectTab (0);
+        drums = unit (0, "drumseq");
+        big.open (*r.rack.boards[0], *drums);
+        CHECK (big.isOpen(), "(open before the load)");
+        {
+            juce::MemoryBlock saved; r.getStateInformation (saved);
+            r.setStateInformation (saved.getData(), (int) saved.getSize());
+            (void) big.createComponentSnapshot (big.getLocalBounds(), true, 0.5f);       // the panel drawn before the screen has caught up: must be safe
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (200);
+            CHECK (! big.isOpen() && ! big.isVisible(), "loading a project closes it");
+        }
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

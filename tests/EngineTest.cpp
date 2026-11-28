@@ -1999,6 +1999,267 @@ int main()
         CHECK (cutoffAt (0.8f) > cutoffAt (0.0f) && cutoffAt (0.0f) > cutoffAt (-0.8f), "the knob itself follows the curve while the song plays");
     }
 
+    // 60. The bigger views. A note can have a length of its own; without one it plays exactly as it always did.
+    {
+        const double bpm = 124.0, pps = bpm / 60.0 / 48000.0, stepSamples = 0.25 / pps;
+        struct Take { std::vector<float> gate, pitch, wantGate, wantPitch; };
+        // Plays two bars in blocks of the given size, noting the sequencer's Gate and Pitch outputs, and beside them
+        // what the note sequencer did before notes had lengths (its old code, word for word)
+        auto play = [&] (Rack& rack, Module& seq, int block)
+        {
+            Take t;
+            std::vector<float> l (64), r (64);
+            const long total = (long) (32.0 * stepSamples);
+            long last = -1000000000L; int left = 0; float pitch = 0;
+            const int* scale = scales()[(size_t) rack.scale.load()].iv;
+            for (long at = 0; at < total; at += block)
+            {
+                const double ppq = (double) at * pps;
+                rack.process (l.data(), r.data(), block, bpm, ppq, true);
+                const int len = loopSteps (seq.P (2), seq.P (3));
+                const float gl = seq.P (1);
+                const int gateLen = gl >= 0.995f ? (int) (stepSamples * 1.05) : std::max (8, (int) (stepSamples * std::min (0.96f, gl)));
+                for (int i = 0; i < block; ++i)
+                {
+                    const long s = stepAt (ppq + i * pps);
+                    if (s != last)
+                    {
+                        last = s;
+                        const int k = wrapStep (s, len);
+                        if (seq.data[(size_t) k].load() > 0.5f)
+                        {
+                            const int deg = (int) std::lround (seq.data[(size_t) (kMaxSteps + k)].load());
+                            pitch = (float) (rack.root.load() + degreeToSemis (deg, scale) + 12 * (int) std::lround (seq.P (0))) / 12.0f;
+                            left = gateLen;
+                        }
+                    }
+                    t.wantPitch.push_back (pitch); t.wantGate.push_back (left > 0 ? 1.0f : 0.0f);
+                    if (left > 0) --left;
+                    t.gate.push_back (seq.out[1][(size_t) i]); t.pitch.push_back (seq.out[0][(size_t) i]);
+                }
+            }
+            return t;
+        };
+        const int line[16] = { 0, 0, 2, 0, 4, 0, 5, 0, 7, 0, 0, 0, 4, 0, 2, 0 };
+        auto make = [&line] (float gateLen)
+        {
+            auto rack = std::make_unique<Rack>(); rack->prepare (48000);
+            rack->addBoard (makeBoard ("bass", 48000));
+            auto* seq = firstOf (*rack->boards[0], "noteseq");
+            seq->set ("follow", 0); seq->set ("bars", 1); seq->set ("gatelen", gateLen);
+            setNotesBar (*seq, 0, "x...x.x...x.x.x.", line);
+            setNotesBar (*seq, 1, "x.x.x.....x...xx", line);
+            return rack;
+        };
+        // how long the gate stays up from the start of a step, in samples
+        auto runFrom = [&] (const Take& t, int step)
+        {
+            size_t at = (size_t) std::ceil ((double) step * stepSamples - 1.0e-6);
+            while (at < t.gate.size() && stepAt ((double) at * pps) < step) ++at;
+            size_t n = 0;
+            while (at + n < t.gate.size() && t.gate[at + n] > 0.5f) ++n;
+            return (int) n;
+        };
+        for (float gl : { 0.55f, 0.2f, 1.0f })
+            for (int block : { 64, 23 })
+            {
+                auto rack = make (gl);
+                auto* seq = firstOf (*rack->boards[0], "noteseq");
+                const auto t = play (*rack, *seq, block);
+                CHECK (t.gate == t.wantGate && t.pitch == t.wantPitch && ! t.gate.empty(), "a pattern whose notes have no length of their own plays exactly as before, sample for sample");
+            }
+        {
+            auto rack = make (0.55f);
+            auto* seq = firstOf (*rack->boards[0], "noteseq");
+            const auto plain = play (*rack, *seq, 64);
+            const int knob = std::max (8, (int) (stepSamples * (double) std::min (0.96f, 0.55f)));
+            CHECK (runFrom (plain, 0) == knob && runFrom (plain, 6) == knob, "(the Length knob sets every note's length)");
+            auto fresh = make (0.55f);
+            auto* s2 = firstOf (*fresh->boards[0], "noteseq");
+            s2->data[(size_t) (kLenRow + 0)].store (4.0f);        // four steps: right up to the next note, at step 4
+            s2->data[(size_t) (kLenRow + 6)].store (3.0f);        // three steps, with room: the next note is at step 10
+            s2->data[(size_t) (kLenRow + 4)].store (8.0f);        // eight steps, but the next note comes after two
+            const auto own = play (*fresh, *s2, 64);
+            CHECK (runFrom (own, 0) == (int) (stepSamples * 3.96) && runFrom (own, 0) > knob * 5, "a note with a length of four steps holds its gate for four steps");
+            CHECK (runFrom (own, 6) == (int) (stepSamples * 2.96), "...and one of three steps for three");
+            CHECK (runFrom (own, 4) == (int) (stepSamples * 1.96), "a long note is cut where the next note starts");
+            CHECK (own.gate[(size_t) (4.0 * stepSamples) - 4] < 0.5f && own.gate[(size_t) (6.0 * stepSamples) - 4] < 0.5f, "with a gap before the next note, so it starts afresh");
+            CHECK (runFrom (own, 10) == knob && runFrom (own, 12) == knob && runFrom (own, 16) == knob, "the notes around it keep the knob's length");
+            CHECK (own.pitch == plain.pitch, "lengths change no pitches");
+            CHECK (ownNoteSteps (*s2, 0, 32) == 4 && ownNoteSteps (*s2, 4, 32) == 2 && ownNoteSteps (*s2, 10, 32) == 0, "(the length a note will sound for)");
+            s2->data[(size_t) (kLenRow + 30)].store (6.0f);       // the last note but one of the loop: cut by the note at step 31
+            s2->data[(size_t) (kLenRow + 31)].store (6.0f);       // the last note: runs round the end of the loop to the note at step 0
+            CHECK (ownNoteSteps (*s2, 30, 32) == 1 && ownNoteSteps (*s2, 31, 32) == 1, "a long note at the end of the pattern is cut by the first note when it comes round");
+            s2->data[(size_t) (kLenRow + 30)].store (0.0f); s2->data[(size_t) (kLenRow + 31)].store (0.0f);
+
+            // block size: the same gate and pitch, sample for sample, and the same sound
+            auto other = make (0.55f);
+            auto* s3 = firstOf (*other->boards[0], "noteseq");
+            for (int k = 0; k < kMaxSteps; ++k) s3->data[(size_t) (kLenRow + k)].store (s2->data[(size_t) (kLenRow + k)].load());
+            const auto small23 = play (*other, *s3, 23);
+            bool sameGate = true;
+            for (size_t i = 0; i < std::min (own.gate.size(), small23.gate.size()); ++i) sameGate = sameGate && own.gate[i] == small23.gate[i] && own.pitch[i] == small23.pitch[i];
+            CHECK (sameGate, "block size does not change where a long note starts and stops");
+            auto a = make (0.55f), b = make (0.55f);
+            for (auto* rk : { a.get(), b.get() }) { auto* q = firstOf (*rk->boards[0], "noteseq"); for (int k = 0; k < kMaxSteps; ++k) q->data[(size_t) (kLenRow + k)].store (s2->data[(size_t) (kLenRow + k)].load()); }
+            const auto x = render (*a, 2, true, 64), y = render (*b, 2, true, 441);
+            float diff = 0; for (size_t i = 0; i < x.l.size(); ++i) diff = std::max (diff, std::abs (x.l[i] - y.l[i]));
+            CHECK (diff < 1.0e-4f && peakOf (x.l) > 0.02f, "block size does not change the sound of long notes");
+
+            // saved on a line of its own, and only when there are some
+            const auto with = fresh->save(), without = make (0.55f)->save();
+            CHECK (without.find ("\ngl ") == std::string::npos, "a pattern with no long notes saves no line for them");
+            const auto glAt = with.find ("\ngl ");
+            CHECK (glAt != std::string::npos, "a pattern with long notes saves them on a line of their own");
+            if (glAt != std::string::npos)
+            {
+                auto cut = with; cut.erase (glAt, with.find ('\n', glAt + 1) - glAt);
+                CHECK (cut == without, "...and nothing else in the save changes");
+            }
+            Rack back; back.prepare (48000);
+            CHECK (back.load (with), "it loads");
+            auto* s4 = firstOf (*back.boards[0], "noteseq");
+            bool sameRows = s4 != nullptr;
+            for (int k = 0; sameRows && k < kData; ++k) sameRows = s4->data[(size_t) k].load() == s2->data[(size_t) k].load();
+            CHECK (sameRows && back.save() == with, "long notes come back from a save exactly");
+            // a save from before (no such line) loads with every note on the knob
+            Rack old; old.prepare (48000); old.load (without);
+            bool none = true; for (int k = 0; k < kMaxSteps; ++k) none = none && firstOf (*old.boards[0], "noteseq")->data[(size_t) (kLenRow + k)].load() == 0.0f;
+            CHECK (none, "an older project has no long notes");
+
+            // as MIDI: the same notes, each as long as it is played
+            const auto list = notesOf (*fresh, *s2);
+            std::vector<std::pair<int, int>> heard;
+            for (int st = 0; st < 32; ++st) if (s2->data[(size_t) st].load() > 0.5f) heard.push_back ({ st, runFrom (own, st) });
+            bool sameNotes = heard.size() == list.notes.size() && list.steps == 32;
+            for (size_t i = 0; sameNotes && i < heard.size(); ++i)
+                sameNotes = heard[i].first == (int) list.notes[i].start && heard[i].second == std::max (8, (int) (stepSamples * list.notes[i].len))
+                            && 60 + (int) std::lround (own.pitch[(size_t) ((double) heard[i].first * stepSamples) + 8] * 12.0f) == list.notes[i].midi;
+            CHECK (sameNotes, "the MIDI notes are as long as the notes it plays");
+            CHECK (list.notes[0].len > 3.9 && list.notes[1].len > 1.9 && list.notes[1].len < 2.0 && list.notes[3].len < 0.6, "(long notes long, the rest the knob's length)");
+
+            // Undo puts a length back; a linked sequencer takes it; Change sound keeps it; a new idea clears it
+            History h (*fresh);
+            h.before (*fresh->boards[0]);
+            s2->data[(size_t) (kLenRow + 0)].store (0.0f);
+            h.undo();
+            CHECK (firstOf (*fresh->boards[0], "noteseq")->data[(size_t) (kLenRow + 0)].load() == 4.0f, "Undo puts a note's length back");
+            fresh->addBoard (makeBoard ("lead", 48000));
+            auto* lead = firstOf (*fresh->boards[1], "noteseq");
+            fresh->linkPattern (*s2, 1, 1); fresh->linkPattern (*lead, 1, 1);
+            CHECK (lead->data[(size_t) (kLenRow + 0)].load() == 4.0f && lead->data[(size_t) (kLenRow + 6)].load() == 3.0f, "a sequencer linked by rhythm takes the lengths too");
+            auto swapped = makeBoard ("lead", 48000);
+            keepPattern (*fresh->boards[0], *swapped);
+            CHECK (firstOf (*swapped, "noteseq")->data[(size_t) (kLenRow + 6)].load() == 3.0f, "Change sound keeps each note's length");
+            setNotes (*s2, noteIdeas ("bass")[0].gates, noteIdeas ("bass")[0].deg);
+            bool cleared = true; for (int k = 0; k < kMaxSteps; ++k) cleared = cleared && s2->data[(size_t) (kLenRow + k)].load() == 0.0f;
+            CHECK (cleared, "choosing a pattern idea starts with no long notes");
+        }
+    }
+
+    // 61. Drum hits of any strength. The plain hit and the accent are exactly what they were.
+    {
+        CHECK (drumVel (1.0f) == 0.72f && drumVel (2.0f) == 1.0f, "a plain hit is 0.72 and an accent 1.0, exactly");
+        CHECK (drumVel (1.5f) > 0.72f && drumVel (1.5f) < 1.0f && drumVel (0.75f) < 0.72f && drumVel (0.75f) > 0.1f && drumVel (0.51f) >= 0.1f, "values in between are in between; below 1 is softer than a plain hit");
+        bool rising = true, round = true;
+        for (int k = 52; k <= 200; ++k) rising = rising && drumVel ((float) k / 100.0f) >= drumVel ((float) (k - 1) / 100.0f);
+        for (int k = 10; k <= 100; ++k) round = round && std::abs (drumVel (drumData ((float) k / 100.0f)) - (float) k / 100.0f) < 0.013f && drumData ((float) k / 100.0f) > 0.5f;
+        CHECK (rising && round, "a harder number is never a softer hit, and a strength set comes back as set");
+        CHECK (drumData (0.72f) == 1.0f && drumData (1.0f) == 2.0f, "the plain hit and the accent are stored as 1 and 2");
+        CHECK (drumMidiVel (1.0f) == 92 && drumMidiVel (2.0f) == 127 && drumMidiVel (1.5f) > 92 && drumMidiVel (1.5f) < 127 && drumMidiVel (0.6f) < 92 && drumMidiVel (0.6f) >= 1, "as MIDI too: 92 and 127 as before");
+
+        const double bpm = 124.0, pps = bpm / 60.0 / 48000.0;
+        // Plays a bar, noting Trig and Vel beside what the drum sequencer did before (its old code, word for word)
+        auto play = [&] (Rack& rack, Module& seq, std::vector<float>& vel, bool& asBefore)
+        {
+            std::vector<float> l (64), r (64);
+            long last = -1000000000L; int left = 0; float oldVel = 0.72f;
+            asBefore = true; vel.clear();
+            const int gateLen = std::max (8, (int) (0.5 * 0.25 / pps));
+            for (long at = 0; at < (long) (4.0 / pps); at += 64)
+            {
+                const double ppq = (double) at * pps;
+                rack.process (l.data(), r.data(), 64, bpm, ppq, true);
+                for (int i = 0; i < 64; ++i)
+                {
+                    const long s = stepAt (ppq + i * pps);
+                    if (s != last)
+                    {
+                        last = s;
+                        const float d = seq.data[(size_t) wrapStep (s, 16)].load();
+                        if (d > 0.5f) { left = gateLen; oldVel = d > 1.5f ? 1.0f : 0.72f; }
+                    }
+                    asBefore = asBefore && seq.out[0][(size_t) i] == (left > 0 ? 1.0f : 0.0f) && seq.out[1][(size_t) i] == oldVel;
+                    if (left > 0) --left;
+                    vel.push_back (seq.out[1][(size_t) i]);
+                }
+            }
+        };
+        std::unique_ptr<Rack> rack (one ("kick"));
+        auto* seq = firstOf (*rack->boards[0], "drumseq");
+        setDrum (*seq, "X.x.x..xX..x.xXx");
+        std::vector<float> vel; bool asBefore = false;
+        play (*rack, *seq, vel, asBefore);
+        CHECK (asBefore && ! vel.empty(), "a pattern of plain hits and accents plays exactly as before, sample for sample");
+        const size_t stepLen = (size_t) (0.25 / pps);
+        CHECK (vel[8] == 1.0f && vel[2 * stepLen + 8] == 0.72f, "Vel is exactly 1.0 for an accent and 0.72 for a plain hit");
+        std::unique_ptr<Rack> soft (one ("kick"));
+        auto* s2 = firstOf (*soft->boards[0], "drumseq");
+        setDrum (*s2, "X.x.x..xX..x.xXx");
+        s2->data[2].store (1.5f); s2->data[4].store (0.6f);
+        play (*soft, *s2, vel, asBefore);
+        CHECK (vel[2 * stepLen + 8] > 0.72f && vel[2 * stepLen + 8] < 1.0f && vel[4 * stepLen + 8] < 0.72f && vel[4 * stepLen + 8] > 0.1f && vel[8] == 1.0f, "a strength in between comes out of Vel in between");
+        CHECK (vel[2 * stepLen + 8] == drumVel (1.5f) && vel[4 * stepLen + 8] == drumVel (0.6f), "(just what drumVel says)");
+        const auto hits = notesOf (*soft, *s2);
+        CHECK (hits.notes.size() == 9 && hits.notes[0].vel == 127 && hits.notes[1].vel == drumMidiVel (1.5f) && hits.notes[2].vel == drumMidiVel (0.6f) && hits.notes[3].vel == 92, "the MIDI velocities follow");
+        // saved and reloaded
+        s2->data[7].store (drumData (0.33f)); s2->data[11].store (drumData (0.9f));
+        const auto text = soft->save();
+        Rack back; back.prepare (48000); back.load (text);
+        auto* s3 = firstOf (*back.boards[0], "drumseq");
+        bool same = s3 != nullptr;
+        for (int k = 0; same && k < kMaxSteps; ++k) same = s3->data[(size_t) k].load() == s2->data[(size_t) k].load();
+        CHECK (same && back.save() == text, "hit strengths come back from a save exactly");
+        // the accent click on the unit still works on any strength
+        s2->data[2].store (1.3f); s2->data[4].store (1.8f); s2->data[1].store (0.0f);
+        CHECK (toggleAccent (*s2, 2) && s2->data[2].load() == 2.0f && toggleAccent (*s2, 4) && s2->data[4].load() == 1.0f && ! toggleAccent (*s2, 1), "a click on the unit's velocity bar still makes an accent, or a plain hit of one");
+        // linked drum sequencers share strengths; a note sequencer just takes "plays here"
+        soft->addBoard (makeBoard ("snare", 48000)); soft->addBoard (makeBoard ("bass", 48000));
+        auto* d2 = firstOf (*soft->boards[1], "drumseq"); auto* n2 = firstOf (*soft->boards[2], "noteseq");
+        s2->data[9].store (1.25f);
+        soft->linkPattern (*s2, 2, 1); soft->linkPattern (*d2, 2, 1); soft->linkPattern (*n2, 2, 1);
+        CHECK (d2->data[9].load() == 1.25f && n2->data[9].load() == 1.0f, "linked: another drum sequencer takes the strengths, a note sequencer just the hits");
+    }
+
+    // 62. Copy, paste and clear of one bar
+    {
+        std::unique_ptr<Rack> rack (one ("kick"));
+        auto* seq = firstOf (*rack->boards[0], "drumseq");
+        for (int b = 0; b < kMaxBars; ++b) setDrumBar (*seq, b, "x...x...x...x...");
+        setDrumBar (*seq, 1, "X.x.x..xX..x.xXx"); seq->data[(size_t) (16 + 2)].store (1.37f);
+        BarClip empty;
+        CHECK (! pasteBar (*seq, 0, empty), "nothing copied: Paste does nothing");
+        const auto clip = copyBar (*seq, 1);
+        CHECK (clip.full && pasteBar (*seq, 5, clip), "a bar can be copied and pasted");
+        bool same = true, others = true;
+        for (int i = 0; i < kSteps; ++i) { same = same && seq->data[(size_t) (5 * 16 + i)].load() == seq->data[(size_t) (16 + i)].load(); others = others && seq->data[(size_t) (4 * 16 + i)].load() == (i % 4 == 0 ? 1.0f : 0.0f); }
+        CHECK (same && seq->data[(size_t) (5 * 16 + 2)].load() == 1.37f && others, "the pasted bar is the copied bar, strengths and all, and no other bar changes");
+        CHECK (clearBar (*seq, 5), "a bar can be cleared");
+        bool gone = true; for (int i = 0; i < kSteps; ++i) gone = gone && seq->data[(size_t) (5 * 16 + i)].load() == 0.0f;
+        CHECK (gone && seq->data[(size_t) (16 + 2)].load() == 1.37f && seq->data[(size_t) (6 * 16)].load() == 1.0f, "clearing takes every hit out of that bar and no other");
+        CHECK (! copyBar (*seq, 8).full && ! copyBar (*seq, -1).full && ! pasteBar (*seq, 8, clip) && ! clearBar (*seq, -1), "a bar that isn't there is refused");
+        // notes: the pitches and the lengths go with the bar
+        std::unique_ptr<Rack> br (one ("bass"));
+        auto* ns = firstOf (*br->boards[0], "noteseq");
+        const int line[16] = { 0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7 };
+        setNotesBar (*ns, 0, "x...x...x...x...", line);
+        ns->data[(size_t) (kLenRow + 4)].store (3.0f);
+        pasteBar (*ns, 3, copyBar (*ns, 0));
+        CHECK (ns->data[(size_t) (48 + 4)].load() == 1.0f && ns->data[(size_t) (kMaxSteps + 48 + 4)].load() == 4.0f && ns->data[(size_t) (kLenRow + 48 + 4)].load() == 3.0f, "a bar of notes is pasted with its pitches and lengths");
+        clearBar (*ns, 3);
+        CHECK (ns->data[(size_t) (48 + 4)].load() == 0.0f && ns->data[(size_t) (kLenRow + 48 + 4)].load() == 0.0f, "...and cleared with them");
+    }
+
     if (failures == 0) std::printf ("All passed\n");
     return failures == 0 ? 0 : 1;
 }

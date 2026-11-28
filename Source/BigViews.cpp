@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include <cstring>
 
 // The bigger views: see BigViews.h. Everything here is the screen; what it changes lives in the engine.
 namespace n2m
